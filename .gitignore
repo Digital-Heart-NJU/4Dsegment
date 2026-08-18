@@ -1,0 +1,12 @@
+
+/data/
+/run_subjects_4_5/
+
+#*/
+*.nii.gz
+*.log
+*.stl
+*.face
+*.node
+*.vtk
+

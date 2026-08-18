@@ -1,0 +1,322 @@
+- N_: normalized/registered subject mesh after initial registration.
+
+- F_: fitted final mesh mapped from the template, with consistent point correspondence.
+
+- S_: same fitted mesh, with signed-distance scalar values added.
+- C_: same fitted mesh, with curvature scalar values added.
+- W_: same fitted mesh, with wall-thickness scalar values added.
+- FC_: temporary curvature-estimator output used to create C_; you usually ignore it.
+
+
+The pipeline is not just “CNN in, segmentation out”. It is a hybrid pipeline:
+
+  4D cine MRI
+    -> preprocessing / ED-ES detection
+    -> 2D deep-learning segmentation
+    -> 3D atlas/shape refinement
+    -> final high-res segmentation
+    -> mesh extraction + template fitting
+    -> optional RV motion tracking
+    -> optional decimation
+
+  1. Input
+  Each subject folder starts with one 4D cardiac MRI NIfTI file, for example:
+
+  data/subject_1/example.nii
+
+  The code expects subject folders under /data, and each subject should contain one .nii or .nii.gz.
+
+  2. Preprocessing
+  Called from deepseg.py -> imagePreprocessing().
+
+  It creates:
+
+  lvsa_.nii.gz
+  lvsa_ED.nii.gz
+  lvsa_ES.nii.gz
+
+  What happens:
+
+  - resets image header
+  - temporally aligns cine sequence
+  - applies auto-contrast
+  - detects ED and ES frames
+
+  So the model does not segment all frames first. It extracts ED and ES, then segments those.
+
+  3. Deep Learning Segmentation
+  Called from deeplearningseg() in deepseg.py.
+
+  Model files:
+
+  model/vgg_RE_network.ckpt-50000.*
+
+  TensorFlow graph input/output:
+
+  input:  image:0
+  mode:   training:0 = False
+  output: predR:0
+
+  For each ED/ES volume:
+
+  - load lvsa_ED.nii.gz or lvsa_ES.nii.gz
+  - process slice by slice, 2D
+  - rescale intensity to percentile range 1-99
+  - pad image size to multiples of 16
+  - run CNN
+  - crop prediction back to original size
+
+  Raw CNN outputs:
+
+  data/subject_N/segs/seg_lvsa_ED.nii.gz
+  data/subject_N/segs/seg_lvsa_ES.nii.gz
+
+  Label meaning from code usage:
+
+  1 = LV cavity / LV endocardium
+  2 = LV myocardium
+  3 = RV myocardium / RV wall
+  4 = RV cavity / RV endocardium
+
+  4. 3D Atlas / Shape Refinement
+  Called from:
+
+  multiatlasreg3D()
+
+  This is the important post-processing step. It improves the raw
+  2D CNN segmentation into smoother 3D biventricular shapes.
+
+  For each ED/ES frame:
+
+  - select atlases from /refs
+  - compare subject segmentation to atlas segmentations
+  - choose top 3 similar atlases
+  - nonrigidly register atlas labels to subject
+  - fuse labels using combineLabels
+  - smooth/refine labels
+  - resample to high resolution
+
+  Final segmentation outputs:
+
+  data/subject_N/PHsegmentation_ED.gipl
+  data/subject_N/PHsegmentation_ES.gipl
+
+  Associated high-res images:
+
+  data/subject_N/lvsa_ED_enlarged_SR.nii.gz
+  data/subject_N/lvsa_ES_enlarged_SR.nii.gz
+
+  These are the segmentation files you should mainly trust for
+  biventricular segmentation.
+
+  5. Mesh Generation / Mesh Fitting
+  Called from:
+
+  meshCoregstration()
+
+  Input:
+
+  PHsegmentation_ED.gipl
+  PHsegmentation_ES.gipl
+
+  The code extracts surfaces using marching cubes, then registers/
+  fits them to template meshes so vertex correspondence is
+  consistent.
+
+  Main mesh outputs are in:
+
+  data/subject_N/vtks/
+
+  For your biventricular mesh focus:
+
+  S_LVmyo_ED.vtk
+  S_LVmyo_ES.vtk
+  S_RV_ED.vtk
+  S_RV_ES.vtk
+
+  If you want LV endocardium/epicardium separately:
+
+  S_LVendo_ED.vtk
+  S_LVendo_ES.vtk
+  S_LVepi_ED.vtk
+  S_LVepi_ES.vtk
+
+  Useful root-level mesh-derived numeric outputs:
+
+  lv_myoed_curvature.txt
+  lv_myoed_wallthickness.txt
+  lv_myoed_signeddistances.txt
+  lv_myoes_*.txt
+
+  rv_ed_curvature.txt
+  rv_ed_wallthickness.txt
+  rv_ed_signeddistances.txt
+  rv_es_*.txt
+
+  6. Motion Tracking
+  Called from:
+
+  motionTracking()
+
+  This step uses the full 4D cine lvsa_.nii.gz, splits it into
+  frames, estimates frame-to-frame deformation fields, and
+  propagates an RV mesh through the cardiac cycle.
+
+  Important point: this part is mostly RV motion, not full
+  biventricular static mesh.
+
+  Outputs:
+
+  data/subject_N/motion/RV_fr00.vtk
+  data/subject_N/motion/RV_fr01.vtk
+  ...
+  data/subject_N/motion/RV_fr19.vtk
+
+  For your current focus, you can mostly ignore motion/.
+
+  7. Decimation
+  Called from:
+
+  decimate()
+
+  This reduces RV motion mesh resolution and writes files such as:
+
+  motion/RV_fr00_new.vtk
+  motion/RV_fr00_new_new.vtk
+  motion/transformation.vtk
+
+  Again, mainly relevant for RV motion analysis, not static
+  biventricular segmentation.
+
+  Practical Summary
+  For biventricular segmentation:
+
+  PHsegmentation_ED.gipl
+  PHsegmentation_ES.gipl
+
+  For biventricular static mesh:
+
+  vtks/S_LVmyo_ED.vtk
+  vtks/S_LVmyo_ES.vtk
+  vtks/S_RV_ED.vtk
+  vtks/S_RV_ES.vtk
+
+  For image context:
+
+  lvsa_ED_enlarged_SR.nii.gz
+  lvsa_ES_enlarged_SR.nii.gz
+
+  For most normal use, ignore:
+
+  dofs/
+  tmps/
+  sizes/
+  most N_, F_, C_, W_, FC_ intermediate VTKs
+  motion/ unless doing RV motion tracking
+
+Simple version:
+
+  Input 4D MRI image
+     ↓
+  1. Clean and prepare image
+     ↓
+  2. Find ED and ES frames
+     ↓
+  3. Segment heart with CNN
+     ↓
+  4. Refine segmentation with atlas/shape model
+     ↓
+  5. Convert segmentation mask to 3D surfaces
+     ↓
+  6. Fit surfaces to template mesh
+     ↓
+  Output biventricular mesh
+
+  What happens at each stage:
+
+  1. Input Image
+  You provide one subject image, for example:
+
+  example.nii
+
+  This is a 4D cardiac MRI: 3D volume over time.
+
+  2. Preprocessing
+  The pipeline standardizes the image:
+
+  example.nii
+  -> lvsa_.nii.gz
+
+  It fixes the header, adjusts contrast, and prepares the image for
+  analysis.
+
+  3. ED / ES Detection
+  The pipeline finds two important heart phases:
+
+  ED = end-diastole, heart relaxed / largest volume
+  ES = end-systole, heart contracted / smallest volume
+
+  It creates:
+
+  lvsa_ED.nii.gz
+  lvsa_ES.nii.gz
+
+  4. CNN Segmentation
+  A trained TensorFlow model segments each 2D slice.
+
+  It predicts labels for:
+
+  LV cavity
+  LV myocardium
+  RV cavity
+  RV myocardium / wall
+
+  Initial outputs:
+
+  segs/seg_lvsa_ED.nii.gz
+  segs/seg_lvsa_ES.nii.gz
+
+  5. Shape Refinement
+  The raw CNN segmentation is refined using atlas/template shapes.
+
+  This makes the segmentation smoother and more anatomically
+  consistent.
+
+  Final segmentation outputs:
+
+  PHsegmentation_ED.gipl
+  PHsegmentation_ES.gipl
+
+  These are the main biventricular segmentation files.
+
+  6. Mesh Extraction
+  The segmentation masks are converted into 3D surfaces using
+  marching cubes.
+
+  This creates raw LV/RV surfaces.
+
+  Examples:
+
+  vtks/LVmyo_ED.vtk
+  vtks/RV_ED.vtk
+
+  7. Mesh Fitting
+  The raw surfaces are registered/fitted to a template mesh.
+
+  This gives cleaner meshes with consistent point correspondence.
+
+  Main mesh outputs:
+
+  vtks/S_LVmyo_ED.vtk
+  vtks/S_RV_ED.vtk
+  vtks/S_LVmyo_ES.vtk
+  vtks/S_RV_ES.vtk
+
+  So in one line:
+
+  example.nii
+  -> ED/ES images
+  -> CNN segmentation
+  -> refined segmentation
+  -> surface extraction
+  -> fitted biventricular mesh

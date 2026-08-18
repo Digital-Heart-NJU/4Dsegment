@@ -1,0 +1,118 @@
+codex resume 019feafb-83eb-70b3-a8ae-ad2316b35708
+
+
+docker: the README has a confusing line mentioning jinmingduan/ segmentationcoregistration,
+but your local available image and the README run command point to jinmingduan/segmentationmeshmotion.
+
+
+For constructing a biventricular myocardial volume mesh from the model’s surface mesh results, I would use these files:
+
+  For ED
+
+  data/<subject>/vtks/F_LVendo_ED.vtk
+  data/<subject>/vtks/F_LVepi_ED.vtk
+  data/<subject>/vtks/S_RV_ED.vtk
+  data/<subject>/vtks/N_RVepi_ED.vtk
+
+  For ES
+
+  data/<subject>/vtks/F_LVendo_ES.vtk
+  data/<subject>/vtks/F_LVepi_ES.vtk
+  data/<subject>/vtks/S_RV_ES.vtk
+  data/<subject>/vtks/N_RVepi_ES.vtk
+
+  Do not mix ED and ES surfaces.
+
+  Why These Files
+
+  LV myocardium volume =
+  outer boundary: F_LVepi_ED.vtk
+  inner cavity:   F_LVendo_ED.vtk
+
+  RV myocardium volume =
+  outer boundary: N_RVepi_ED.vtk
+  inner cavity:   S_RV_ED.vtk
+
+  Rationale:
+
+  - F_LVendo_* and F_LVepi_* are fitted LV template-correspondence surfaces.
+    They are smoother and more consistent than raw marching-cubes surfaces.
+
+  - S_RV_* is the final fitted RV surface used for signed-distance analysis.
+    In this pipeline, it is the best final RV endocardial/cavity surface.
+
+  - N_RVepi_* is the RV outer/wall surface. The code does not produce
+    F_RVepi_* or S_RVepi_*, so N_RVepi_* is the correct available RV epicardial/wall boundary.
+
+  - These four surfaces describe the two myocardial shells needed for a volume mesh: LV wall and RV wall.
+
+  Pipeline Logic
+
+  PHsegmentation_ED.gipl
+          |
+          v
+  mesh extraction
+          |
+          v
+  raw surfaces
+  LVendo_ED.vtk
+  LVepi_ED.vtk
+  RV_ED.vtk
+  RVepi_ED.vtk
+          |
+          v
+  template fitting / registration
+          |
+          v
+  recommended volume-mesh boundaries
+  F_LVendo_ED.vtk
+  F_LVepi_ED.vtk
+  S_RV_ED.vtk
+  N_RVepi_ED.vtk
+
+  Files I Would Not Use As Primary Boundaries
+
+  LVmyo_ED.vtk
+  F_LVmyo_ED.vtk
+  S_LVmyo_ED.vtk
+  W_LVmyo_ED.vtk
+  C_LVmyo_ED.vtk
+
+  These are useful for LV myocardium scalar analysis, but for volume meshing it is clearer to use the two explicit LV boundaries:
+
+  F_LVendo_ED.vtk
+  F_LVepi_ED.vtk
+
+  Also avoid using only:
+
+  RV_ED.vtk
+  RVepi_ED.vtk
+
+  unless you specifically want raw segmentation-derived surfaces. They are more anatomically direct,
+  but less smoothed and less template-consistent.
+
+  Practical Meshing Structure
+
+  F_LVepi_ED.vtk
+          \
+           -> LV myocardium tetrahedral region         inner hole / LV blood pool boundary
+          /
+  F_LVendo_ED.vtk
+
+
+  N_RVepi_ED.vtk
+          \
+           -> RV myocardium tetrahedral region         inner hole / RV blood pool boundary
+          /
+  S_RV_ED.vtk
+
+  Before tetrahedralization, you should still check:
+
+  closed surfaces
+  normal orientation
+  self-intersections
+  LV/RV overlap near septum
+  small holes
+  duplicate points/faces
+
+  For TetGen/Gmsh-style meshing, the inner cavity surfaces usually need opposite orientation from the outer surfaces.
