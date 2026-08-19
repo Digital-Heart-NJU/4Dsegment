@@ -116,3 +116,14 @@ For constructing a biventricular myocardial volume mesh from the model’s surfa
   duplicate points/faces
 
   For TetGen/Gmsh-style meshing, the inner cavity surfaces usually need opposite orientation from the outer surfaces.
+
+
+
+detect base side
+  -> find maximum connected basal blood-pool cap
+  -> extract cap boundary
+  -> use that boundary to define endo/epi openings
+  -> build smooth myocardium base cut
+  -> repair shell
+  -> TetGen volume mesh
+
