@@ -269,8 +269,6 @@ def build_ventricle_shell(
 
     shell_before_repair = base.merge_surfaces([epi_open, endo_open, annulus])
     free_before = len(base.extract_boundary_edges(shell_before_repair))
-    if free_before:
-        raise RuntimeError(f"{name}: shell has {free_before} free edges before repair.")
 
     shell = base.repair_closed_surface(shell_before_repair)
     free_after = len(base.extract_boundary_edges(shell))
@@ -296,6 +294,89 @@ def build_ventricle_shell(
         shell_free_edges_before_repair=free_before,
         shell_free_edges_after_repair=free_after,
     )
+
+
+def unique_attempt_overrides(args: argparse.Namespace) -> List[Dict[str, object]]:
+    templates: List[Dict[str, object]] = [
+        {},
+        {"control_loop_points": 120, "annulus_loop_points": 120},
+        {"control_loop_points": 96, "annulus_loop_points": 96},
+        {"control_loop_points": 80, "annulus_loop_points": 80},
+        {"control_loop_points": 64, "annulus_loop_points": 64},
+        {"control_loop_points": 120, "annulus_loop_points": 96},
+        {"control_loop_points": 96, "annulus_loop_points": 120},
+        {"control_loop_points": 120, "annulus_loop_points": 120, "control_smooth_iterations": 10, "annulus_smooth_iterations": 15},
+        {"control_loop_points": 96, "annulus_loop_points": 96, "control_smooth_iterations": 10, "annulus_smooth_iterations": 15},
+        {"control_loop_points": 120, "annulus_loop_points": 120, "control_smooth_iterations": 30, "annulus_smooth_iterations": 45},
+        {"control_loop_points": 96, "annulus_loop_points": 96, "control_smooth_iterations": 30, "annulus_smooth_iterations": 45},
+        {"control_loop_points": 120, "annulus_loop_points": 120, "annulus_radial_layers": 2},
+        {"control_loop_points": 96, "annulus_loop_points": 96, "annulus_radial_layers": 2},
+        {"control_loop_points": 120, "annulus_loop_points": 120, "target_intersection_area_fraction": 0.12},
+        {"control_loop_points": 96, "annulus_loop_points": 96, "target_intersection_area_fraction": 0.12},
+        {"control_loop_points": 120, "annulus_loop_points": 120, "target_intersection_area_fraction": 0.05},
+        {"control_loop_points": 96, "annulus_loop_points": 96, "target_intersection_area_fraction": 0.05},
+        {"control_loop_points": 80, "annulus_loop_points": 80, "target_intersection_area_fraction": 0.12},
+        {"control_loop_points": 80, "annulus_loop_points": 80, "target_intersection_area_fraction": 0.05},
+    ]
+
+    seen = set()
+    unique: List[Dict[str, object]] = []
+    base_values = vars(args)
+    for template in templates:
+        merged = {
+            "control_loop_points": template.get("control_loop_points", base_values["control_loop_points"]),
+            "annulus_loop_points": template.get("annulus_loop_points", base_values["annulus_loop_points"]),
+            "control_smooth_iterations": template.get("control_smooth_iterations", base_values["control_smooth_iterations"]),
+            "annulus_smooth_iterations": template.get("annulus_smooth_iterations", base_values["annulus_smooth_iterations"]),
+            "annulus_radial_layers": template.get("annulus_radial_layers", base_values["annulus_radial_layers"]),
+            "target_intersection_area_fraction": template.get("target_intersection_area_fraction", base_values["target_intersection_area_fraction"]),
+        }
+        key = tuple(sorted(merged.items()))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(merged)
+    return unique
+
+
+def namespace_with_overrides(args: argparse.Namespace, overrides: Dict[str, object]) -> argparse.Namespace:
+    values = dict(vars(args))
+    values.update(overrides)
+    return argparse.Namespace(**values)
+
+
+def build_and_tetrahedralize_adaptive(
+    name: str,
+    endo: pv.PolyData,
+    epi: pv.PolyData,
+    profile: base.AreaProfile,
+    args: argparse.Namespace,
+) -> Tuple[VentricleBuild, np.ndarray, np.ndarray, np.ndarray, Dict[str, object], List[Dict[str, object]]]:
+    failures: List[Dict[str, object]] = []
+    for attempt_index, overrides in enumerate(unique_attempt_overrides(args), start=1):
+        attempt_args = namespace_with_overrides(args, overrides)
+        try:
+            build = build_ventricle_shell(name, endo, epi, profile, attempt_args)
+            seed = base.find_shell_seed(epi, endo, build.shell)
+            points, cells = base.tetrahedralize_shell(build.shell, seed)
+            metadata = {
+                "attempt_index": attempt_index,
+                "overrides": overrides,
+                "seed": [float(x) for x in seed],
+                "tetrahedra": int(len(cells)),
+                "points": int(len(points)),
+            }
+            return build, seed, points, cells, metadata, failures
+        except Exception as exc:
+            failures.append({
+                "attempt_index": attempt_index,
+                "overrides": overrides,
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            })
+            print(f"{name} adaptive attempt {attempt_index} failed: {type(exc).__name__}: {exc}", flush=True)
+
+    raise RuntimeError(f"{name}: all adaptive build/tetrahedralization attempts failed. Last error: {failures[-1] if failures else 'none'}")
 
 
 def candidate_to_dict(candidate: ShiftCandidate) -> Dict[str, object]:
@@ -368,6 +449,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--subject-dir", type=Path, default=Path("data/subject_1"))
     parser.add_argument("--frame", default="ED")
     parser.add_argument("--output-root", type=Path, default=None)
+    parser.add_argument("--flat-output", action="store_true")
     parser.add_argument("--samples", type=int, default=180)
     parser.add_argument("--slab-fraction", type=float, default=0.035)
     parser.add_argument("--end-band-fraction", type=float, default=0.12)
@@ -381,10 +463,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-intersection-area", type=float, default=250.0)
     parser.add_argument("--min-intersection-faces", type=int, default=80)
     parser.add_argument("--max-intersection-depth-fraction", type=float, default=0.45)
-    parser.add_argument("--control-loop-points", type=int, default=160)
+    parser.add_argument("--control-loop-points", type=int, default=120)
     parser.add_argument("--control-smooth-iterations", type=int, default=20)
     parser.add_argument("--control-smooth-relaxation", type=float, default=0.20)
-    parser.add_argument("--annulus-loop-points", type=int, default=160)
+    parser.add_argument("--annulus-loop-points", type=int, default=120)
     parser.add_argument("--annulus-radial-layers", type=int, default=4)
     parser.add_argument("--annulus-smooth-iterations", type=int, default=30)
     parser.add_argument("--annulus-smooth-relaxation", type=float, default=0.20)
@@ -399,9 +481,13 @@ def main() -> None:
     frame = args.frame
     vtk_dir = subject_dir / "vtks"
     timestamp = time.strftime("%Y%m%d_%H%M%S")
-    output_root = args.output_root or subject_dir / "volmesh_open_base_shifted_endo_intersection"
-    output_dir = output_root / f"{subject_dir.name}_{frame}_shifted_endo_intersection_open_base_{timestamp}"
-    output_dir.mkdir(parents=True, exist_ok=False)
+    output_root = args.output_root or subject_dir / "volmesh_open_base"
+    if args.flat_output:
+        output_dir = output_root
+        output_dir.mkdir(parents=True, exist_ok=True)
+    else:
+        output_dir = output_root / f"{subject_dir.name}_{frame}_shifted_endo_intersection_open_base_{timestamp}"
+        output_dir.mkdir(parents=True, exist_ok=False)
 
     input_paths = {
         "lv_endo": vtk_dir / f"LVendo_{frame}.vtk",
@@ -430,13 +516,12 @@ def main() -> None:
     base.write_area_profile(output_dir / f"{subject_dir.name}_{frame}_LV_z_area_profile.csv", lv_profile)
     base.write_area_profile(output_dir / f"{subject_dir.name}_{frame}_RV_z_area_profile.csv", rv_profile)
 
-    lv_build = build_ventricle_shell("LV", surfaces["lv_endo"], surfaces["lv_epi"], lv_profile, args)
-    rv_build = build_ventricle_shell("RV", surfaces["rv_endo"], surfaces["rv_epi"], rv_profile, args)
-
-    lv_seed = base.find_shell_seed(surfaces["lv_epi"], surfaces["lv_endo"], lv_build.shell)
-    rv_seed = base.find_shell_seed(surfaces["rv_epi"], surfaces["rv_endo"], rv_build.shell)
-    lv_points, lv_cells = base.tetrahedralize_shell(lv_build.shell, lv_seed)
-    rv_points, rv_cells = base.tetrahedralize_shell(rv_build.shell, rv_seed)
+    lv_build, lv_seed, lv_points, lv_cells, lv_attempt, lv_failures = build_and_tetrahedralize_adaptive(
+        "LV", surfaces["lv_endo"], surfaces["lv_epi"], lv_profile, args
+    )
+    rv_build, rv_seed, rv_points, rv_cells, rv_attempt, rv_failures = build_and_tetrahedralize_adaptive(
+        "RV", surfaces["rv_endo"], surfaces["rv_epi"], rv_profile, args
+    )
     points, cells, labels = base.combine_tet_meshes([(lv_points, lv_cells, 2), (rv_points, rv_cells, 4)])
 
     mesh_path = output_dir / f"{subject_dir.name}_{frame}_biventricular_open_base_shifted_endo_intersection_volmesh.vtk"
@@ -507,6 +592,12 @@ def main() -> None:
         "ventricles": {
             "lv": ventricle_summary(lv_build),
             "rv": ventricle_summary(rv_build),
+        },
+        "adaptive_attempts": {
+            "lv_selected": lv_attempt,
+            "rv_selected": rv_attempt,
+            "lv_failures": lv_failures,
+            "rv_failures": rv_failures,
         },
         "tet_quality": quality,
         "per_region": per_region,

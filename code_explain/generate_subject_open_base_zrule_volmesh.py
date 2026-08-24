@@ -663,7 +663,9 @@ def repair_closed_surface(mesh: pv.PolyData) -> pv.PolyData:
     faces = triangle_faces(mesh)
     fixer = pymeshfix.MeshFix(np.asarray(mesh.points), faces)
     fixer.repair(joincomp=True, remove_smallest_components=False)
-    fixer.clean(max_iters=20, inner_loops=5)
+    fixer.clean(max_iters=60, inner_loops=10)
+    fixer.intersection_removal(max_iter=10)
+    fixer.degeneracy_removal(max_iter=10)
     repaired = pv.PolyData(fixer.points, faces_from_triangles(fixer.faces))
     return repaired.extract_surface().triangulate().clean(tolerance=1e-7)
 
