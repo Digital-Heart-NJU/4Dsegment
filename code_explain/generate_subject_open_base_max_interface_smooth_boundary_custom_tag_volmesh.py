@@ -4,9 +4,9 @@
 Pipeline:
   raw LV/RV endocardial + epicardial surfaces
   -> detect anatomical base side from Z-area profiles
-  -> translate each endocardial blood-pool surface toward the base by an automatic distance
-  -> find every valid basal connected shifted-endo/epi interface candidate
-  -> choose the maximum valid interface boundary to define endocardial and epicardial opening loops
+  -> estimate basal directional myocardium thickness for each chamber/frame
+  -> translate each endocardial blood-pool surface toward the subject-level base by a maximum-thickness-limited distance
+  -> choose the largest valid basal shifted-endo/epi interface candidate up to the maximum basal thickness
   -> explicitly smooth the clipped basal rim while preserving opening area
   -> build a layered myocardium cut surface
   -> repair closed myocardial shells and tetrahedralize LV/RV myocardium
@@ -62,6 +62,7 @@ class ShiftIntersectionResult:
     boundary_loop: pv.PolyData
     candidate_history: List[ShiftCandidate]
     selected_candidate: ShiftCandidate
+    selection_metadata: Dict[str, object]
 
 
 @dataclass
@@ -91,6 +92,103 @@ class VentricleBuild:
 
 REGION_LEGEND = base.REGION_LEGEND
 CUSTOM_ELEMTAG_LEGEND = {1: "LV myocardium", 0: "RV myocardium"}
+
+
+def parse_csv_values(value: str) -> List[str]:
+    return [item.strip() for item in str(value).split(",") if item.strip()]
+
+
+def detect_subject_base_side(vtk_dir: Path, args: argparse.Namespace) -> Tuple[Optional[str], Dict[str, object]]:
+    """Choose one base side for the subject from the selected surface input folder."""
+    mode = getattr(args, "subject_base_side", "auto")
+    if mode == "off":
+        return None, {
+            "mode": "off",
+            "source_vtk_dir": str(vtk_dir.resolve()),
+            "selected_base_side": None,
+            "reason": "Subject-level base side disabled; using per-frame/per-chamber detection unless explicit overrides are set.",
+        }
+    if mode in {"low_z", "high_z"}:
+        return mode, {
+            "mode": "manual",
+            "source_vtk_dir": str(vtk_dir.resolve()),
+            "selected_base_side": mode,
+            "reason": "Manual subject-level base-side override.",
+        }
+
+    frames = parse_csv_values(getattr(args, "subject_base_frames", "ED,ES")) or [getattr(args, "frame", "ED")]
+    chamber_files = [("lv", "LVendo"), ("rv", "RV")]
+    records: List[Dict[str, object]] = []
+    high_score = 0.0
+    low_score = 0.0
+    high_votes = 0
+    low_votes = 0
+
+    for scan_frame in frames:
+        for chamber, prefix in chamber_files:
+            mesh_path = vtk_dir / f"{prefix}_{scan_frame}.vtk"
+            if not mesh_path.exists():
+                records.append({
+                    "frame": scan_frame,
+                    "chamber": chamber,
+                    "surface": prefix,
+                    "path": str(mesh_path),
+                    "available": False,
+                })
+                continue
+            profile = base.compute_area_profile(
+                base.load_surface(mesh_path),
+                samples=args.samples,
+                slab_fraction=args.slab_fraction,
+                end_band_fraction=args.end_band_fraction,
+                stable_fraction=args.stable_fraction,
+            )
+            low_area = float(profile.low_end_area)
+            high_area = float(profile.high_end_area)
+            denominator = max(low_area, high_area, 1e-6)
+            signed_margin = (high_area - low_area) / denominator
+            confidence = abs(signed_margin)
+            auto_side = "high_z" if signed_margin >= 0.0 else "low_z"
+            if auto_side == "high_z":
+                high_votes += 1
+                high_score += confidence
+            else:
+                low_votes += 1
+                low_score += confidence
+            records.append({
+                "frame": scan_frame,
+                "chamber": chamber,
+                "surface": prefix,
+                "path": str(mesh_path.resolve()),
+                "available": True,
+                "low_end_area": low_area,
+                "high_end_area": high_area,
+                "signed_high_minus_low_relative_margin": float(signed_margin),
+                "confidence": float(confidence),
+                "single_surface_base_side": auto_side,
+            })
+
+    available = [record for record in records if record.get("available")]
+    if not available:
+        raise RuntimeError(f"No LVendo/RV ED/ES surfaces found in {vtk_dir} for subject-level base detection.")
+
+    if high_score == low_score:
+        selected = "high_z" if high_votes >= low_votes else "low_z"
+    else:
+        selected = "high_z" if high_score > low_score else "low_z"
+
+    return selected, {
+        "mode": "auto",
+        "source_vtk_dir": str(vtk_dir.resolve()),
+        "frames": frames,
+        "selected_base_side": selected,
+        "high_score": float(high_score),
+        "low_score": float(low_score),
+        "high_votes": int(high_votes),
+        "low_votes": int(low_votes),
+        "records": records,
+        "rule": "Score ED/ES LVendo and RV surfaces from --vtk-dir; use one base side for the whole subject. Each surface contributes abs(high-low)/max(high,low) to its voted side.",
+    }
 
 
 def custom_elem_tags(region_labels: np.ndarray) -> np.ndarray:
@@ -199,6 +297,244 @@ def component_patch_for_shift(
     return patch_mask, candidate
 
 
+def parse_float_values(value: object) -> List[float]:
+    if isinstance(value, (list, tuple)):
+        raw = value
+    else:
+        raw = str(value).split(",")
+    values: List[float] = []
+    for item in raw:
+        text = str(item).strip()
+        if text:
+            values.append(float(text))
+    return values
+
+
+def candidate_is_topologically_valid(candidate: ShiftCandidate, height: float, args: argparse.Namespace) -> bool:
+    max_depth = height * float(args.max_intersection_depth_fraction)
+    return bool(
+        candidate.face_count >= int(args.min_intersection_faces)
+        and candidate.depth_from_base <= max_depth
+        and candidate.boundary_loop_count >= 1
+        and candidate.boundary_loop_length > 0.0
+        and candidate.opening_loop_area > 0.0
+        and candidate.material_secondary_loop_count == 0
+    )
+
+
+def estimate_basal_directional_thickness(
+    endo: pv.PolyData,
+    epi: pv.PolyData,
+    profile: base.AreaProfile,
+    args: argparse.Namespace,
+) -> Dict[str, object]:
+    """Estimate chamber-specific basal wall thickness along the selected base direction."""
+    triangles = base.triangle_faces(endo)
+    points = np.asarray(endo.points)
+    centers = points[triangles].mean(axis=1)
+    height = max(profile.z_max - profile.z_min, 1e-6)
+    direction = base_direction(profile)
+
+    if profile.base_side == "high_z":
+        distance_from_base = profile.z_max - centers[:, 2]
+    else:
+        distance_from_base = centers[:, 2] - profile.z_min
+
+    seed_depth = max(float(args.seed_band_fraction) * height, height / 80.0)
+    basal_depth = min(
+        height * float(args.max_intersection_depth_fraction),
+        seed_depth * float(args.stable_thickness_seed_band_multiplier),
+    )
+    basal_mask = distance_from_base <= basal_depth
+    min_basal_faces = max(
+        int(args.min_intersection_faces),
+        int(round(len(triangles) * float(args.stable_thickness_min_basal_face_fraction))),
+    )
+    if int(np.count_nonzero(basal_mask)) < min_basal_faces:
+        order = np.argsort(distance_from_base)
+        basal_mask = np.zeros(len(triangles), dtype=bool)
+        basal_mask[order[: min(min_basal_faces, len(order))]] = True
+
+    samples = centers[basal_mask]
+    max_search = max(seed_depth, height * float(args.stable_thickness_max_search_fraction))
+    steps = max(8, int(args.stable_thickness_search_steps))
+    scan_distances = np.linspace(max_search / steps, max_search, steps)
+    exit_distances = np.full(len(samples), np.nan, dtype=float)
+    active = np.ones(len(samples), dtype=bool)
+
+    for distance in scan_distances:
+        if not np.any(active):
+            break
+        active_ids = np.flatnonzero(active)
+        shifted = samples[active_ids] + direction[None, :] * float(distance)
+        inside = base.enclosed_mask(shifted, epi)
+        exited_ids = active_ids[~inside]
+        if len(exited_ids):
+            exit_distances[exited_ids] = float(distance)
+            active[exited_ids] = False
+
+    valid_exits = exit_distances[np.isfinite(exit_distances)]
+    if len(valid_exits) == 0:
+        raise RuntimeError("No basal directional endocardium-to-epicardium exits were found for stable thickness opening.")
+
+    percentile_requests = sorted(set(
+        [float(args.stable_thickness_percentile)]
+        + parse_float_values(args.stable_thickness_candidate_percentiles)
+        + [50.0, 80.0, 90.0, 95.0, 98.0, 100.0]
+    ))
+    percentiles = {
+        f"p{percentile:g}": float(np.percentile(valid_exits, percentile))
+        for percentile in percentile_requests
+        if 0.0 <= percentile <= 100.0
+    }
+    target_distance = float(np.percentile(valid_exits, float(args.stable_thickness_percentile)))
+
+    return {
+        "method": "basal_directional_thickness",
+        "base_side": profile.base_side,
+        "direction": [float(v) for v in direction],
+        "height": float(height),
+        "seed_depth": float(seed_depth),
+        "basal_depth": float(basal_depth),
+        "basal_face_count": int(np.count_nonzero(basal_mask)),
+        "exit_sample_count": int(len(samples)),
+        "valid_exit_count": int(len(valid_exits)),
+        "unresolved_exit_count": int(np.count_nonzero(~np.isfinite(exit_distances))),
+        "max_search_distance": float(max_search),
+        "search_steps": int(steps),
+        "target_percentile": float(args.stable_thickness_percentile),
+        "target_distance": float(target_distance),
+        "percentile_distances": percentiles,
+    }
+
+
+def finalize_shift_intersection(
+    endo: pv.PolyData,
+    profile: base.AreaProfile,
+    selected_mask: np.ndarray,
+    selected_candidate: ShiftCandidate,
+    history: List[ShiftCandidate],
+    selection_metadata: Dict[str, object],
+) -> ShiftIntersectionResult:
+    direction = base_direction(profile)
+    moved_endo = translated_surface(endo, direction, selected_candidate.distance)
+    original_cap = base.subset_mesh_faces(endo, selected_mask)
+    shifted_cap = translated_surface(original_cap, direction, selected_candidate.distance)
+    face_open = base.subset_mesh_faces(endo, ~selected_mask)
+    loops = base.boundary_loops(face_open)
+    if not loops:
+        raise RuntimeError("Selected shifted-interface candidate has no opening boundary loop.")
+    loop_areas = [abs(base.signed_area_in_best_plane(np.asarray(loop.points))) for loop in loops]
+    boundary_loop = loops[int(np.argmax(loop_areas))]
+
+    return ShiftIntersectionResult(
+        shift_distance=selected_candidate.distance,
+        direction=direction,
+        moved_endo=moved_endo,
+        shifted_intersection_cap=shifted_cap,
+        original_endo_intersection_cap=original_cap,
+        original_endo_face_open=face_open,
+        boundary_loop=boundary_loop,
+        candidate_history=history,
+        selected_candidate=selected_candidate,
+        selection_metadata=selection_metadata,
+    )
+
+
+def find_stable_thickness_intersection(
+    endo: pv.PolyData,
+    epi: pv.PolyData,
+    profile: base.AreaProfile,
+    args: argparse.Namespace,
+) -> ShiftIntersectionResult:
+    height = max(profile.z_max - profile.z_min, 1e-6)
+    thickness = estimate_basal_directional_thickness(endo, epi, profile, args)
+    percentile_distances = thickness["percentile_distances"]
+    candidate_distances: List[float] = []
+    for percentile in parse_float_values(args.stable_thickness_candidate_percentiles):
+        key = f"p{percentile:g}"
+        if key in percentile_distances:
+            candidate_distances.append(float(percentile_distances[key]))
+    candidate_distances.append(float(thickness["target_distance"]))
+
+    max_search = float(thickness["max_search_distance"])
+    max_basal_thickness = float(percentile_distances.get("p100", thickness["target_distance"]))
+    lower_bound = min(
+        float(percentile_distances.get("p90", thickness["target_distance"])),
+        float(thickness["target_distance"]),
+    )
+    lower_bound = max(lower_bound, max_search / max(int(args.stable_thickness_search_steps), 1))
+    upper_bound = max(lower_bound, max_basal_thickness)
+    candidate_distances.append(lower_bound)
+    candidate_distances.append(upper_bound)
+    candidate_distances = sorted({
+        round(max(0.0, min(float(distance), upper_bound)), 6)
+        for distance in candidate_distances
+        if distance > 0.0
+    })
+
+    history: List[ShiftCandidate] = []
+    accepted: List[Tuple[np.ndarray, ShiftCandidate]] = []
+
+    def test_distances(distances: Sequence[float]) -> None:
+        tested = {round(candidate.distance, 6) for candidate in history}
+        for distance in distances:
+            rounded = round(float(distance), 6)
+            if rounded in tested or rounded <= 0.0:
+                continue
+            result = component_patch_for_shift(
+                endo,
+                epi,
+                profile,
+                float(rounded),
+                seed_band_fraction=args.seed_band_fraction,
+                max_secondary_loop_area_fraction=args.max_secondary_loop_area_fraction,
+            )
+            if result is None:
+                continue
+            patch_mask, candidate = result
+            candidate.accepted = candidate_is_topologically_valid(candidate, height, args)
+            history.append(candidate)
+            tested.add(rounded)
+            if candidate.accepted:
+                accepted.append((patch_mask, candidate))
+
+    test_distances(candidate_distances)
+    dense_fallback_used = False
+    if not accepted:
+        dense_fallback_used = True
+        scan = np.linspace(lower_bound, upper_bound, max(int(args.shift_steps), 1))
+        test_distances(scan)
+
+    if not accepted:
+        raise RuntimeError("Stable thickness opening did not find any topologically valid shifted-interface candidate.")
+
+    accepted.sort(
+        key=lambda item: (
+            -item[1].distance,
+            item[1].boundary_loop_count != 1,
+            item[1].depth_from_base,
+            -item[1].opening_loop_area,
+        )
+    )
+    rank = min(max(int(getattr(args, "interface_candidate_rank", 0)), 0), len(accepted) - 1)
+    selected_mask, selected_candidate = accepted[rank]
+    selection_metadata = {
+        "strategy": "stable_thickness",
+        "selection_rule": "Use the P100 basal directional thickness as the upper displacement limit and choose the largest topologically valid shifted-endo/epi interface candidate; this avoids fixed distances while forcing thick basal myocardium regions to be included in the opening.",
+        "rank": int(rank),
+        "accepted_candidate_count": int(len(accepted)),
+        "tested_candidate_count": int(len(history)),
+        "dense_fallback_used": bool(dense_fallback_used),
+        "lower_search_bound": float(lower_bound),
+        "upper_search_bound": float(upper_bound),
+        "max_basal_directional_thickness": float(max_basal_thickness),
+        "accepted_distances": [float(candidate.distance) for _, candidate in accepted],
+        "thickness": thickness,
+    }
+    return finalize_shift_intersection(endo, profile, selected_mask, selected_candidate, history, selection_metadata)
+
+
 def find_auto_shift_intersection(
     endo: pv.PolyData,
     epi: pv.PolyData,
@@ -255,29 +591,18 @@ def find_auto_shift_intersection(
     )
     rank = min(max(int(getattr(args, "interface_candidate_rank", 0)), 0), len(ranked) - 1)
     selected_mask, selected_candidate = ranked[rank]
-
-    direction = base_direction(profile)
-    moved_endo = translated_surface(endo, direction, selected_candidate.distance)
-    original_cap = base.subset_mesh_faces(endo, selected_mask)
-    shifted_cap = translated_surface(original_cap, direction, selected_candidate.distance)
-    face_open = base.subset_mesh_faces(endo, ~selected_mask)
-    loops = base.boundary_loops(face_open)
-    if not loops:
-        raise RuntimeError("Selected shifted-interface candidate has no opening boundary loop.")
-    loop_areas = [abs(base.signed_area_in_best_plane(np.asarray(loop.points))) for loop in loops]
-    boundary_loop = loops[int(np.argmax(loop_areas))]
-
-    return ShiftIntersectionResult(
-        shift_distance=selected_candidate.distance,
-        direction=direction,
-        moved_endo=moved_endo,
-        shifted_intersection_cap=shifted_cap,
-        original_endo_intersection_cap=original_cap,
-        original_endo_face_open=face_open,
-        boundary_loop=boundary_loop,
-        candidate_history=history,
-        selected_candidate=selected_candidate,
-    )
+    selection_metadata = {
+        "strategy": "max_interface",
+        "selection_rule": "Rank valid shifted-endo/epi interface candidates by opening-loop area, then area, then shallower depth.",
+        "rank": int(rank),
+        "accepted_candidate_count": int(len(accepted)),
+        "fallback_candidate_count": int(len(fallback)),
+        "tested_candidate_count": int(len(history)),
+        "target_area": float(target_area),
+        "min_shift": float(min_shift),
+        "max_shift": float(max_shift),
+    }
+    return finalize_shift_intersection(endo, profile, selected_mask, selected_candidate, history, selection_metadata)
 
 
 def smooth_control_loop(points: np.ndarray, sample_count: int, iterations: int, relaxation: float) -> np.ndarray:
@@ -449,7 +774,10 @@ def build_ventricle_shell(
     profile: base.AreaProfile,
     args: argparse.Namespace,
 ) -> VentricleBuild:
-    intersection = find_auto_shift_intersection(endo, epi, profile, args)
+    if args.opening_strategy == "stable_thickness":
+        intersection = find_stable_thickness_intersection(endo, epi, profile, args)
+    else:
+        intersection = find_auto_shift_intersection(endo, epi, profile, args)
 
     original_control_points = smooth_control_loop(
         np.asarray(intersection.boundary_loop.points),
@@ -638,6 +966,7 @@ def intersection_summary(result: ShiftIntersectionResult) -> Dict[str, object]:
         "shift_distance": result.shift_distance,
         "shift_direction": [float(v) for v in result.direction],
         "selected_candidate": candidate_to_dict(result.selected_candidate),
+        "selection_metadata": result.selection_metadata,
         "candidate_history": [candidate_to_dict(candidate) for candidate in result.candidate_history],
         "moved_endo": base.surface_summary(result.moved_endo),
         "shifted_intersection_cap": base.surface_summary(result.shifted_intersection_cap),
@@ -695,6 +1024,25 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--frame", default="ED")
     parser.add_argument("--output-root", type=Path, default=None)
     parser.add_argument("--vtk-dir", type=Path, default=None, help="Surface input folder; defaults to SUBJECT_DIR/vtk_fixed")
+    parser.add_argument(
+        "--subject-base-side",
+        choices=["auto", "low_z", "high_z", "off"],
+        default="auto",
+        help="Use one base side for the whole subject. auto scores ED/ES LV/RV surfaces from --vtk-dir; off uses the old per-frame/per-chamber rule.",
+    )
+    parser.add_argument("--subject-base-frames", default="ED,ES", help="Comma-separated frames used for auto subject-base detection.")
+    parser.add_argument(
+        "--opening-strategy",
+        choices=["stable_thickness", "max_interface"],
+        default="stable_thickness",
+        help="stable_thickness uses the maximum basal directional myocardium thickness as the displacement limit; max_interface keeps the old maximum-area opening rule.",
+    )
+    parser.add_argument("--stable-thickness-percentile", type=float, default=95.0)
+    parser.add_argument("--stable-thickness-candidate-percentiles", default="90,92.5,95,97.5,98,99,99.5,100")
+    parser.add_argument("--stable-thickness-seed-band-multiplier", type=float, default=2.0)
+    parser.add_argument("--stable-thickness-min-basal-face-fraction", type=float, default=0.01)
+    parser.add_argument("--stable-thickness-max-search-fraction", type=float, default=0.30)
+    parser.add_argument("--stable-thickness-search-steps", type=int, default=60)
     parser.add_argument("--flat-output", action="store_true")
     parser.add_argument("--samples", type=int, default=180)
     parser.add_argument("--slab-fraction", type=float, default=0.035)
@@ -734,12 +1082,13 @@ def main() -> None:
     frame = args.frame
     vtk_dir = args.vtk_dir or subject_dir / "vtk_fixed"
     timestamp = time.strftime("%Y%m%d_%H%M%S")
-    output_root = args.output_root or subject_dir / "volmesh_open_base_max_interface_smooth_boundary_custom_tag"
+    output_root = args.output_root or subject_dir / ("volmesh_open_stable" if args.opening_strategy == "stable_thickness" else "volmesh_open_base_max_interface_smooth_boundary_custom_tag")
+    output_token = "open_stable" if args.opening_strategy == "stable_thickness" else "max_interface_smooth_boundary_custom_tag_open_base"
     if args.flat_output:
         output_dir = output_root
         output_dir.mkdir(parents=True, exist_ok=True)
     else:
-        output_dir = output_root / f"{subject_dir.name}_{frame}_max_interface_smooth_boundary_custom_tag_open_base_{timestamp}"
+        output_dir = output_root / f"{subject_dir.name}_{frame}_{output_token}_{timestamp}"
         output_dir.mkdir(parents=True, exist_ok=False)
 
     input_paths = {
@@ -749,6 +1098,11 @@ def main() -> None:
         "rv_epi": vtk_dir / f"RVepi_{frame}.vtk",
     }
     surfaces = {name: base.load_surface(path) for name, path in input_paths.items()}
+    subject_base_side, subject_base_detection = detect_subject_base_side(vtk_dir, args)
+    lv_base_side = args.lv_base_side or subject_base_side
+    rv_base_side = args.rv_base_side or subject_base_side
+    subject_base_detection["applied_base_side"] = {"lv": lv_base_side, "rv": rv_base_side}
+    subject_base_detection["explicit_chamber_overrides"] = {"lv": args.lv_base_side, "rv": args.rv_base_side}
 
     lv_profile = base.compute_area_profile(
         surfaces["lv_endo"],
@@ -756,7 +1110,7 @@ def main() -> None:
         slab_fraction=args.slab_fraction,
         end_band_fraction=args.end_band_fraction,
         stable_fraction=args.stable_fraction,
-        override_base_side=args.lv_base_side,
+        override_base_side=lv_base_side,
     )
     rv_profile = base.compute_area_profile(
         surfaces["rv_endo"],
@@ -764,7 +1118,7 @@ def main() -> None:
         slab_fraction=args.slab_fraction,
         end_band_fraction=args.end_band_fraction,
         stable_fraction=args.stable_fraction,
-        override_base_side=args.rv_base_side,
+        override_base_side=rv_base_side,
     )
     base.write_area_profile(output_dir / f"{subject_dir.name}_{frame}_LV_z_area_profile.csv", lv_profile)
     base.write_area_profile(output_dir / f"{subject_dir.name}_{frame}_RV_z_area_profile.csv", rv_profile)
@@ -779,7 +1133,12 @@ def main() -> None:
 
     elem_tags = custom_elem_tags(labels)
     custom_counts = {str(tag): int(np.count_nonzero(elem_tags == tag)) for tag in sorted(CUSTOM_ELEMTAG_LEGEND, reverse=True)}
-    mesh_path = output_dir / f"{subject_dir.name}_{frame}_biventricular_open_base_max_interface_smooth_boundary_custom_tag_volmesh.vtk"
+    mesh_name = (
+        f"{subject_dir.name}_{frame}_biventricular_open_stable_custom_tag_volmesh.vtk"
+        if args.opening_strategy == "stable_thickness"
+        else f"{subject_dir.name}_{frame}_biventricular_open_base_max_interface_smooth_boundary_custom_tag_volmesh.vtk"
+    )
+    mesh_path = output_dir / mesh_name
     write_custom_vtk(mesh_path, points, cells, elem_tags)
     write_region_legend(output_dir / f"{subject_dir.name}_{frame}_open_base_region_legend.csv")
     write_custom_elem_tag_legend(output_dir / f"{subject_dir.name}_{frame}_custom_elemTag_legend.csv")
@@ -843,13 +1202,14 @@ def main() -> None:
         "output_mesh": str(mesh_path.resolve()),
         "inputs": {name: str(path.resolve()) for name, path in input_paths.items()},
         "method": {
-            "base_detection": "Compare low-Z and high-Z blood-pool end areas; larger side is base.",
-            "auto_shift": "Scan all base-directed endocardial translations and rank valid shifted-endo/epi interfaces by opening-loop area.",
-            "deletion_region": "Use the maximum valid basal shifted-endo outside-epi interface as the endocardial deletion cap; if it fails shell/TetGen validation, try the next largest candidate.",
+            "base_detection": "Use one subject-level base side by default: score ED/ES LVendo and RV low-Z/high-Z end areas from --vtk-dir, then apply the selected side to both LV and RV for the current frame. Explicit --lv-base-side/--rv-base-side overrides still take precedence.",
+            "auto_shift": "Stable mode estimates basal directional myocardium thickness and tests endocardial translations capped by the P100 basal thickness; max_interface mode keeps the old area-ranked scan.",
+            "deletion_region": "Stable mode uses the maximum basal directional thickness as the upper displacement limit and selects the largest topologically valid basal shifted-endo outside-epi interface candidate. Adaptive retries may choose the next valid candidate if shell/TetGen validation fails.",
             "smoothing": "Use area-preserving control-loop smoothing, then smooth the actual clipped basal rim vertices with local neighbor-ring blending before building the layered myocardium base cut.",
             "custom_vtk_labels": "Final VTK is written with custom_vtk.write_custom_vtk. Cell scalar elemTag uses 1 for LV myocardium and 0 for RV myocardium.",
         },
         "parameters": {key: str(value) if isinstance(value, Path) else value for key, value in vars(args).items()},
+        "subject_base_detection": subject_base_detection,
         "ventricles": {
             "lv": ventricle_summary(lv_build),
             "rv": ventricle_summary(rv_build),
@@ -870,13 +1230,18 @@ def main() -> None:
         },
         "notes": [
             "Input LV/RV surfaces are read from --vtk-dir; this run uses the repaired vtk_fixed LVendo/LVepi/RV/RVepi VTK files.",
-            "The shifted endocardial surface is used only to rank maximum basal intersection/deletion candidates; the final wall surfaces use the original endo/epi geometry except for a local smoothed basal rim band.",
+            "In stable_thickness mode, the shifted endocardial surface is moved up to the maximum basal directional thickness and the largest topologically valid basal exit region is used; the final wall surfaces use the original endo/epi geometry except for a local smoothed basal rim band.",
             "The myocardium has a closed basal cut surface for tetrahedral meshing, while the blood-pool side is open at the base.",
             "Debug shifted surfaces, intersection caps, opening loops, deleted caps, base cut surfaces, and repaired myocardial shells are saved beside the final mesh.",
             "For ParaView coloring, load the final VTK and color by the cell scalar elemTag: 1 is LV myocardium, 0 is RV myocardium.",
         ],
     }
-    summary_path = output_dir / f"{subject_dir.name}_{frame}_open_base_max_interface_smooth_boundary_custom_tag_summary.json"
+    summary_name = (
+        f"{subject_dir.name}_{frame}_open_stable_custom_tag_summary.json"
+        if args.opening_strategy == "stable_thickness"
+        else f"{subject_dir.name}_{frame}_open_base_max_interface_smooth_boundary_custom_tag_summary.json"
+    )
+    summary_path = output_dir / summary_name
     summary_path.write_text(json.dumps(summary, indent=2))
 
     print(json.dumps({
