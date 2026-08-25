@@ -1,5 +1,6 @@
 codex resume 019feafb-83eb-70b3-a8ae-ad2316b35708
 
+now i found that there are many intersections between LVepi and RVepi,
 
 docker: the README has a confusing line mentioning jinmingduan/ segmentationcoregistration,
 but your local available image and the README run command point to jinmingduan/segmentationmeshmotion.
