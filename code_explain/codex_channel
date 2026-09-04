@@ -128,3 +128,21 @@ detect base side
   -> repair shell
   -> TetGen volume mesh
 
+
+stop, follow my request, you need to modify directly in the code
+  "generate_open_volmesh_stable.py", the pipline should be as
+  follows:1)Load LVendo, LVepi, RV, RVepi surfaces, 2)Detect subject
+  base side and write LV/RV Z-area profiles, 3)Build the open-base
+  LV myocardial shell. 4)Build the initial open-base RV myocardial
+  shell. 5)Remove RVepi-open faces/points intersecting LVepi.
+  6)Remove RV-open faces/points intersecting LVepi. 7)Keep RVepi
+  fixed and move RV inward until RV-to-RVepi distance is >= 3 mm,
+  take care of the RVendo points on the boundaries,Select the
+  nearest point on the LVepi surface that meets the 3mm distance
+  requirement as the new boundary point for RVendo, and the new
+  point should be within the new RVepi ring for correct position.
+  8)merge the new RVepi and LVepi as the whole epi surface, and new
+  RVendo and LVendo as endo surface 9)use tetgen to Tetrahedralize
+  the whole vol mesh 10) write the final VTK with elemTag=1 for LV
+  and elemTag=0 for RV. The final mesh should save in the folder
+  "volmesh_tetgen"
