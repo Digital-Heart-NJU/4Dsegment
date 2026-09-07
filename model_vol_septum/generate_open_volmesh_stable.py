@@ -6,11 +6,9 @@ Requested pipeline:
   2. Detect subject base side and write LV/RV Z-area profiles.
   3. Build the open-base LV myocardial shell.
   4. Build the initial open-base RV myocardial shell.
-  5. Remove RVepi-open faces/points intersecting LVepi.
-  6. Remove RV-open faces/points intersecting LVepi.
-  7. Keep RVepi fixed and move RVendo inward until RV-to-RVepi distance is >= 3 mm;
-     for RVendo cut-boundary points, choose nearest LVepi points satisfying the
-     3 mm distance rule and lying inside the new RVepi cut ring when possible.
+  5. Remove RVepi-open points intersecting LVepi, then keep only valid triangles.
+  6. Remove RV-open points intersecting LVepi, then keep only valid triangles.
+  7. Keep RVepi fixed and move RVendo until RV-to-RVepi distance is >= 3 mm.
   8. Merge new RVepi+LVepi as the whole epi surface and new RVendo+LVendo as
      the whole endo surface.  TetGen also receives the basal/cut closure
      surfaces required to make a valid myocardial PLC.
@@ -67,6 +65,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--frames", default=None, help="Comma-separated frames, for example ED,ES.")
     parser.add_argument("--vtk-dir", type=Path, default=None, help="Defaults to SUBJECT_DIR/vtks.")
     parser.add_argument("--output-root", type=Path, default=None, help="Defaults to SUBJECT_DIR/volmesh_tetgen.")
+    parser.add_argument("--pipeline-output-root", type=Path, default=None, help="Defaults to SUBJECT_DIR/volmesh_generate_pipline/step3open_base.")
+    parser.add_argument("--save-open-shell-stages", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--save-intersection-removal-stages", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--save-rvendo-distance-stage", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--save-merge-surface-stage", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--stop-after-open-shells", action="store_true", help="Save LV/RV open-base shell stage outputs and stop before later RV trimming/TetGen stages.")
+    parser.add_argument("--stop-after-intersection-removal", action="store_true", help="Save step 5/6 triangle-surface outputs and stop before RV distance fixing/TetGen stages.")
+    parser.add_argument("--stop-after-rvendo-distance", action="store_true", help="Save step 7 RVepi/RVendo triangle surfaces and stop before whole-surface merging/TetGen stages.")
+    parser.add_argument("--stop-after-merge-surface", action="store_true", help="Save step 8 whole epi/endo triangle surfaces and stop before closure/TetGen stages.")
     parser.add_argument("--save-debug", action="store_true")
 
     parser.add_argument("--subject-base-side", choices=["auto", "low_z", "high_z", "off"], default="auto")
@@ -119,8 +126,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rv-distance-padding", type=float, default=0.05)
     parser.add_argument("--rv-distance-iterations", type=int, default=8)
     parser.add_argument("--rv-distance-max-step", type=float, default=2.0)
-    parser.add_argument("--lv-candidate-count", type=int, default=0, help="LVepi candidates per RVendo boundary vertex. <=0 searches all LVepi points.")
-    parser.add_argument("--rv-ring-containment-fallback", action=argparse.BooleanOptionalAction, default=False)
 
     parser.add_argument("--tetgen-input-mode", choices=["raw", "repair", "raw_then_repair"], default="raw")
     parser.add_argument("--strict-lv-preservation", action=argparse.BooleanOptionalAction, default=True)
@@ -153,6 +158,19 @@ def resolve_output_dir(subject_dir: Path, output_root: Optional[Path]) -> Path:
     output_dir = output_root or subject_dir / "volmesh_tetgen"
     output_dir.mkdir(parents=True, exist_ok=True)
     return output_dir
+
+
+def resolve_pipeline_stage_dir(subject_dir: Path, pipeline_output_root: Optional[Path], stage_name: str) -> Path:
+    root_dir = pipeline_output_root or subject_dir / "volmesh_generate_pipline"
+    if root_dir.name.startswith("step"):
+        root_dir = root_dir.parent
+    output_dir = root_dir / stage_name
+    output_dir.mkdir(parents=True, exist_ok=True)
+    return output_dir
+
+
+def resolve_pipeline_output_dir(subject_dir: Path, pipeline_output_root: Optional[Path]) -> Path:
+    return resolve_pipeline_stage_dir(subject_dir, pipeline_output_root, "step3open_base")
 
 
 def input_paths_for_frame(vtk_dir: Path, frame: str) -> Dict[str, Path]:
@@ -329,7 +347,7 @@ def inside_or_near_reference_surface(reference: pv.PolyData, query_points: np.nd
     return inside | near, distances, inside
 
 
-def remove_intersecting_faces_and_points(
+def remove_intersecting_points_from_surface(
     name: str,
     surface: pv.PolyData,
     lv_epi_reference: pv.PolyData,
@@ -343,20 +361,23 @@ def remove_intersecting_faces_and_points(
 
     vertex_hit, vertex_distances, vertex_inside = inside_or_near_reference_surface(lv_epi_reference, points, args)
     centers = points[triangles].mean(axis=1) if len(triangles) else np.empty((0, 3), dtype=float)
-    center_hit, center_distances, center_inside = inside_or_near_reference_surface(lv_epi_reference, centers, args) if len(centers) else (np.empty((0,), dtype=bool), np.empty((0,), dtype=float), np.empty((0,), dtype=bool))
+    center_hit, _, center_inside = inside_or_near_reference_surface(lv_epi_reference, centers, args) if len(centers) else (np.empty((0,), dtype=bool), np.empty((0,), dtype=float), np.empty((0,), dtype=bool))
 
-    remove = center_hit | vertex_hit[triangles].any(axis=1)
-    remove = expand_face_mask(remove, triangles, int(args.surface_removal_rings))
+    # Point-driven deletion: a triangle is removed only because one of its vertices was deleted.
+    remove = vertex_hit[triangles].any(axis=1)
     keep = ~remove
     if not np.any(keep):
-        raise RuntimeError(f"{name}: all faces were removed by LVepi intersection deletion.")
+        raise RuntimeError(f"{name}: all faces were removed because every triangle used an LVepi-intersecting point.")
+
+    kept_point_ids = np.unique(triangles[keep].ravel()) if np.any(keep) else np.empty((0,), dtype=np.int64)
+    point_kept = np.zeros(len(points), dtype=bool)
+    point_kept[kept_point_ids] = True
 
     cut_edges = cut_boundary_edges_from_face_mask(triangles, remove)
     cut_vertex_ids = np.unique(cut_edges.ravel()) if len(cut_edges) else np.empty((0,), dtype=np.int64)
     cut_points = points[cut_vertex_ids] if len(cut_vertex_ids) else np.empty((0, 3), dtype=float)
 
-    trimmed = base.subset_mesh_faces(surface, keep)
-    trimmed, component_info = keep_large_surface_components(trimmed, args.surface_component_min_fraction)
+    trimmed = base.subset_mesh_faces(surface, keep).extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance)
     cut_mask = map_source_points_to_target_mask(
         cut_points,
         np.asarray(trimmed.points, dtype=float),
@@ -364,194 +385,56 @@ def remove_intersecting_faces_and_points(
     )
     return trimmed, cut_mask, {
         "surface": name,
-        "method": "remove_faces_with_vertices_or_centers_inside_or_near_closed_LVepi",
+        "method": "remove_points_inside_or_near_closed_LVepi_then_drop_only_incident_triangles",
         "input_points": int(surface.n_points),
         "input_faces": int(len(triangles)),
         "clearance_mm": clearance,
         "reference_LVepi_free_edges": int(len(base.extract_boundary_edges(lv_epi_reference))),
-        "vertex_hits": int(np.count_nonzero(vertex_hit)),
-        "vertex_inside_closed_LVepi": int(np.count_nonzero(vertex_inside)),
-        "face_center_hits": int(np.count_nonzero(center_hit)),
-        "face_centers_inside_closed_LVepi": int(np.count_nonzero(center_inside)),
-        "removed_faces": int(np.count_nonzero(remove)),
-        "kept_faces_before_component_cleanup": int(np.count_nonzero(keep)),
+        "removed_points_by_LVepi_test": int(np.count_nonzero(vertex_hit)),
+        "removed_points_inside_closed_LVepi": int(np.count_nonzero(vertex_inside)),
+        "additional_points_unreferenced_after_triangle_compaction": int(np.count_nonzero((~vertex_hit) & (~point_kept))),
+        "face_center_hits_not_used_for_removal": int(np.count_nonzero(center_hit)),
+        "face_centers_inside_closed_LVepi_not_used_for_removal": int(np.count_nonzero(center_inside)),
+        "removed_triangles_incident_to_removed_points": int(np.count_nonzero(remove)),
+        "kept_triangles": int(np.count_nonzero(keep)),
         "cut_boundary_edges": int(len(cut_edges)),
         "cut_boundary_vertices_before_cleanup": int(len(cut_vertex_ids)),
         "cut_boundary_vertices_after_cleanup": int(np.count_nonzero(cut_mask)),
         "output_points": int(trimmed.n_points),
         "output_faces": int(trimmed.n_cells),
         "min_signed_distance_to_LVepi": float(vertex_distances.min()) if len(vertex_distances) else None,
-        "component_cleanup": component_info,
+        "component_cleanup": {"applied": False, "reason": "disabled_for_point_driven_removal"},
     }
 
-
-def boundary_vertex_ids(mesh: pv.PolyData) -> np.ndarray:
-    edges = np.asarray(base.extract_boundary_edges(mesh), dtype=np.int64)
-    if edges.size == 0:
-        return np.empty((0,), dtype=np.int64)
-    return np.unique(edges.reshape(-1))
-
-
-def best_plane(points: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-    pts = np.asarray(points, dtype=float)
-    center = pts.mean(axis=0)
-    centered = pts - center
-    if len(pts) < 3:
-        return center, np.eye(3)[:2]
-    _, _, vh = np.linalg.svd(centered, full_matrices=False)
-    return center, vh[:2]
-
-
-def sorted_ring_uv(ring_points: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    pts = np.asarray(ring_points, dtype=float)
-    center, axes = best_plane(pts)
-    uv = (pts - center) @ axes.T
-    angles = np.arctan2(uv[:, 1] - uv[:, 1].mean(), uv[:, 0] - uv[:, 0].mean())
-    order = np.argsort(angles)
-    return center, axes, uv[order]
-
-
-def point_in_polygon_2d(point: np.ndarray, polygon: np.ndarray) -> bool:
-    if len(polygon) < 3:
-        return True
-    x, y = float(point[0]), float(point[1])
-    inside = False
-    xj, yj = float(polygon[-1, 0]), float(polygon[-1, 1])
-    for xi, yi in polygon:
-        xi = float(xi)
-        yi = float(yi)
-        crosses = ((yi > y) != (yj > y)) and (x < (xj - xi) * (y - yi) / max(yj - yi, 1e-12) + xi)
-        if crosses:
-            inside = not inside
-        xj, yj = xi, yi
-    return inside
-
-
-def ring_containment_checker(ring_points: np.ndarray):
-    pts = np.asarray(ring_points, dtype=float)
-    if len(pts) < 3:
-        return lambda query: True
-    center, axes, polygon = sorted_ring_uv(pts)
-
-    def contains(query: np.ndarray) -> bool:
-        uv = (np.asarray(query, dtype=float) - center) @ axes.T
-        return point_in_polygon_2d(uv, polygon)
-
-    return contains
-
-
-def choose_rvendo_boundary_points_on_lvepi(
-    rv_endo_points: np.ndarray,
-    boundary_mask: np.ndarray,
-    lv_epi: pv.PolyData,
-    rv_epi: pv.PolyData,
-    rv_epi_cut_mask: np.ndarray,
-    args: argparse.Namespace,
-) -> Tuple[np.ndarray, Dict[str, object]]:
-    points = np.asarray(rv_endo_points, dtype=float).copy()
-    boundary_ids = np.flatnonzero(boundary_mask)
-    if len(boundary_ids) == 0:
-        return points, {"boundary_vertices": 0, "changed_vertices": 0}
-
-    lv_points = np.asarray(lv_epi.points, dtype=float)
-    rv_epi_points = np.asarray(rv_epi.points, dtype=float)
-    lv_tree = cKDTree(lv_points)
-    rv_epi_tree = cKDTree(rv_epi_points)
-    ring_points = rv_epi_points[np.asarray(rv_epi_cut_mask, dtype=bool)]
-    if len(ring_points) < 3:
-        ids = boundary_vertex_ids(rv_epi)
-        ring_points = rv_epi_points[ids] if len(ids) else rv_epi_points
-    contains = ring_containment_checker(ring_points)
-
-    requested_k = int(args.lv_candidate_count)
-    k = len(lv_points) if requested_k <= 0 else min(max(1, requested_k), len(lv_points))
-    target = float(args.rv_min_distance_to_rvepi) + float(args.rv_distance_padding)
-    changed = 0
-    fallback_no_ring = 0
-    fallback_no_distance = 0
-    failed_strict_vertices: List[int] = []
-    selected_distances = []
-    for point_id in boundary_ids:
-        _, candidate_ids = lv_tree.query(points[point_id], k=k)
-        candidate_ids = np.atleast_1d(candidate_ids).astype(np.int64)
-        chosen = None
-        for candidate_id in candidate_ids:
-            candidate = lv_points[int(candidate_id)]
-            dist_to_rvepi = float(rv_epi_tree.query(candidate, k=1)[0])
-            if dist_to_rvepi >= target and contains(candidate):
-                chosen = candidate
-                selected_distances.append(dist_to_rvepi)
-                break
-        if chosen is None and bool(args.rv_ring_containment_fallback):
-            for candidate_id in candidate_ids:
-                candidate = lv_points[int(candidate_id)]
-                dist_to_rvepi = float(rv_epi_tree.query(candidate, k=1)[0])
-                if dist_to_rvepi >= target:
-                    chosen = candidate
-                    selected_distances.append(dist_to_rvepi)
-                    fallback_no_ring += 1
-                    break
-        if chosen is None:
-            failed_strict_vertices.append(int(point_id))
-            if not bool(args.rv_ring_containment_fallback):
-                continue
-            candidate = lv_points[int(candidate_ids[0])]
-            chosen = candidate
-            selected_distances.append(float(rv_epi_tree.query(candidate, k=1)[0]))
-            fallback_no_distance += 1
-        if np.linalg.norm(points[point_id] - chosen) > 1e-8:
-            changed += 1
-        points[point_id] = chosen
-
-    if failed_strict_vertices and not bool(args.rv_ring_containment_fallback):
-        raise RuntimeError(
-            "RVendo boundary replacement could not find LVepi candidates that satisfy both "
-            f"RVepi-ring containment and {target:.3f} mm clearance for "
-            f"{len(failed_strict_vertices)} boundary vertices. Increase --lv-candidate-count "
-            "or inspect the trimmed RVepi ring."
-        )
-
-    return points, {
-        "boundary_vertices": int(len(boundary_ids)),
-        "changed_vertices": int(changed),
-        "rv_epi_ring_points": int(len(ring_points)),
-        "candidate_count_per_vertex": int(k),
-        "target_distance_mm": target,
-        "strict_ring_and_distance_failures": int(len(failed_strict_vertices)),
-        "fallback_ignore_ring_count": int(fallback_no_ring),
-        "fallback_ignore_distance_count": int(fallback_no_distance),
-        "selected_distance_min": float(np.min(selected_distances)) if selected_distances else None,
-        "selected_distance_p50": float(np.percentile(selected_distances, 50)) if selected_distances else None,
-    }
 
 
 def enforce_rvendo_distance(
     rv_endo: pv.PolyData,
-    rv_endo_cut_mask: np.ndarray,
     rv_epi: pv.PolyData,
-    rv_epi_cut_mask: np.ndarray,
-    lv_epi: pv.PolyData,
     args: argparse.Namespace,
 ) -> Tuple[pv.PolyData, np.ndarray, Dict[str, object]]:
     rv_endo = rv_endo.extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance)
     rv_epi = rv_epi.extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance)
     points = np.asarray(rv_endo.points, dtype=float).copy()
-    boundary_mask = np.asarray(rv_endo_cut_mask, dtype=bool).copy()
-
-    points, boundary_info = choose_rvendo_boundary_points_on_lvepi(
-        points, boundary_mask, lv_epi, rv_epi, rv_epi_cut_mask, args
-    )
 
     rv_epi_points = np.asarray(rv_epi.points, dtype=float)
     rv_epi_tree = cKDTree(rv_epi_points)
-    target = float(args.rv_min_distance_to_rvepi) + float(args.rv_distance_padding)
+    requested_distance = float(args.rv_min_distance_to_rvepi)
+    target = requested_distance + float(args.rv_distance_padding)
     total_moved = np.zeros(len(points), dtype=bool)
     iteration_records = []
+    initial_distances = rv_epi_tree.query(points, k=1)[0] if len(points) else np.empty((0,), dtype=float)
+
     for iteration in range(int(args.rv_distance_iterations)):
         distances, ids = rv_epi_tree.query(points, k=1)
-        movable = (distances < target) & (distances > 1e-8) & (~boundary_mask)
+        movable = (distances < target) & (distances > 1e-8)
         if not np.any(movable):
-            iteration_records.append({"iteration": int(iteration), "moved_vertices": 0})
+            iteration_records.append({
+                "iteration": int(iteration),
+                "moved_vertices": 0,
+                "min_distance_before": float(np.min(distances)) if len(distances) else None,
+                "p05_distance_before": float(np.percentile(distances, 5)) if len(distances) else None,
+            })
             break
         nearest = rv_epi_points[ids[movable]]
         vectors = points[movable] - nearest
@@ -564,27 +447,32 @@ def enforce_rvendo_distance(
             "moved_vertices": int(np.count_nonzero(movable)),
             "min_distance_before": float(np.min(distances)) if len(distances) else None,
             "p05_distance_before": float(np.percentile(distances, 5)) if len(distances) else None,
+            "max_step_mm": float(np.max(steps)) if len(steps) else 0.0,
         })
 
     moved = rv_endo.copy(deep=True)
     moved.points = points
     moved = moved.extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance)
-    updated_cut_mask = map_source_points_to_target_mask(
-        points[boundary_mask],
+    moved_mask = map_source_points_to_target_mask(
+        points[total_moved],
         np.asarray(moved.points, dtype=float),
         max(float(args.boundary_match_tolerance), float(args.surface_clean_tolerance) * 10.0),
     )
     final_distances = cKDTree(np.asarray(rv_epi.points, dtype=float)).query(np.asarray(moved.points, dtype=float), k=1)[0]
-    non_boundary_distances = final_distances[~updated_cut_mask] if np.any(~updated_cut_mask) else final_distances
-    return moved, updated_cut_mask, {
-        "method": "fix_RVepi_move_RVendo_to_min_distance_with_LVepi_boundary_replacement",
-        "boundary_replacement": boundary_info,
-        "minimum_requested_distance_mm": float(args.rv_min_distance_to_rvepi),
+    below_requested = final_distances < requested_distance
+    return moved, moved_mask, {
+        "method": "fix_RVepi_and_move_RVendo_to_minimum_distance_only",
+        "minimum_requested_distance_mm": requested_distance,
         "target_distance_with_padding_mm": target,
+        "rv_epi_fixed": True,
+        "lv_epi_boundary_replacement": False,
+        "initial_vertices_below_requested_distance": int(np.count_nonzero(initial_distances < requested_distance)) if len(initial_distances) else 0,
+        "initial_min_distance_all_vertices": float(np.min(initial_distances)) if len(initial_distances) else None,
+        "initial_p05_distance_all_vertices": float(np.percentile(initial_distances, 5)) if len(initial_distances) else None,
         "iterations": iteration_records,
-        "total_nonboundary_vertices_moved": int(np.count_nonzero(total_moved)),
+        "total_vertices_moved": int(np.count_nonzero(total_moved)),
+        "final_vertices_below_requested_distance": int(np.count_nonzero(below_requested)) if len(final_distances) else 0,
         "final_min_distance_all_vertices": float(np.min(final_distances)) if len(final_distances) else None,
-        "final_min_distance_nonboundary_vertices": float(np.min(non_boundary_distances)) if len(non_boundary_distances) else None,
         "final_p05_distance_all_vertices": float(np.percentile(final_distances, 5)) if len(final_distances) else None,
     }
 
@@ -1046,11 +934,222 @@ def save_debug_surfaces(debug_dir: Path, subject_id: str, frame: str, surfaces: 
     return paths
 
 
+def save_open_shell_stage_outputs(
+    pipeline_dir: Path,
+    subject_id: str,
+    frame: str,
+    lv_build,
+    rv_build,
+    lv_profile,
+    rv_profile,
+    lv_base_side: str,
+    rv_base_side: str,
+) -> Tuple[Dict[str, str], Dict[str, object]]:
+    pipeline_dir.mkdir(parents=True, exist_ok=True)
+    stage_surfaces = {
+        "stage03_LV_openbase_myo_shell": lv_build.shell,
+        "stage03_LV_openbase_epi": lv_build.epi_open,
+        "stage03_LV_openbase_endo": lv_build.endo_open,
+        "stage03_LV_openbase_annulus": lv_build.annulus,
+        "stage04_RV_initial_openbase_myo_shell": rv_build.shell,
+        "stage04_RV_initial_openbase_epi": rv_build.epi_open,
+        "stage04_RV_initial_openbase_endo": rv_build.endo_open,
+        "stage04_RV_initial_openbase_annulus": rv_build.annulus,
+    }
+    paths: Dict[str, str] = {}
+    surface_records: Dict[str, object] = {}
+    for name, mesh in stage_surfaces.items():
+        clean_mesh = mesh.extract_surface().triangulate().clean(tolerance=1e-7)
+        path = pipeline_dir / f"{subject_id}_{frame}_{name}.vtk"
+        clean_mesh.save(path)
+        paths[name] = str(path.resolve())
+        surface_records[name] = surface_summary(clean_mesh)
+
+    summary = {
+        "description": "Open-base myocardial shell stage outputs saved immediately after LV and RV shell construction.",
+        "subject": subject_id,
+        "frame": frame,
+        "output_dir": str(pipeline_dir.resolve()),
+        "base_side": {"LV": lv_base_side, "RV": rv_base_side},
+        "paths": paths,
+        "surfaces": surface_records,
+        "profiles": {
+            "LV": base.profile_to_dict(lv_profile),
+            "RV": base.profile_to_dict(rv_profile),
+        },
+        "open_base": {
+            "LV": openbase.ventricle_summary(lv_build),
+            "RV": openbase.ventricle_summary(rv_build),
+        },
+    }
+    summary_path = pipeline_dir / f"{subject_id}_{frame}_stage03_04_openbase_shell_outputs.json"
+    summary_path.write_text(json.dumps(summary, indent=2))
+    paths["stage03_04_summary"] = str(summary_path.resolve())
+    return paths, summary
+
+
+def save_triangle_surface_vtk(
+    path: Path,
+    mesh: pv.PolyData,
+    cut_mask: Optional[np.ndarray] = None,
+    point_data: Optional[Dict[str, np.ndarray]] = None,
+) -> Dict[str, object]:
+    surface = mesh.extract_surface().triangulate()
+    cut_boundary_vertices = None
+    if cut_mask is not None:
+        cut_mask = np.asarray(cut_mask, dtype=bool)
+        if len(cut_mask) == surface.n_points:
+            surface.point_data["cutBoundary"] = cut_mask.astype(np.int32)
+            cut_boundary_vertices = int(np.count_nonzero(cut_mask))
+    if point_data:
+        for name, values in point_data.items():
+            array = np.asarray(values)
+            if len(array) != surface.n_points:
+                raise ValueError(f"Point-data array {name!r} has length {len(array)}, expected {surface.n_points}.")
+            surface.point_data[name] = array
+    surface.save(path)
+    record = surface_summary(surface)
+    record.update({
+        "path": str(path.resolve()),
+        "point_data": list(surface.point_data.keys()),
+        "cut_boundary_vertices": cut_boundary_vertices,
+    })
+    return record
+
+
+def save_intersection_removal_stage_outputs(
+    pipeline_dir: Path,
+    subject_id: str,
+    frame: str,
+    rv_epi_trimmed: pv.PolyData,
+    rv_epi_cut_mask: np.ndarray,
+    rv_epi_removal: Dict[str, object],
+    rv_endo_trimmed: pv.PolyData,
+    rv_endo_cut_mask: np.ndarray,
+    rv_endo_removal: Dict[str, object],
+) -> Tuple[Dict[str, str], Dict[str, object]]:
+    pipeline_dir.mkdir(parents=True, exist_ok=True)
+    paths: Dict[str, str] = {}
+    records: Dict[str, object] = {}
+
+    stage_items = [
+        ("stage05_RVepi_after_LVepi_intersection_removal", rv_epi_trimmed, rv_epi_cut_mask, rv_epi_removal),
+        ("stage06_RVendo_after_LVepi_intersection_removal", rv_endo_trimmed, rv_endo_cut_mask, rv_endo_removal),
+    ]
+    for name, mesh, cut_mask, removal_info in stage_items:
+        surface_path = pipeline_dir / f"{subject_id}_{frame}_{name}_surface.vtk"
+        records[name] = save_triangle_surface_vtk(surface_path, mesh, cut_mask)
+        paths[name] = str(surface_path.resolve())
+        records[name]["removal_info"] = removal_info
+
+    summary = {
+        "description": "Step 5/6 outputs saved as triangle surface VTKs after LVepi intersection removal.",
+        "subject": subject_id,
+        "frame": frame,
+        "output_dir": str(pipeline_dir.resolve()),
+        "paths": paths,
+        "surfaces": records,
+    }
+    summary_path = pipeline_dir / f"{subject_id}_{frame}_stage05_06_remove_intersection_surfaces_summary.json"
+    summary_path.write_text(json.dumps(summary, indent=2))
+    paths["stage05_06_summary"] = str(summary_path.resolve())
+    return paths, summary
+
+
+def save_rvendo_distance_stage_outputs(
+    pipeline_dir: Path,
+    subject_id: str,
+    frame: str,
+    rv_epi: pv.PolyData,
+    rv_endo: pv.PolyData,
+    rv_endo_moved_mask: np.ndarray,
+    rv_distance_fix: Dict[str, object],
+    args: argparse.Namespace,
+) -> Tuple[Dict[str, str], Dict[str, object]]:
+    pipeline_dir.mkdir(parents=True, exist_ok=True)
+    paths: Dict[str, str] = {}
+    records: Dict[str, object] = {}
+
+    rv_epi_surface = rv_epi.extract_surface().triangulate()
+    rv_endo_surface = rv_endo.extract_surface().triangulate()
+    rv_epi_path = pipeline_dir / f"{subject_id}_{frame}_stage07_RVepi_fixed_surface.vtk"
+    rv_endo_path = pipeline_dir / f"{subject_id}_{frame}_stage07_RVendo_after_3mm_distance_surface.vtk"
+
+    records["stage07_RVepi_fixed"] = save_triangle_surface_vtk(rv_epi_path, rv_epi_surface)
+    paths["stage07_RVepi_fixed"] = str(rv_epi_path.resolve())
+
+    distances = cKDTree(np.asarray(rv_epi_surface.points, dtype=float)).query(np.asarray(rv_endo_surface.points, dtype=float), k=1)[0]
+    moved_mask = np.asarray(rv_endo_moved_mask, dtype=bool)
+    point_data = {
+        "movedByStep7": moved_mask.astype(np.int32),
+        "distanceToRVepi": distances.astype(np.float32),
+        "belowRequested3mm": (distances < float(args.rv_min_distance_to_rvepi)).astype(np.int32),
+    }
+    records["stage07_RVendo_after_3mm_distance"] = save_triangle_surface_vtk(
+        rv_endo_path,
+        rv_endo_surface,
+        point_data=point_data,
+    )
+    paths["stage07_RVendo_after_3mm_distance"] = str(rv_endo_path.resolve())
+
+    summary = {
+        "description": "Step 7 outputs after keeping RVepi fixed and moving RVendo by the >=3 mm RVendo-to-RVepi distance rule.",
+        "subject": subject_id,
+        "frame": frame,
+        "output_dir": str(pipeline_dir.resolve()),
+        "paths": paths,
+        "surfaces": records,
+        "rv_distance_fix": rv_distance_fix,
+    }
+    summary_path = pipeline_dir / f"{subject_id}_{frame}_stage07_move_RVendo_summary.json"
+    summary_path.write_text(json.dumps(summary, indent=2))
+    paths["stage07_summary"] = str(summary_path.resolve())
+    return paths, summary
+
+
+def save_merge_surface_stage_outputs(
+    pipeline_dir: Path,
+    subject_id: str,
+    frame: str,
+    whole_epi: pv.PolyData,
+    whole_endo: pv.PolyData,
+) -> Tuple[Dict[str, str], Dict[str, object]]:
+    pipeline_dir.mkdir(parents=True, exist_ok=True)
+    paths: Dict[str, str] = {}
+    records: Dict[str, object] = {}
+
+    stage_items = [
+        ("stage08_whole_epi_surface", whole_epi),
+        ("stage08_whole_endo_surface", whole_endo),
+    ]
+    for name, mesh in stage_items:
+        surface_path = pipeline_dir / f"{subject_id}_{frame}_{name}.vtk"
+        records[name] = save_triangle_surface_vtk(surface_path, mesh)
+        paths[name] = str(surface_path.resolve())
+
+    summary = {
+        "description": "Step 8 outputs after merging LVepi+RVepi as whole epi and LVendo+RVendo as whole endo.",
+        "subject": subject_id,
+        "frame": frame,
+        "output_dir": str(pipeline_dir.resolve()),
+        "paths": paths,
+        "surfaces": records,
+    }
+    summary_path = pipeline_dir / f"{subject_id}_{frame}_stage08_merge_surface_summary.json"
+    summary_path.write_text(json.dumps(summary, indent=2))
+    paths["stage08_summary"] = str(summary_path.resolve())
+    return paths, summary
+
+
 def process_frame(args: argparse.Namespace, frame: str) -> Dict[str, object]:
     subject_dir = args.subject_dir
     subject_id = subject_dir.name
     vtk_dir = resolve_vtk_dir(subject_dir, args.vtk_dir)
     output_dir = resolve_output_dir(subject_dir, args.output_root)
+    open_shell_stage_dir = resolve_pipeline_output_dir(subject_dir, args.pipeline_output_root)
+    intersection_stage_dir = resolve_pipeline_stage_dir(subject_dir, args.pipeline_output_root, "step5remove_intersection")
+    rvendo_distance_stage_dir = resolve_pipeline_stage_dir(subject_dir, args.pipeline_output_root, "step7moveRVendo")
+    merge_surface_stage_dir = resolve_pipeline_stage_dir(subject_dir, args.pipeline_output_root, "step8merge_surface")
     input_paths = input_paths_for_frame(vtk_dir, frame)
 
     log_stage(f"{subject_id} {frame}: load LV/RV surfaces")
@@ -1088,27 +1187,108 @@ def process_frame(args: argparse.Namespace, frame: str) -> Dict[str, object]:
     log_stage(f"{subject_id} {frame}: build initial open-base RV shell")
     rv_build = openbase.build_ventricle_shell("RV", surfaces["rv_endo"], surfaces["rv_epi"], rv_profile, frame_args)
 
+    open_shell_stage_paths: Dict[str, str] = {}
+    open_shell_stage_summary: Dict[str, object] = {}
+    if args.save_open_shell_stages:
+        log_stage(f"{subject_id} {frame}: save open-base LV/RV shell stage outputs")
+        open_shell_stage_paths, open_shell_stage_summary = save_open_shell_stage_outputs(
+            open_shell_stage_dir, subject_id, frame, lv_build, rv_build, lv_profile, rv_profile, lv_base_side, rv_base_side
+        )
+
+    if args.stop_after_open_shells:
+        return {
+            "frame": frame,
+            "stopped_after": "open_base_LV_RV_shell_generation",
+            "stage_outputs": open_shell_stage_paths,
+        }
+
     lv_shell = lv_build.shell.extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance)
     lv_epi_open = lv_build.epi_open.extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance)
     lv_epi_intersection_reference = surfaces["lv_epi"].extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance)
 
-    log_stage(f"{subject_id} {frame}: remove RVepi faces/points intersecting LVepi")
-    rv_epi_trimmed, rv_epi_cut_mask, rv_epi_removal = remove_intersecting_faces_and_points(
+    log_stage(f"{subject_id} {frame}: remove RVepi points intersecting LVepi")
+    rv_epi_trimmed, rv_epi_cut_mask, rv_epi_removal = remove_intersecting_points_from_surface(
         "RVepi_open", rv_build.epi_open, lv_epi_intersection_reference, args
     )
-    log_stage(f"{subject_id} {frame}: remove RVendo faces/points intersecting LVepi")
-    rv_endo_trimmed, rv_endo_cut_mask, rv_endo_removal = remove_intersecting_faces_and_points(
+    log_stage(f"{subject_id} {frame}: remove RVendo points intersecting LVepi")
+    rv_endo_trimmed, rv_endo_cut_mask, rv_endo_removal = remove_intersecting_points_from_surface(
         "RV_open", rv_build.endo_open, lv_epi_intersection_reference, args
     )
 
-    log_stage(f"{subject_id} {frame}: enforce RVendo distance and LVepi boundary replacement")
-    rv_endo_fixed, rv_endo_fixed_cut_mask, rv_distance_fix = enforce_rvendo_distance(
-        rv_endo_trimmed, rv_endo_cut_mask, rv_epi_trimmed, rv_epi_cut_mask, lv_epi_open, args
+    intersection_stage_paths: Dict[str, str] = {}
+    intersection_stage_summary: Dict[str, object] = {}
+    if args.save_intersection_removal_stages:
+        log_stage(f"{subject_id} {frame}: save step 5/6 intersection-removal triangle-surface outputs")
+        intersection_stage_paths, intersection_stage_summary = save_intersection_removal_stage_outputs(
+            intersection_stage_dir,
+            subject_id,
+            frame,
+            rv_epi_trimmed,
+            rv_epi_cut_mask,
+            rv_epi_removal,
+            rv_endo_trimmed,
+            rv_endo_cut_mask,
+            rv_endo_removal,
+        )
+
+    if args.stop_after_intersection_removal:
+        return {
+            "frame": frame,
+            "stopped_after": "step05_06_intersection_removal",
+            "open_shell_stage_outputs": open_shell_stage_paths,
+            "intersection_removal_stage_outputs": intersection_stage_paths,
+        }
+
+    log_stage(f"{subject_id} {frame}: keep RVepi fixed and move RVendo to >=3 mm distance")
+    rv_endo_fixed, rv_endo_moved_mask, rv_distance_fix = enforce_rvendo_distance(
+        rv_endo_trimmed, rv_epi_trimmed, args
     )
+
+    rvendo_distance_stage_paths: Dict[str, str] = {}
+    rvendo_distance_stage_summary: Dict[str, object] = {}
+    if args.save_rvendo_distance_stage:
+        log_stage(f"{subject_id} {frame}: save step 7 RVepi/RVendo triangle-surface outputs")
+        rvendo_distance_stage_paths, rvendo_distance_stage_summary = save_rvendo_distance_stage_outputs(
+            rvendo_distance_stage_dir,
+            subject_id,
+            frame,
+            rv_epi_trimmed,
+            rv_endo_fixed,
+            rv_endo_moved_mask,
+            rv_distance_fix,
+            args,
+        )
+
+    if args.stop_after_rvendo_distance:
+        return {
+            "frame": frame,
+            "stopped_after": "step07_move_RVendo",
+            "open_shell_stage_outputs": open_shell_stage_paths,
+            "intersection_removal_stage_outputs": intersection_stage_paths,
+            "rvendo_distance_stage_outputs": rvendo_distance_stage_paths,
+        }
 
     log_stage(f"{subject_id} {frame}: merge whole epi and whole endo surfaces")
     whole_epi = merge_surfaces([lv_epi_open, rv_epi_trimmed], args.combined_surface_merge_tolerance)
     whole_endo = merge_surfaces([lv_build.endo_open, rv_endo_fixed], args.combined_surface_merge_tolerance)
+
+    merge_surface_stage_paths: Dict[str, str] = {}
+    merge_surface_stage_summary: Dict[str, object] = {}
+    if args.save_merge_surface_stage:
+        log_stage(f"{subject_id} {frame}: save step 8 whole epi/endo triangle-surface outputs")
+        merge_surface_stage_paths, merge_surface_stage_summary = save_merge_surface_stage_outputs(
+            merge_surface_stage_dir, subject_id, frame, whole_epi, whole_endo
+        )
+
+    if args.stop_after_merge_surface:
+        return {
+            "frame": frame,
+            "stopped_after": "step08_merge_surface",
+            "open_shell_stage_outputs": open_shell_stage_paths,
+            "intersection_removal_stage_outputs": intersection_stage_paths,
+            "rvendo_distance_stage_outputs": rvendo_distance_stage_paths,
+            "merge_surface_stage_outputs": merge_surface_stage_paths,
+        }
 
     rv_cut_surfaces, rv_cut_info = build_rv_closure_surfaces(rv_epi_trimmed, rv_endo_fixed, args)
     overall_surface = merge_surfaces(
@@ -1172,6 +1352,10 @@ def process_frame(args: argparse.Namespace, frame: str) -> Dict[str, object]:
         "outputs": {
             "biventricular_volmesh": str(output_mesh.resolve()),
             "elemTag_legend": str(legend_path.resolve()),
+            "open_shell_stage_outputs": open_shell_stage_paths,
+            "intersection_removal_stage_outputs": intersection_stage_paths,
+            "rvendo_distance_stage_outputs": rvendo_distance_stage_paths,
+            "merge_surface_stage_outputs": merge_surface_stage_paths,
             "debug": debug_paths,
         },
         "pipeline": [
@@ -1179,10 +1363,9 @@ def process_frame(args: argparse.Namespace, frame: str) -> Dict[str, object]:
             "detect_subject_base_side_and_write_LV_RV_z_area_profiles",
             "build_open_base_LV_myocardial_shell",
             "build_initial_open_base_RV_myocardial_shell",
-            "remove_RVepi_open_faces_points_intersecting_LVepi",
-            "remove_RV_open_faces_points_intersecting_LVepi",
+            "remove_RVepi_open_points_intersecting_LVepi",
+            "remove_RV_open_points_intersecting_LVepi",
             "fix_RVepi_and_move_RVendo_to_min_3mm_RVepi_distance",
-            "replace_RVendo_cut_boundary_points_with_nearest_valid_LVepi_points_inside_RVepi_ring_when_possible",
             "merge_new_RVepi_plus_LVepi_as_whole_epi_surface",
             "merge_new_RVendo_plus_LVendo_as_whole_endo_surface",
             "add_required_LV_and_RV_opening_closure_surfaces_for_TetGen_PLC",
@@ -1195,6 +1378,10 @@ def process_frame(args: argparse.Namespace, frame: str) -> Dict[str, object]:
         "profiles": {"lv": base.profile_to_dict(lv_profile), "rv": base.profile_to_dict(rv_profile)},
         "lv_open_base": openbase.ventricle_summary(lv_build),
         "rv_initial_open_base": openbase.ventricle_summary(rv_build),
+        "open_shell_stage_summary": open_shell_stage_summary,
+        "intersection_removal_stage_summary": intersection_stage_summary,
+        "rvendo_distance_stage_summary": rvendo_distance_stage_summary,
+        "merge_surface_stage_summary": merge_surface_stage_summary,
         "surface_intersection_removal": {"RVepi": rv_epi_removal, "RV": rv_endo_removal},
         "rv_distance_fix": rv_distance_fix,
         "rv_closure_surfaces": rv_cut_info,
