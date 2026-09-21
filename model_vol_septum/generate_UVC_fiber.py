@@ -6,12 +6,15 @@ python run.py --data-dir /home/mengao/Code/test_1/biv_volumetric_meshing/src/seg
 import argparse
 import configparser
 import numpy as np
+import pandas as pd
 import pyvista as pv
 import os
 import itertools
 import logging
 import re
 import shutil
+import json
+from pathlib import Path
 
 from . import compute_UVC_fiber as UVC
 from . import meshIO
@@ -19,206 +22,637 @@ from . import meshtool_func as meshtool
 from . import py_atrial_fibres as paf
 from . import v_mesh_generation as vmesh
 
-# logger = logging.getLogger('volumetric')
-
-def coord_z(folder, meshtoolloc, mesh, input_dir, meshnames, surfloc, UVCfolder):
-    # "folder" is where the labeled mesh stored,"mesh" is the mesh name
-    # input_dir is where surface mesh stored
-    # "surfloc" is where to store surfaces
-    # find apex point in LV only mesh
-    # output is the x,y,z coord of the apex point
-    # mesh_names: ['Mesh_LV_endo_timeframe001', 'Mesh_RV_FW_timeframe001', 'Mesh_RV_septum_timeframe001',
-    #              'Mesh_aorta_valve_timeframe001', 'Mesh_epi_timeframe001', 'Mesh_mitral_valve_timeframe001',
-    #              'Mesh_pulmonary_valve_timeframe001', 'Mesh_tricuspid_valve_timeframe001']
-    os.chdir(folder)
-
-    # if not meshtool.extract_mesh(meshtoolloc, mesh, "1", "LV_all"): # 只提取LV_all部分,此部分的tag为1
-    #     return None
-    meshtool.extract_mesh(meshtoolloc, mesh, "1", "LV_all") # 只提取LV_all部分,此部分的tag为1
-    print("提取左心室体网格")
-    return
-    # Mesh_mitral_valve_surf = meshnames[5]
-
-    # if not meshtool.convert_mesh(meshtoolloc, input_dir+f"/{Mesh_mitral_valve_surf}", input_dir+f"/{Mesh_mitral_valve_surf}", "vtk", "carp_txt"):
-    #     return None
-
-    if not os.path.exists(surfloc):
-        os.mkdir(surfloc)
-
-    # extract all surface in biv mesh (only LV and RV) to store in folder surfloc/biv_i
-    if not os.path.exists(surfloc + "/biv_i/"):
-        os.mkdir(surfloc + "/biv_i/")
-
-    mitral_valve_files = [
-        (input_dir + f"/{Mesh_mitral_valve_surf}" + ".pts",
-        input_dir + f"/{Mesh_mitral_valve_surf}" + ".elem")
-    ]
-
-    if not Coord_UVC_function.find_intersection_base(mitral_valve_files, "LV_all", surfloc + "/biv_i/lv_base"):
-        return None
-    # if not meshtool.extract_surf(meshtoolloc, "LV_all", surfloc + "/mitral", "4"):
-    #     return None
-    #1待修改:此处先convert Mesh_mitral_valve_timeframe001的vtk为carp_txt
-    #2待修改:python find_intersection_lv_base.py 即通过二尖瓣的.pts/.elem寻找瓣膜环lv_base_i
-
-    d_from_mitral = "d_mitraltoLVall.dat"
-    # if not meshtool.generate_dfield(meshtoolloc, "LV_all", surfloc + "/mitral", d_from_mitral):
-    #     return None
-    #3待修改:if not meshtool.generate_dfield(meshtoolloc, "LV_all", "lv_base_i", d_from_mitral):
-    #     return None
-
-    if not meshtool.generate_dfield(meshtoolloc, "LV_all", surfloc + "/biv_i/lv_base", d_from_mitral):
-        return None
-
-    d_LVtomitral = np.genfromtxt(d_from_mitral)
-    # find the index of the furthest point from the mitral valve as apex point
-    index = np.where(d_LVtomitral == np.amax(d_LVtomitral))[0]
-
-    if not meshtool.extract_mesh(meshtoolloc, mesh, "0,1", mesh + "_i"):  # 此处有valve的mesh进行左右心室提取,无valve的情况下提取就是本身(可复制替代本操作)
-        return None
-
-    pts_LV = np.array(meshIO.read_pts(basename="LV_all"))
-    pts_biv = np.array(meshIO.read_pts(basename=mesh + "_i"))
-
-    # find the apex point' index in biv mesh
-    ptsindex_biv = np.where(np.all(pts_biv == pts_LV[index], axis=1))[0]
-
-    if not meshtool.extract_surf(meshtoolloc, mesh + "_i", surfloc + "/biv_i/myoall", "0,1"):
-        return None
-
-    surf = meshIO.read_surf(basename=surfloc + "/biv_i/myoall")
-    # find the surface including the apex point and write to mesh+"_i_apex" in both .surf and .vtx
-    surfnew = surf.loc[
-        (surf[1] == int(ptsindex_biv)) | (surf[2] == int(ptsindex_biv)) | (surf[3] == int(ptsindex_biv)), :]
-    surf_vtx = np.unique(surfnew.loc[:, 1:3])
-
-    Filename = surfloc + "/biv_i/apex_i"
-    meshIO.write_vtx_File(vtxFilename=Filename, vtx=pd.DataFrame(surf_vtx))
-    meshIO.write_surf(surfFilename=Filename, surf=pd.DataFrame(surfnew), shapes=None)
-
-    # extract base surf in myo only mesh which is the intersection region of valves with myo
-    # first extract the "biv_i_all-biv_allvalves" in the whole mesh and map it to biv myo only mesh
-    # if not meshtool.extract_surf(meshtoolloc, mesh, surfloc + "/intersection", "0,1:4,5,6,7"):
-    #     return None
-    #4待修改:此处先convert Mesh_mitral_valve(之前已完成)/Mesh_tricuspid_valve/Mesh_aorta_valve/Mesh_pulmonary_valve的vtk为carp_txt
-
-    #5待修改:python find_intersection.py 即通过多个瓣膜的.pts/.elem寻找瓣膜环的整体base_i
-    # if not meshtool.map_file(meshtoolloc, mesh + "_i", surfloc + "/intersection.surf", surfloc + "/biv_i"):
-    #     return None
-    # if not meshtool.map_file(meshtoolloc, mesh + "_i", surfloc + "/intersection.surf.vtx", surfloc + "/biv_i"):
-    #     return None
-
-    # Mesh_mitral_valve_surf = meshnames[5] # 上面已经完成
-    Mesh_tricuspid_valve = meshnames[7]
-    Mesh_aorta_valve = meshnames[3]
-    Mesh_pulmonary_valve = meshnames[6]
-
-    if not meshtool.convert_mesh(meshtoolloc, input_dir+f"/{Mesh_tricuspid_valve}", input_dir+f"/{Mesh_tricuspid_valve}", "vtk", "carp_txt"):
-        return None
-    if not meshtool.convert_mesh(meshtoolloc, input_dir+f"/{Mesh_aorta_valve}", input_dir+f"/{Mesh_aorta_valve}", "vtk", "carp_txt"):
-        return None
-    if not meshtool.convert_mesh(meshtoolloc, input_dir+f"/{Mesh_pulmonary_valve}", input_dir+f"/{Mesh_pulmonary_valve}", "vtk", "carp_txt"):
-        return None
-
-    all_valve_files = [
-        (input_dir + f"/{Mesh_mitral_valve_surf}" + ".pts",
-        input_dir + f"/{Mesh_mitral_valve_surf}" + ".elem"),
-        (input_dir + f"/{Mesh_tricuspid_valve}" + ".pts",
-         input_dir + f"/{Mesh_tricuspid_valve}" + ".elem"),
-        (input_dir + f"/{Mesh_aorta_valve}" + ".pts",
-         input_dir + f"/{Mesh_aorta_valve}" + ".elem"),
-        (input_dir + f"/{Mesh_pulmonary_valve}" + ".pts",
-         input_dir + f"/{Mesh_pulmonary_valve}" + ".elem"),
-    ]
-
-    if not Coord_UVC_function.find_intersection_base(all_valve_files, mesh + "_i", surfloc + "/biv_i/base_i"):
-        return None
-
-    # calculate the distance from base to apex and store the results in
-    apexsurf = surfloc + "/biv_i/apex_i"
-    # basesurf = surfloc + "/biv_i/intersection"
-    #6待修改:basesurf = surfloc + "/biv_i/base_i"
-    basesurf = surfloc + "/biv_i/base_i"
-    outputFilename = UVCfolder + "/COORDS_Z.dat"
-
-    if not meshtool.generate_dfield(meshtoolloc, mesh + "_i", apexsurf, outputFilename, "-esurf=" + basesurf):
-        return None
-
-    if not meshtool.collect_nodal(meshtoolloc, mesh + "_i", "carp_txt", UVCfolder + "/COORDS_Z", '',UVCfolder + "/COORDS_Z.dat"):
-        return None
-    #7待修改:可视化COORDS_Z.dat可通过collect -imsh=subject0071_mesh_all -omsh=result -nod=COORDS_Z.dat
-    # 产物: result.geo / result.case / result.tags.ens / result.fiber.ens / result_COORDS_Z.ens
-    return outputFilename
-
+logger = logging.getLogger('volumetric')
 
 CARP_BIN = None
 OPTS = None
 
-# def run_timeframe_uvc(subject_id, timeframe, input_dir, mesh_names, par_file, output_dir, output_dir_uvc):
-subject_id = "subject_1"
-timeframe = "ED"
 
-print('subject {}, timeframe {}: started uvc'.format(subject_id, timeframe))
+def get_timeframe_n(filename):
+    return int(re.search(r'timeframe(\d+)', filename).group(1))
 
-meshtoolloc = os.path.join(CARP_BIN, 'meshtool')
 
-CARP = os.path.join(CARP_BIN, 'openCARP')
-IGBEXTRACT = os.path.join(CARP_BIN, 'igbextract')
-MPIEXEC = os.path.join(CARP_BIN, 'mpiexec')
+def timeframes(subject_id, input_dir):
+    vtk_files = [f for f in os.listdir(input_dir) if re.search(r'timeframe\d+\.vtk$', f)]
 
-output_dir = "/home/mengao/Code/4Dsegment/data/subject_1/volmesh_generate_pipline (Copy 4)"
-meshdir = os.path.join(output_dir, 'step11volmesh_LVRV') #volmesh_generate_pipline (Copy 4)/step11volmesh_LVRV
-meshname = subject_id + "_{}".format_map(timeframe) + "_stage11_final_elemTag_volmesh"
+    # sort by timeframe number then alphabetically
+    vtk_files.sort(key=lambda s: (get_timeframe_n(s), s))
 
-#???
-surfloc = "surfaces"
-# ???
+    for n, vtk_files_n in itertools.groupby(vtk_files, get_timeframe_n):
+        mesh_names = [filename[:-4] for filename in vtk_files_n]
+        # print("line 42")
+        print("mesh_names:", mesh_names)
 
-if not os.path.exists(meshdir):
-    print('subject {}, timeframe {}: no volumetric mesh found'.format(subject_id, timeframe))
-#     return
+        # ---- 仍然期望 8 个表面网格文件（输入数据未变） ----
+        if len(mesh_names) != 8:
+            logger.error('subject {}, {}: incorrect number of surface meshes'.format(subject_id, n))
+            continue
 
-output_dir_uvc = os.path.join(output_dir, 'step12volmesh_fiber')
-finalmeshdir = output_dir_uvc   #volmesh_generate_pipline (Copy 4)/step12volmesh_fiber
+        yield n, mesh_names
 
-os.chdir(finalmeshdir)
 
-if not meshtool.convert_mesh(meshtoolloc, meshdir + '/' + meshname, meshdir + '/' + meshname, ifmt="vtk", ofmt="carp_txt"):
-    print('failed to convert mesh')
+PHO_OUTPUT_NAMES = (
+    "PHO.case",
+    "PHO.dat",
+    "PHO.fiber.ens",
+    "PHO.geo",
+    "PHO.tags.ens",
+    "PHO_PHO.ens",
+)
 
-if not os.path.exists(meshdir + '/' + meshname + ".elem"):  # volumetric_mesh_outputs/timeframe/subject_id_mesh_all
-    print('subject {}, timeframe {}: no volumetric mesh found'.format(subject_id, timeframe))
+PHI_OUTPUT_NAMES = (
+    "PHI.case",
+    "PHI.dat",
+    "PHI.fiber.ens",
+    "PHI.geo",
+    "PHI.tags.ens",
+    "PHI_PHI.ens",
+)
 
-shutil.copyfile(meshdir + '/' + meshname + ".elem", meshname + ".elem")
-shutil.copyfile(meshdir + '/' + meshname + ".pts", meshname + ".pts")
-shutil.copyfile(meshdir + '/' + meshname + ".lon", meshname + ".lon")
-shutil.copyfile(meshdir + '/' + meshname + ".vtk", meshname + ".vtk")
+COORDS_Z_OUTPUT_NAMES = (
+    "COORDS_Z.case",
+    "COORDS_Z.dat",
+    "COORDS_Z.fiber.ens",
+    "COORDS_Z.geo",
+    "COORDS_Z.tags.ens",
+    "COORDS_Z_COORDS_Z.ens",
+)
 
-UVCfolder = finalmeshdir + '/UVC_i'
-if not os.path.exists(UVCfolder):
-    os.mkdir(UVCfolder)
+BIV_OUTPUT_NAMES = ("biv.dat",)
 
-input_dir = "/home/mengao/Code/4Dsegment/data/subject_1"
-mesh_names = subject_id + "_{}".format_map(timeframe)
-# UVC.coord z generation
-try:
-    # (finalmeshdir:UVC_fiber_Outputs/timeframe,
-    # meshtoolloc:meshtool,
-    # meshname:subject_mesh_all,
-    # input_dir:Mesh_Outputs
-    # surfloc:surfaces,
-    # UVCfolder:UVC_fiber_Outputs/timeframe/UVC_i)
-    # coordszname = UVC.coord_z(finalmeshdir, meshtoolloc, meshname, input_dir, mesh_names, surfloc, UVCfolder)
-    coordszname = coord_z(finalmeshdir, meshtoolloc, meshname, input_dir, mesh_names, surfloc, UVCfolder)
+FIBER_OUTPUT_NAMES = ("subject_mesh_all_fiber.vtk",)
 
-except Exception:
-#     # logger.error('subject {}, timeframe {}: failed to generate coord z'.format(subject_id, timeframe_num))
-    print('subject {}, timeframe {}: failed to generate coord z'.format(subject_id, timeframe))
-#     return
-if coordszname == None:
-    # logger.error('subject {}, timeframe {}: failed to generate coord z'.format(subject_id, timeframe_num))
-    print('subject {}, timeframe {}: failed to generate coord z'.format(subject_id, timeframe))
-    # return
+
+def frame_names(subject_dir, frame=None, frames=None):
+    if frame and frames:
+        raise ValueError("Use either --frame or --frames, not both.")
+    if frame:
+        requested = [frame.upper()]
+    elif frames:
+        requested = [value.strip().upper() for value in frames.split(',') if value.strip()]
+    else:
+        volume_root = Path(subject_dir) / "volumetric_mesh_outputs"
+        requested = [name for name in ("ED", "ES") if (volume_root / name).is_dir()]
+    if not requested:
+        raise RuntimeError(f"No ED/ES volume-mesh directories found under {subject_dir}.")
+    invalid = [name for name in requested if name not in ("ED", "ES")]
+    if invalid:
+        raise ValueError(f"Unsupported frame names: {invalid}. Expected ED and/or ES.")
+    return list(dict.fromkeys(requested))
+
+
+def run_frame_coords_z(subject_id, frame, data_dir, force=False):
+    subject_dir = Path(data_dir).resolve() / subject_id
+    volume_dir = subject_dir / "volumetric_mesh_outputs" / frame / f"{subject_id}_mesh_all"
+    volume_candidates = (
+        volume_dir / f"{subject_id}_{frame}_stage11_final_elemTag_volmesh.vtk",
+        volume_dir / f"{subject_id}_{frame}_final_elemTag_volmesh.vtk",
+    )
+    volume_vtk = next((path for path in volume_candidates if path.is_file()), volume_candidates[0])
+    surface_dir = subject_dir / "volumetric_mesh_surf_inputs"
+    lv_annulus = surface_dir / f"{subject_id}_{frame}_LV_openbase_annulus_surface.vtk"
+    rv_annulus = surface_dir / f"{subject_id}_{frame}_RV_openbase_annulus_surface.vtk"
+    for path in (volume_vtk, lv_annulus, rv_annulus):
+        if not path.is_file():
+            raise FileNotFoundError(f"Required COORDS_Z input does not exist: {path}")
+
+    frame_output = subject_dir / "UVC_fiber_Outputs" / frame
+    uvc_dir = frame_output / "UVC_i"
+    frame_output.mkdir(parents=True, exist_ok=True)
+    uvc_dir.mkdir(parents=True, exist_ok=True)
+    expected_outputs = [uvc_dir / name for name in COORDS_Z_OUTPUT_NAMES]
+    if all(path.is_file() for path in expected_outputs) and not force:
+        logger.info("subject %s, frame %s: skipping COORDS_Z because all outputs exist", subject_id, frame)
+        return {"skipped": True, "outputs": [str(path) for path in expected_outputs]}
+
+    meshtoolloc = os.path.join(CARP_BIN, "meshtool")
+    if not os.path.isfile(meshtoolloc):
+        raise FileNotFoundError(f"meshtool executable does not exist: {meshtoolloc}")
+
+    meshname = subject_id + "_mesh_all"
+    working_mesh = frame_output / meshname
+    working_vtk = working_mesh.with_suffix(".vtk")
+    if force or not working_vtk.is_file():
+        shutil.copy2(volume_vtk, working_vtk)
+
+    carp_paths = [working_mesh.with_suffix(suffix) for suffix in (".elem", ".pts", ".lon")]
+    converted = False
+    if not all(path.is_file() for path in carp_paths):
+        logger.info("subject %s, frame %s: converting volume VTK to CARP text", subject_id, frame)
+        if not meshtool.convert_mesh(
+            meshtoolloc, str(working_mesh), str(working_mesh), ifmt="vtk", ofmt="carp_txt"
+        ):
+            raise RuntimeError(f"meshtool failed to convert {volume_vtk} to CARP text files.")
+        converted = True
+    missing = [str(path) for path in carp_paths if not path.is_file() or path.stat().st_size == 0]
+    if missing:
+        raise RuntimeError(f"Missing CARP files after VTK conversion: {missing}")
+
+    elements = meshIO.read_elems(basename=str(working_mesh))
+    tags = set(np.asarray(elements.iloc[:, 4], dtype=np.int64).tolist())
+    if not {0, 1}.issubset(tags):
+        raise RuntimeError(f"Converted volume mesh must contain RV tag 0 and LV tag 1; found {sorted(tags)}.")
+
+    coords_z_path, details = UVC.coord_z_openbase_annuli(
+        str(frame_output),
+        meshtoolloc,
+        meshname,
+        str(volume_vtk),
+        str(lv_annulus),
+        str(rv_annulus),
+        "surfaces",
+        str(uvc_dir),
+    )
+    missing_outputs = [str(path) for path in expected_outputs if not path.is_file() or path.stat().st_size == 0]
+    if missing_outputs:
+        raise RuntimeError(f"COORDS_Z generation did not create the required files: {missing_outputs}")
+
+    summary = {
+        "subject": subject_id,
+        "frame": frame,
+        "converted_vtk_to_carp": converted,
+        "working_mesh": str(working_mesh),
+        "COORDS_Z_dat": coords_z_path,
+        "outputs": [str(path.resolve()) for path in expected_outputs],
+        "details": details,
+    }
+    summary_path = frame_output / f"{subject_id}_{frame}_COORDS_Z_summary.json"
+    summary_path.write_text(json.dumps(summary, indent=2))
+    logger.info("subject %s, frame %s: generated COORDS_Z", subject_id, frame)
+    return summary
+
+
+def run_frame_biv(subject_id, frame, data_dir, force=False):
+    """Generate the nodal LV/RV biventricular coordinate for one frame."""
+    subject_dir = Path(data_dir).resolve() / subject_id
+    volume_dir = subject_dir / "volumetric_mesh_outputs" / frame / f"{subject_id}_mesh_all"
+    volume_candidates = (
+        volume_dir / f"{subject_id}_{frame}_stage11_final_elemTag_volmesh.vtk",
+        volume_dir / f"{subject_id}_{frame}_final_elemTag_volmesh.vtk",
+    )
+    source_volume = next((path for path in volume_candidates if path.is_file()), None)
+    if source_volume is None:
+        raise FileNotFoundError(f"No biventricular volume mesh was found under {volume_dir}")
+
+    frame_output = subject_dir / "UVC_fiber_Outputs" / frame
+    uvc_dir = frame_output / "UVC_i"
+    frame_output.mkdir(parents=True, exist_ok=True)
+    uvc_dir.mkdir(parents=True, exist_ok=True)
+    expected_outputs = [uvc_dir / name for name in BIV_OUTPUT_NAMES]
+    if all(path.is_file() and path.stat().st_size > 0 for path in expected_outputs) and not force:
+        logger.info("subject %s, frame %s: skipping biv because output exists", subject_id, frame)
+        return {"skipped": True, "outputs": [str(path) for path in expected_outputs]}
+
+    meshtoolloc = os.path.join(CARP_BIN, "meshtool")
+    if not os.path.isfile(meshtoolloc):
+        raise FileNotFoundError(f"meshtool executable does not exist: {meshtoolloc}")
+
+    meshname = subject_id + "_mesh_all"
+    working_mesh = frame_output / meshname
+    working_vtk = working_mesh.with_suffix(".vtk")
+    if force or not working_vtk.is_file():
+        shutil.copy2(source_volume, working_vtk)
+
+    carp_paths = [working_mesh.with_suffix(suffix) for suffix in (".elem", ".pts", ".lon")]
+    converted = False
+    if not all(path.is_file() and path.stat().st_size > 0 for path in carp_paths):
+        if not meshtool.convert_mesh(
+            meshtoolloc, str(working_mesh), str(working_mesh), ifmt="vtk", ofmt="carp_txt"
+        ):
+            raise RuntimeError(f"meshtool failed to convert {source_volume} to CARP text files.")
+        converted = True
+
+    elements = meshIO.read_elems(basename=str(working_mesh))
+    tags = set(np.asarray(elements.iloc[:, 4], dtype=np.int64).tolist())
+    if not {0, 1}.issubset(tags):
+        raise RuntimeError(
+            f"Biventricular mesh must contain RV tag 0 and LV tag 1; found {sorted(tags)}."
+        )
+
+    biv_path = UVC.bivlabel(
+        str(frame_output), meshname, str(uvc_dir), source_meshname=meshname
+    )
+    values = np.loadtxt(biv_path, dtype=np.int64, ndmin=1)
+    point_count = len(meshIO.read_pts(basename=str(working_mesh)))
+    if len(values) != point_count:
+        raise RuntimeError(f"biv.dat length does not match the mesh point count: {biv_path}")
+    unique_values = set(np.unique(values).tolist())
+    if not unique_values.issubset({-1, 1}):
+        raise RuntimeError(f"biv.dat contains unexpected labels: {sorted(unique_values)}")
+    if not {-1, 1}.issubset(unique_values):
+        raise RuntimeError(f"biv.dat does not contain both LV and RV labels: {biv_path}")
+
+    logger.info(
+        "subject %s, frame %s: generated biv.dat with LV=%d, RV=%d nodes",
+        subject_id,
+        frame,
+        int(np.count_nonzero(values == -1)),
+        int(np.count_nonzero(values == 1)),
+    )
+    return {
+        "subject": subject_id,
+        "frame": frame,
+        "converted_vtk_to_carp": converted,
+        "working_mesh": str(working_mesh),
+        "biv_dat": str(Path(biv_path).resolve()),
+        "lv_nodes": int(np.count_nonzero(values == -1)),
+        "rv_nodes": int(np.count_nonzero(values == 1)),
+        "outputs": [str(path.resolve()) for path in expected_outputs],
+    }
+
+
+def run_frame_fiber(subject_id, frame, data_dir, force=False):
+    """Generate LV/RV fibers and merge them into the complete ED/ES mesh."""
+    subject_dir = Path(data_dir).resolve() / subject_id
+    volume_dir = subject_dir / "volumetric_mesh_outputs" / frame / f"{subject_id}_mesh_all"
+    volume_candidates = (
+        volume_dir / f"{subject_id}_{frame}_stage11_final_elemTag_volmesh.vtk",
+        volume_dir / f"{subject_id}_{frame}_final_elemTag_volmesh.vtk",
+    )
+    source_volume = next((path for path in volume_candidates if path.is_file()), None)
+    if source_volume is None:
+        raise FileNotFoundError(f"No biventricular volume mesh was found under {volume_dir}")
+
+    frame_output = subject_dir / "UVC_fiber_Outputs" / frame
+    uvc_dir = frame_output / "UVC_i"
+    fiber_work = frame_output / "FIBER_work"
+    fiber_folder = frame_output / "fiberfolder"
+    frame_output.mkdir(parents=True, exist_ok=True)
+    uvc_dir.mkdir(parents=True, exist_ok=True)
+    fiber_work.mkdir(parents=True, exist_ok=True)
+    fiber_folder.mkdir(parents=True, exist_ok=True)
+
+    meshname = subject_id + "_mesh_all"
+    final_vtk = fiber_folder / f"{meshname}_fiber.vtk"
+    if final_vtk.is_file() and final_vtk.stat().st_size > 0 and not force:
+        logger.info("subject %s, frame %s: skipping fibers because output exists", subject_id, frame)
+        return {"skipped": True, "outputs": [str(final_vtk.resolve())]}
+
+    meshtoolloc = os.path.join(CARP_BIN, "meshtool")
+    if not os.path.isfile(meshtoolloc):
+        raise FileNotFoundError(f"meshtool executable does not exist: {meshtoolloc}")
+
+    working_mesh = frame_output / meshname
+    working_vtk = working_mesh.with_suffix(".vtk")
+    if force or not working_vtk.is_file():
+        shutil.copy2(source_volume, working_vtk)
+    carp_paths = [working_mesh.with_suffix(suffix) for suffix in (".elem", ".pts", ".lon")]
+    converted = False
+    if not all(path.is_file() and path.stat().st_size > 0 for path in carp_paths):
+        if not meshtool.convert_mesh(
+            meshtoolloc, str(working_mesh), str(working_mesh), ifmt="vtk", ofmt="carp_txt"
+        ):
+            raise RuntimeError(f"meshtool failed to convert {source_volume} to CARP text files.")
+        converted = True
+
+    coords_z_path = uvc_dir / "COORDS_Z.dat"
+    pho_path = uvc_dir / "PHO.dat"
+    missing_fields = [str(path) for path in (coords_z_path, pho_path) if not path.is_file() or path.stat().st_size == 0]
+    if missing_fields:
+        raise RuntimeError(f"Fiber generation requires existing coordinate fields: {missing_fields}")
+
+    # PHI preparation already creates the chamber-local meshes, base loops,
+    # and apex landmarks needed by compute_fiber_new.
+    chamber_inputs = {
+        "LV": ("LVmyo_i", "LV_base", "LV_apex.vtx"),
+        "RV": ("RVmyo_i", "RV_base", "RV_apex.vtx"),
+    }
+    required_work = []
+    for mesh_prefix, base_prefix, apex_name in chamber_inputs.values():
+        required_work.extend(
+            fiber_work / name
+            for name in (
+                f"{mesh_prefix}.elem", f"{mesh_prefix}.pts", f"{mesh_prefix}.lon",
+                f"{mesh_prefix}.eidx", f"{base_prefix}.surf", apex_name,
+            )
+        )
+    if not all(path.is_file() and path.stat().st_size > 0 for path in required_work):
+        phi_work = frame_output / "PHI_work"
+        if not all(path.is_file() and path.stat().st_size > 0 for path in (
+            phi_work / name for mesh_prefix, base_prefix, apex_name in chamber_inputs.values()
+            for name in (f"{mesh_prefix}.elem", f"{mesh_prefix}.pts", f"{mesh_prefix}.lon", f"{mesh_prefix}.eidx", f"{base_prefix}.surf", apex_name)
+        )):
+            run_frame_phi(subject_id, frame, data_dir, force=True)
+        fiber_work.mkdir(parents=True, exist_ok=True)
+        for mesh_prefix, base_prefix, apex_name in chamber_inputs.values():
+            for name in (
+                f"{mesh_prefix}.elem", f"{mesh_prefix}.pts", f"{mesh_prefix}.lon",
+                f"{mesh_prefix}.eidx", f"{mesh_prefix}.nod", f"{base_prefix}.surf", apex_name,
+            ):
+                source = phi_work / name
+                if source.is_file():
+                    shutil.copy2(source, fiber_work / name)
+
+    missing_work = [str(path) for path in required_work if not path.is_file() or path.stat().st_size == 0]
+    if missing_work:
+        raise RuntimeError(f"Missing chamber fiber inputs after PHI preparation: {missing_work}")
+
+    alpha_epi = -np.pi / 3
+    alpha_endo = np.pi / 3
+    beta_epi = 2 * np.pi * 25 / 360
+    beta_endo = -2 * np.pi * 65 / 360
+    chamber_fiber_bases = {}
+    for chamber, (mesh_prefix, base_prefix, apex_name) in chamber_inputs.items():
+        result = UVC.compute_fiber_new(
+            str(fiber_work),
+            meshtoolloc,
+            mesh_prefix,
+            apex_name,
+            base_prefix,
+            str(pho_path.resolve()),
+            str(coords_z_path.resolve()),
+            alpha_epi,
+            alpha_endo,
+            beta_epi,
+            beta_endo,
+        )
+        if result is None:
+            raise RuntimeError(f"{chamber} fiber generation failed.")
+        chamber_fiber_bases[chamber] = fiber_work / f"{mesh_prefix}_fiber"
+
+    full_elements = meshIO.read_elems(basename=str(working_mesh))
+    element_count = len(full_elements)
+    full_lon = np.zeros((element_count, 8), dtype=float)
+    assigned = np.zeros(element_count, dtype=bool)
+    for chamber, (mesh_prefix, _, _) in chamber_inputs.items():
+        eidx_path = fiber_work / f"{mesh_prefix}.eidx"
+        eidx = np.fromfile(eidx_path, dtype=np.int64)
+        local_lon = np.asarray(
+            meshIO.read_fibres(basename=str(chamber_fiber_bases[chamber])), dtype=float
+        )
+        if len(eidx) != len(local_lon):
+            raise RuntimeError(
+                f"{chamber} fiber mapping has {len(eidx)} element indices but "
+                f"{len(local_lon)} fiber rows."
+            )
+        if len(eidx) and (eidx.min() < 0 or eidx.max() >= element_count):
+            raise RuntimeError(f"{chamber} fiber element mapping is outside the full mesh range.")
+        if np.any(assigned[eidx]):
+            raise RuntimeError(f"LV/RV fiber element mappings overlap for {chamber}.")
+        if not np.all(np.isfinite(local_lon)):
+            raise RuntimeError(f"{chamber} fiber vectors contain non-finite values.")
+        full_lon[eidx] = local_lon
+        assigned[eidx] = True
+
+    if not np.all(assigned):
+        raise RuntimeError(f"Fiber merge left {int(np.count_nonzero(~assigned))} elements without fibers.")
+    longitudinal_norms = np.linalg.norm(full_lon[:, 0:3], axis=1)
+    sheet_norms = np.linalg.norm(full_lon[:, 5:8], axis=1)
+    if np.any(longitudinal_norms <= 1e-8) or np.any(sheet_norms <= 1e-8):
+        raise RuntimeError("Merged fibers contain zero-length longitudinal or sheet vectors.")
+
+    final_base = fiber_folder / f"{meshname}_fiber"
+    shutil.copy2(working_mesh.with_suffix(".elem"), final_base.with_suffix(".elem"))
+    shutil.copy2(working_mesh.with_suffix(".pts"), final_base.with_suffix(".pts"))
+    meshIO.write_lon_includesheet(str(final_base), pd.DataFrame(full_lon))
+    if not meshtool.convert_mesh(
+        meshtoolloc, str(final_base), str(final_base), ifmt="carp_txt", ofmt="vtk"
+    ):
+        raise RuntimeError("meshtool failed to convert the merged fiber mesh to VTK.")
+    if not final_vtk.is_file() or final_vtk.stat().st_size == 0:
+        raise RuntimeError(f"Merged fiber VTK was not created: {final_vtk}")
+
+    source_grid = pv.read(str(source_volume))
+    final_grid = pv.read(str(final_vtk))
+    if final_grid.n_points != source_grid.n_points or final_grid.n_cells != source_grid.n_cells:
+        raise RuntimeError(
+            f"Merged fiber mesh topology differs from the source: "
+            f"source=({source_grid.n_points}, {source_grid.n_cells}), "
+            f"fiber=({final_grid.n_points}, {final_grid.n_cells})."
+        )
+
+    summary = {
+        "subject": subject_id,
+        "frame": frame,
+        "source_volume": str(source_volume.resolve()),
+        "converted_vtk_to_carp": converted,
+        "fiber_mesh": str(final_vtk.resolve()),
+        "element_count": int(element_count),
+        "LV_element_count": int(np.count_nonzero(full_elements.iloc[:, 4].astype(int).to_numpy() == 1)),
+        "RV_element_count": int(np.count_nonzero(full_elements.iloc[:, 4].astype(int).to_numpy() == 0)),
+        "longitudinal_norm_range": [float(np.min(longitudinal_norms)), float(np.max(longitudinal_norms))],
+        "sheet_norm_range": [float(np.min(sheet_norms)), float(np.max(sheet_norms))],
+        "units_preserved": True,
+        "outputs": [str(final_vtk.resolve()), str(final_base.with_suffix(".lon").resolve())],
+    }
+    summary_path = frame_output / f"{subject_id}_{frame}_FIBER_summary.json"
+    summary_path.write_text(json.dumps(summary, indent=2))
+    logger.info("subject %s, frame %s: generated and merged complete fiber mesh", subject_id, frame)
+    return summary
+
+
+def run_frame_phi(subject_id, frame, data_dir, force=False):
+    """Generate PHI for an open-base ED/ES mesh using the current surface inputs."""
+    subject_dir = Path(data_dir).resolve() / subject_id
+    volume_dir = subject_dir / "volumetric_mesh_outputs" / frame / f"{subject_id}_mesh_all"
+    volume_candidates = (
+        volume_dir / f"{subject_id}_{frame}_stage11_final_elemTag_volmesh.vtk",
+        volume_dir / f"{subject_id}_{frame}_final_elemTag_volmesh.vtk",
+    )
+    volume_vtk = next((path for path in volume_candidates if path.is_file()), volume_candidates[0])
+    surface_dir = subject_dir / "volumetric_mesh_surf_inputs"
+    lv_annulus = surface_dir / f"{subject_id}_{frame}_LV_openbase_annulus_surface.vtk"
+    rv_annulus = surface_dir / f"{subject_id}_{frame}_RV_openbase_annulus_surface.vtk"
+    ant_landmark = subject_dir / "UVC_fiber_Outputs" / frame / f"{subject_id}_{frame}_RV_INSERT_ANT.vtk"
+    inf_landmark = subject_dir / "UVC_fiber_Outputs" / frame / f"{subject_id}_{frame}_RV_INSERT_INF.vtk"
+    required = (volume_vtk, lv_annulus, rv_annulus, ant_landmark, inf_landmark)
+    missing = [str(path) for path in required if not path.is_file()]
+    if missing:
+        raise FileNotFoundError(f"Required PHI input does not exist: {missing}")
+
+    frame_output = subject_dir / "UVC_fiber_Outputs" / frame
+    uvc_dir = frame_output / "UVC_i"
+    frame_output.mkdir(parents=True, exist_ok=True)
+    uvc_dir.mkdir(parents=True, exist_ok=True)
+    expected_outputs = [uvc_dir / name for name in PHI_OUTPUT_NAMES]
+    if all(path.is_file() and path.stat().st_size > 0 for path in expected_outputs) and not force:
+        logger.info("subject %s, frame %s: skipping PHI because all outputs exist", subject_id, frame)
+        return {"skipped": True, "outputs": [str(path) for path in expected_outputs]}
+
+    meshtoolloc = os.path.join(CARP_BIN, "meshtool")
+    if not os.path.isfile(meshtoolloc):
+        raise FileNotFoundError(f"meshtool executable does not exist: {meshtoolloc}")
+    meshname = subject_id + "_mesh_all"
+    working_mesh = frame_output / meshname
+    working_vtk = working_mesh.with_suffix(".vtk")
+    if force or not working_vtk.is_file():
+        shutil.copy2(volume_vtk, working_vtk)
+    carp_paths = [working_mesh.with_suffix(suffix) for suffix in (".elem", ".pts", ".lon")]
+    converted = False
+    if not all(path.is_file() and path.stat().st_size > 0 for path in carp_paths):
+        if not meshtool.convert_mesh(
+            meshtoolloc, str(working_mesh), str(working_mesh), ifmt="vtk", ofmt="carp_txt"
+        ):
+            raise RuntimeError(f"meshtool failed to convert {volume_vtk} to CARP text files.")
+        converted = True
+
+    coords_z_path = uvc_dir / "COORDS_Z.dat"
+    if not coords_z_path.is_file() or coords_z_path.stat().st_size == 0:
+        run_frame_coords_z(subject_id, frame, data_dir, force=force)
+    if not coords_z_path.is_file() or coords_z_path.stat().st_size == 0:
+        raise RuntimeError(f"COORDS_Z is not available for PHI: {coords_z_path}")
+
+    phi_path, details = UVC.compute_phi_openbase_annuli(
+        str(frame_output), meshtoolloc, meshname, str(volume_vtk), str(coords_z_path),
+        str(lv_annulus), str(rv_annulus), str(ant_landmark), str(inf_landmark), str(uvc_dir)
+    )
+    missing_outputs = [str(path) for path in expected_outputs if not path.is_file() or path.stat().st_size == 0]
+    if missing_outputs:
+        raise RuntimeError(f"PHI generation did not create valid files: {missing_outputs}")
+    summary = {
+        "subject": subject_id,
+        "frame": frame,
+        "converted_vtk_to_carp": converted,
+        "working_mesh": str(working_mesh),
+        "PHI_dat": phi_path,
+        "outputs": [str(path.resolve()) for path in expected_outputs],
+        "details": details,
+    }
+    summary_path = frame_output / f"{subject_id}_{frame}_PHI_summary.json"
+    summary_path.write_text(json.dumps(summary, indent=2))
+    logger.info("subject %s, frame %s: generated PHI", subject_id, frame)
+    return summary
+
+
+
+def run_frame_pho(subject_id, frame, data_dir, force=False):
+    """Generate PHO from the open-base LV/RV surfaces for one ED/ES frame."""
+    subject_dir = Path(data_dir).resolve() / subject_id
+    volume_dir = subject_dir / "volumetric_mesh_outputs" / frame / f"{subject_id}_mesh_all"
+    volume_candidates = (
+        volume_dir / f"{subject_id}_{frame}_stage11_final_elemTag_volmesh.vtk",
+        volume_dir / f"{subject_id}_{frame}_final_elemTag_volmesh.vtk",
+    )
+    source_volume = next((path for path in volume_candidates if path.is_file()), None)
+    if source_volume is None:
+        raise FileNotFoundError(f"No PHO volume mesh was found under {volume_dir}")
+
+    surface_dir = subject_dir / "volumetric_mesh_surf_inputs"
+    surface_paths = {
+        "LVendo": surface_dir / f"{subject_id}_{frame}_LVendo_openbase_surface.vtk",
+        "LVannulus": surface_dir / f"{subject_id}_{frame}_LV_openbase_annulus_surface.vtk",
+        "RVendo": surface_dir / f"{subject_id}_{frame}_RVendo_openbase_surface.vtk",
+        "RVannulus": surface_dir / f"{subject_id}_{frame}_RV_openbase_annulus_surface.vtk",
+        "RVepi": surface_dir / f"{subject_id}_{frame}_RVepi_openbase_surface.vtk",
+        "RVseptum": surface_dir / f"{subject_id}_{frame}_RV_septum.vtk",
+        "epi": surface_dir / f"{subject_id}_{frame}_whole_epi_surface.vtk",
+    }
+    missing = [str(path) for path in (source_volume, *surface_paths.values()) if not path.is_file()]
+    if missing:
+        raise FileNotFoundError(f"Required PHO input does not exist: {missing}")
+
+    frame_output = subject_dir / "UVC_fiber_Outputs" / frame
+    uvc_dir = frame_output / "UVC_i"
+    frame_output.mkdir(parents=True, exist_ok=True)
+    uvc_dir.mkdir(parents=True, exist_ok=True)
+    expected_outputs = [uvc_dir / name for name in PHO_OUTPUT_NAMES]
+    if all(path.is_file() and path.stat().st_size > 0 for path in expected_outputs) and not force:
+        logger.info("subject %s, frame %s: skipping PHO because all outputs exist", subject_id, frame)
+        return {"skipped": True, "outputs": [str(path) for path in expected_outputs]}
+
+    meshtoolloc = os.path.join(CARP_BIN, "meshtool")
+    carp = os.path.join(CARP_BIN, "openCARP")
+    mpi = os.path.join(CARP_BIN, "mpiexec")
+    igbextract = os.path.join(CARP_BIN, "igbextract")
+    for executable in (meshtoolloc, carp, mpi, igbextract):
+        if not os.path.isfile(executable):
+            raise FileNotFoundError(f"Required CARP executable does not exist: {executable}")
+
+    meshname = subject_id + "_mesh_all"
+    working_mesh = frame_output / meshname
+    working_vtk = working_mesh.with_suffix(".vtk")
+    if force or not working_vtk.is_file():
+        shutil.copy2(source_volume, working_vtk)
+    carp_paths = [working_mesh.with_suffix(suffix) for suffix in (".elem", ".pts", ".lon")]
+    converted = False
+    if not all(path.is_file() and path.stat().st_size > 0 for path in carp_paths):
+        if not meshtool.convert_mesh(
+            meshtoolloc, str(working_mesh), str(working_mesh), ifmt="vtk", ofmt="carp_txt"
+        ):
+            raise RuntimeError(f"meshtool failed to convert the PHO volume mesh: {working_vtk}")
+        converted = True
+
+    par_file = str(Path(__file__).resolve().with_name("transmural.par"))
+    pho_path, details = UVC.transmural_openbase(
+        str(frame_output),
+        meshtoolloc,
+        meshname,
+        str(working_vtk),
+        {name: str(path) for name, path in surface_paths.items()},
+        mpi,
+        OPTS,
+        carp,
+        par_file,
+        igbextract,
+        str(uvc_dir),
+    )
+    missing_outputs = [str(path) for path in expected_outputs if not path.is_file() or path.stat().st_size == 0]
+    if missing_outputs:
+        raise RuntimeError(f"PHO generation did not create valid files: {missing_outputs}")
+    summary = {
+        "subject": subject_id,
+        "frame": frame,
+        "converted_vtk_to_carp": converted,
+        "working_mesh": str(working_mesh),
+        "PHO_dat": pho_path,
+        "outputs": [str(path.resolve()) for path in expected_outputs],
+        "details": details,
+    }
+    summary_path = frame_output / f"{subject_id}_{frame}_PHO_summary.json"
+    summary_path.write_text(json.dumps(summary, indent=2))
+    logger.info("subject %s, frame %s: generated PHO", subject_id, frame)
+    return summary
+
+
+def run_timeframe_uvc(subject_id, timeframe_num, input_dir, mesh_names, par_file, output_dir, output_dir_uvc):
+    logger.debug('subject {}, timeframe {}: started uvc'.format(subject_id, timeframe_num))
+
+    meshtoolloc = os.path.join(CARP_BIN, 'meshtool')
+
+    CARP = os.path.join(CARP_BIN, 'openCARP')
+    IGBEXTRACT = os.path.join(CARP_BIN, 'igbextract')
+    MPIEXEC = os.path.join(CARP_BIN, 'mpiexec')
+
+    meshdir = os.path.join(output_dir, subject_id + '_mesh_all') #volumetric_mesh_outputs/timeframe/subject_id_mesh_all
+    meshname = subject_id + "_mesh_all"
+    surfloc = "surfaces"
+
+    if not os.path.exists(meshdir):
+        logger.error('subject {}, timeframe {}: no volumetric mesh found'.format(subject_id, timeframe_num))
+        return
+
+    finalmeshdir = output_dir_uvc   #UVC_fiber_Outputs/timeframe
+
+    os.chdir(finalmeshdir)
+    if not os.path.exists(meshdir + '/' + meshname + ".elem"):  # volumetric_mesh_outputs/timeframe/subject_id_mesh_all
+        logger.error('subject {}, timeframe {}: no volumetric mesh found'.format(subject_id, timeframe_num))
+        return
+
+    shutil.copyfile(meshdir + '/' + meshname + ".elem", meshname + ".elem")
+    shutil.copyfile(meshdir + '/' + meshname + ".pts", meshname + ".pts")
+    shutil.copyfile(meshdir + '/' + meshname + ".lon", meshname + ".lon")
+    shutil.copyfile(meshdir + '/' + meshname + ".vtk", meshname + ".vtk")
+
+    UVCfolder = finalmeshdir + '/UVC_i'
+    if not os.path.exists(UVCfolder):
+        os.mkdir(UVCfolder)
+
+    # UVC.coord z generation
+    try:
+        # (finalmeshdir:UVC_fiber_Outputs/timeframe,
+        # meshtoolloc:meshtool,
+        # meshname:subject_mesh_all,
+        # input_dir:Mesh_Outputs
+        # surfloc:surfaces,
+        # UVCfolder:UVC_fiber_Outputs/timeframe/UVC_i)
+        coordszname = UVC.coord_z(finalmeshdir, meshtoolloc, meshname, input_dir, mesh_names, surfloc, UVCfolder)
+
+    except Exception:
+        logger.error('subject {}, timeframe {}: failed to generate coord z'.format(subject_id, timeframe_num))
+        return
+    if coordszname == None:
+        logger.error('subject {}, timeframe {}: failed to generate coord z'.format(subject_id, timeframe_num))
+        return
 
     # UVC.rotational coords generation:LV
     # (finalmeshdir:UVC_fiber_Outputs/timeframe,
@@ -296,9 +730,6 @@ if coordszname == None:
 
     logger.debug('subject {}, timeframe {}: finished uvc'.format(subject_id, timeframe_num))
 
-
-
-
 def main(do_mesh=False, do_uvc=False):
     parser = argparse.ArgumentParser()
 
@@ -319,11 +750,18 @@ def main(do_mesh=False, do_uvc=False):
     parser.add_argument('--allowlist', '-l', action='store', help='path to subject allowlist')
 
     parser.add_argument('--timeframe', '-t', type=int, action='store', help='timeframe to be processed')
+    parser.add_argument('--frame', choices=['ED', 'ES', 'ed', 'es'], help='ED/ES frame for the new COORDS_Z workflow')
+    parser.add_argument('--frames', help='comma-separated ED/ES frames for the new COORDS_Z workflow')
 
     parser.add_argument('--mesh', '-m', action='store_true', help='generate mesh')
     parser.add_argument('--uvc', '-u', action='store_true', help='generate uvc and fiber')
     parser.add_argument('--uvc-meshes', '-z', action='store_true', help='generate uvc meshes')
     parser.add_argument('--quality-control', '-q', action='store_true', help='output quality control screenshots')
+    parser.add_argument('--coords-z', action='store_true', help='generate only COORDS_Z from open-base LV/RV annulus surfaces')
+    parser.add_argument('--phi', action='store_true', help='generate only PHI from open-base LV/RV annulus surfaces')
+    parser.add_argument('--pho', action='store_true', help='generate only PHO from open-base LV/RV boundary surfaces')
+    parser.add_argument('--biv', action='store_true', help='generate only the nodal LV/RV biv.dat field')
+    parser.add_argument('--fiber', action='store_true', help='generate and merge frame-based LV/RV fibers')
 
     args, _ = parser.parse_known_args()
 
@@ -335,6 +773,8 @@ def main(do_mesh=False, do_uvc=False):
 
     global OPTS
     OPTS = os.path.abspath('amg_cg_opts')
+    if not os.path.isfile(OPTS):
+        OPTS = str(Path(__file__).resolve().with_name('amg_cg_opts'))
 
     data_dir = args.data_dir if args.data_dir else cfg[args.profile]['DataDir']
     par_file = os.path.abspath('LVendo_RVseptum_RVendo.par')
@@ -371,6 +811,46 @@ def main(do_mesh=False, do_uvc=False):
 
     np.seterr(all='warn')
 
+    if args.coords_z:
+        results = []
+        for subject_id in subject_ids:
+            subject_dir = os.path.join(data_dir, subject_id)
+            for frame in frame_names(subject_dir, args.frame, args.frames):
+                results.append(run_frame_coords_z(subject_id, frame, data_dir, args.force))
+        return results
+
+    if args.phi:
+        results = []
+        for subject_id in subject_ids:
+            subject_dir = os.path.join(data_dir, subject_id)
+            for frame in frame_names(subject_dir, args.frame, args.frames):
+                results.append(run_frame_phi(subject_id, frame, data_dir, args.force))
+        return results
+
+    if args.pho:
+        results = []
+        for subject_id in subject_ids:
+            subject_dir = os.path.join(data_dir, subject_id)
+            for frame in frame_names(subject_dir, args.frame, args.frames):
+                results.append(run_frame_pho(subject_id, frame, data_dir, args.force))
+        return results
+
+    if args.biv:
+        results = []
+        for subject_id in subject_ids:
+            subject_dir = os.path.join(data_dir, subject_id)
+            for frame in frame_names(subject_dir, args.frame, args.frames):
+                results.append(run_frame_biv(subject_id, frame, data_dir, args.force))
+        return results
+
+    if args.fiber:
+        results = []
+        for subject_id in subject_ids:
+            subject_dir = os.path.join(data_dir, subject_id)
+            for frame in frame_names(subject_dir, args.frame, args.frames):
+                results.append(run_frame_fiber(subject_id, frame, data_dir, args.force))
+        return results
+
     for subject_id in subject_ids:
         if not os.path.isdir(os.path.join(data_dir, subject_id)):
             continue
@@ -388,25 +868,6 @@ def main(do_mesh=False, do_uvc=False):
             if (args.timeframe is not None and args.timeframe != tf_n):
                 continue
 
-            if do_mesh or args.mesh:
-                vmtf_dir = os.path.join(output_dir, 'timeframe{}'.format(tf_n))
-                if not os.path.exists(vmtf_dir):
-                    os.mkdir(vmtf_dir)
-
-                if os.path.exists(os.path.join(vmtf_dir, subject_id + '_mesh_all', subject_id + '_mesh_all.vtk')) and not args.force:
-                    logger.debug('subject {}, timeframe {}: skipping, volumetric mesh exists'.format(subject_id, tf_n))
-                    continue
-
-                run_timeframe(subject_id, tf_n, input_dir, mesh_names, par_file, vmtf_dir)
-
-                for filename in os.listdir(vmtf_dir):
-                    filepath = os.path.join(vmtf_dir, filename)
-                    if os.path.isdir(filepath):
-                        if filename != f'{subject_id}_mesh_all':
-                            pass  # shutil.rmtree(filepath)
-                    else:
-                        pass  # os.remove(filepath)
-
             if do_uvc or args.uvc:
                 uftf_dir = os.path.join(output_dir_uvc, 'timeframe{}'.format(tf_n)) #UVC_fiber_Outputs/timeframe
                 if not os.path.exists(uftf_dir):
@@ -421,15 +882,40 @@ def main(do_mesh=False, do_uvc=False):
 
                 run_timeframe_uvc(subject_id, tf_n, input_dir, mesh_names, uvc_par_file, vmtf_dir, uftf_dir)
 
-                for filename in os.listdir(uftf_dir):
-                    filepath = os.path.join(uftf_dir, filename)
-                    if os.path.isdir(filepath):
-                        if filename not in ['fiberfolder', 'surfaces', 'UVC_i']:
-                            pass  # shutil.rmtree(filepath)
-                    else:
-                        pass  # os.remove(filepath)
+# if __name__ == '__main__':
+#     main()
+
 
 if __name__ == '__main__':
-    main()
 
+    parser = argparse.ArgumentParser(allow_abbrev=False)
+    parser.add_argument('--uvc-fiber', action='store_true', help='run UVC and fiber')
+    parser.add_argument('--coords-z', action='store_true', help='run the frame-based COORDS_Z stage')
+    parser.add_argument('--phi', action='store_true', help='run the frame-based PHI stage')
+    parser.add_argument('--pho', action='store_true', help='run the frame-based PHO stage')
+    parser.add_argument('--biv', action='store_true', help='run the frame-based biv.dat stage')
+    parser.add_argument('--fiber', action='store_true', help='run the frame-based fiber stage')
 
+    args, _ = parser.parse_known_args()
+
+    base_dir = os.path.dirname(__file__)
+
+    logging.basicConfig(level=logging.DEBUG, format='%(asctime)s | %(name)s | %(levelname)s | %(message)s')
+
+    if args.uvc_fiber:
+        main(False,True)
+    elif args.coords_z:
+        main(False,False)
+    elif args.phi:
+        main(False,False)
+    elif args.pho:
+        main(False,False)
+    elif args.biv:
+        main(False,False)
+    elif args.fiber:
+        main(False,False)
+
+# command:
+'''
+python generate_UVC_fiber.py --data-dir /home/mengao/Code/test_1/biv_volumetric_meshing/src/segmentation/data/UKB_example_4s --carp-bin-dir /opt/openCARP/usr/bin --uvc-fiber --subject subject0081
+'''

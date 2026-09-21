@@ -1,5 +1,8 @@
 import numpy as np
-from volumetric import meshIO
+try:
+    from . import meshIO
+except ImportError:  # Preserve compatibility with the original volumetric package.
+    from volumetric import meshIO
 from scipy.spatial import cKDTree
 import os
 import numpy as np
@@ -260,4 +263,3 @@ if __name__ == "__main__":
     surfloc = "/home/mengao/Code/test_1/biv_volumetric_meshing/src/segmentation/data/UKB_example_4s/subject0071/Instance_2/UVC_fiber_Outputs/timeframe1"
     basesurf_path = f"{surfloc}/biv_i/lv_base_i"
     find_intersection_base(valve_files, mesh, basesurf_path)
-

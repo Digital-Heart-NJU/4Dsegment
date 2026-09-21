@@ -456,7 +456,7 @@ def write_elem(elemFilename=None, elem=None, shapes=None):
 #########################################
 def read_vtx_File(vtxFilename=None):
     
-    vtxs = np.loadtxt(vtxFilename,skiprows=2)
+    vtxs = np.atleast_1d(np.loadtxt(vtxFilename, skiprows=2))
         
     return vtxs
 
