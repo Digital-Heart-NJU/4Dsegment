@@ -1,27 +1,21 @@
 #!/usr/bin/env python3
-"""Generate an open-base biventricular myocardium mesh with one TetGen PLC.
+"""Build and save the open-base LV/RV surface stages.
 
-Requested pipeline:
-  1. Load LVendo, LVepi, RV, RVepi surfaces.
-  2. Detect subject base side and write LV/RV Z-area profiles.
-  3. Build the open-base LV myocardial shell.
-  4. Build the initial open-base RV myocardial shell.
-  5. Remove RVepi-open overlap vertices against fixed LVepi-open, trace one
-     LVepi-edge seam from the non-basal cut, and rebuild/validate its collar.
-  6. Remove RV-open points intersecting LVepi, then keep only valid triangles.
-  7. Read the Step 6 clean RVendo surface, keep RVepi fixed, move RVendo
-     with its adaptive open-base ring, then trace an LVepi-edge interface
-     seam from the moved cut and rebuild a collision-checked collar.
-  8. Rebuild direct LV/RV open-base annuli from the current boundary loops.
-     Keep epi fixed. Where a direct annulus intersects epi/endo or itself,
-     minimally move only responsible endo opening-boundary vertices and
-     propagate those shared points into the endo surface and annulus.
-  9. Split open LVepi using the RVepi Step 5/6 boundary ring and the
-     displaced RVendo Step 7 boundary ring. Save septum and LVepi_noseptum,
-     then merge LVRV_epi_surface, RV_endo_surface, LV_endo_surface, and the
-     LV/RV open-base annuli into the final whole_epi_endo_surface.
- 10. Tetrahedralize the saved Step 9 whole_epi_endo_surface with TetGen.
- 11. Write final VTK with elemTag=1 for LV and elemTag=0 for RV.
+Active pipeline:
+  1. Load the four input surfaces and save copies per subject and frame.
+  2. Detect the subject-level base side and save the Z-area profiles.
+  3. Build and save the LV open-base epi, endo, and annulus surfaces.
+  4. Build and save the initial RV open-base epi, endo, and annulus surfaces.
+  5. Keep RVendo fixed and move RVepi to at least 3 mm from RVendo, while
+     adaptively displacing and smoothing the RVepi opening ring.
+  6. Rebuild the LV and RV annuli by directly connecting each open-base epi
+     boundary to its corresponding open-base endo boundary.
+  7. Remove RVepi/RVendo points intersecting the Step 6 LVepi reference and
+     save the LV/RV surfaces as point-only VTK files.
+
+The previous intersection-repair, surface-merge, TetGen, and volume-tagging
+stages remain in this file for reference but are not called by the active
+pipeline.
 """
 
 from __future__ import annotations
@@ -29,7 +23,6 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-import tempfile
 from collections import Counter, defaultdict, deque
 from heapq import heappop, heappush
 from pathlib import Path
@@ -38,7 +31,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 import numpy as np
 import open3d as o3d
 import pyvista as pv
-from scipy.spatial import Delaunay, cKDTree
+from scipy.spatial import cKDTree
 import tetgen
 import vtk
 
@@ -76,20 +69,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--frames", default=None, help="Comma-separated frames, for example ED,ES.")
     parser.add_argument("--vtk-dir", type=Path, default=None, help="Defaults to SUBJECT_DIR/vtks.")
     parser.add_argument("--output-root", type=Path, default=None, help="Defaults to SUBJECT_DIR/volmesh_tetgen.")
-    parser.add_argument("--pipeline-output-root", type=Path, default=None, help="Defaults to SUBJECT_DIR/volmesh_generate_pipline/step3open_base.")
+    parser.add_argument("--pipeline-output-root", type=Path, default=None, help="Defaults to SUBJECT_DIR/volmesh_pipline.")
     parser.add_argument("--repair-open-shells-before-step5", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--save-open-shell-stages", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--save-intersection-removal-stages", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--save-rvendo-distance-stage", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--save-openbase-annuli-stage", "--save-fix-intersection-new-surf-stage", dest="save_openbase_annuli_stage", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--save-fix-intersection-new-surf-stage", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--save-merge-surface-stage", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--save-tetgen-stage", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--stop-after-open-shells", action="store_true", help="Save LV/RV open-base shell stage outputs and stop before later RV trimming/TetGen stages.")
     parser.add_argument("--stop-after-intersection-removal", action="store_true", help="Save step 5/6 triangle-surface outputs and stop before RV distance fixing/TetGen stages.")
-    parser.add_argument("--stop-after-step5", action="store_true", help="Save the requested RVepi seam, clean surface, and rebuilt surface, then stop.")
-    parser.add_argument("--stop-after-step6", action="store_true", help="Save the open-base RVendo first-pass clean surface and stop before its Step 7 displacement.")
     parser.add_argument("--stop-after-rvendo-distance", action="store_true", help="Save step 7 RVepi/RVendo triangle surfaces and stop before whole-surface merging/TetGen stages.")
-    parser.add_argument("--stop-after-openbase-annuli", "--stop-after-fix-intersection-new-surf", dest="stop_after_openbase_annuli", action="store_true", help="Save step 8 LV/RV open-base surfaces and rebuilt annuli, then stop before whole-surface merging/TetGen stages.")
+    parser.add_argument("--stop-after-fix-intersection-new-surf", action="store_true", help="Save step 8 fixed LV/RV surfaces and rebuilt annuli, then stop before whole-surface merging/TetGen stages.")
     parser.add_argument("--stop-after-merge-surface", action="store_true", help="Save step 9 whole epi/endo triangle surfaces and stop before closure/TetGen stages.")
     parser.add_argument("--stop-after-tetgen", action="store_true", help="Save the step 10 raw whole TetGen volume mesh and stop before step 11 LV/RV elemTag classification.")
     parser.add_argument("--save-debug", action="store_true")
@@ -135,6 +126,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--annulus-smooth-relaxation", type=float, default=0.20)
 
     parser.add_argument("--surface-lvepi-clearance", type=float, default=0.0)
+    parser.add_argument(
+        "--step7-lvepi-point-tolerance",
+        type=float,
+        default=0.05,
+        help="Maximum point-to-LVepi distance treated as an intersecting Step 7 RV point.",
+    )
+    parser.add_argument("--step6-ball-pivot-normal-k", type=int, default=30)
+    parser.add_argument("--step6-ball-pivot-radii-multipliers", default="0.75,1.5,3.0")
     parser.add_argument("--surface-removal-rings", type=int, default=0)
     parser.add_argument("--surface-component-min-fraction", type=float, default=0.01)
     parser.add_argument("--step56-component-min-area-fraction", type=float, default=0.0)
@@ -155,8 +154,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--step56-internal-smooth-relaxation", type=float, default=0.12)
     parser.add_argument("--step56-bad-aspect-threshold", type=float, default=12.0)
     parser.add_argument("--surface-clean-tolerance", type=float, default=1e-7)
-    parser.add_argument("--step8-boundary-repair-rounds", "--step8-annulus-repair-rounds", dest="step8_boundary_repair_rounds", type=int, default=12)
-    parser.add_argument("--step8-boundary-max-displacement-edge-fraction", type=float, default=2.0)
+    parser.add_argument("--stage8-intersection-check-tolerance", type=float, default=1e-6)
     parser.add_argument("--step9-lvepi-face-match-tolerance", type=float, default=0.25)
     parser.add_argument("--step9-rv-openbase-loop-match-tolerance", type=float, default=0.5)
     parser.add_argument("--step9-lvepi-patch-loop-tolerance", type=float, default=3.0)
@@ -266,14 +264,6 @@ def signed_distances(reference: pv.PolyData, points: np.ndarray) -> np.ndarray:
     return out
 
 
-def unique_edges(triangles: np.ndarray) -> np.ndarray:
-    edges = set()
-    for tri in np.asarray(triangles, dtype=np.int64):
-        a, b, c = (int(v) for v in tri)
-        edges.add(tuple(sorted((a, b))))
-        edges.add(tuple(sorted((b, c))))
-        edges.add(tuple(sorted((c, a))))
-    return np.asarray(sorted(edges), dtype=np.int64)
 
 
 def triangle_edge_face_map(triangles: np.ndarray) -> Dict[Tuple[int, int], List[int]]:
@@ -296,23 +286,6 @@ def face_adjacency(triangles: np.ndarray) -> List[List[int]]:
     return [sorted(values) for values in adjacency]
 
 
-def expand_face_mask(mask: np.ndarray, triangles: np.ndarray, rings: int) -> np.ndarray:
-    expanded = np.asarray(mask, dtype=bool).copy()
-    if rings <= 0 or not np.any(expanded):
-        return expanded
-    adjacency = face_adjacency(triangles)
-    frontier = set(int(v) for v in np.flatnonzero(expanded))
-    for _ in range(int(rings)):
-        next_frontier = set()
-        for face_id in frontier:
-            for nb in adjacency[face_id]:
-                if not expanded[nb]:
-                    expanded[nb] = True
-                    next_frontier.add(int(nb))
-        if not next_frontier:
-            break
-        frontier = next_frontier
-    return expanded
 
 
 def face_areas(points: np.ndarray, triangles: np.ndarray) -> np.ndarray:
@@ -346,44 +319,8 @@ def connected_face_components(mask: np.ndarray, triangles: np.ndarray) -> List[n
     return components
 
 
-def keep_large_surface_components(mesh: pv.PolyData, min_fraction: float) -> Tuple[pv.PolyData, Dict[str, object]]:
-    mesh = mesh.extract_surface().triangulate().clean(tolerance=1e-7)
-    triangles = base.triangle_faces(mesh)
-    points = np.asarray(mesh.points, dtype=float)
-    if len(triangles) == 0:
-        raise RuntimeError("Surface has no triangles after trimming.")
-    areas = face_areas(points, triangles)
-    components = connected_face_components(np.ones(len(triangles), dtype=bool), triangles)
-    if not components:
-        raise RuntimeError("Surface has no connected component after trimming.")
-    max_area = float(areas[components[0]].sum())
-    keep = np.zeros(len(triangles), dtype=bool)
-    records = []
-    for component in components:
-        area = float(areas[component].sum())
-        if area >= max_area * float(min_fraction):
-            keep[component] = True
-            records.append({"faces": int(len(component)), "area": area})
-    out = base.subset_mesh_faces(mesh, keep)
-    return out.extract_surface().triangulate().clean(tolerance=1e-7), {
-        "component_count": int(len(components)),
-        "kept_component_count": int(len(records)),
-        "kept_components": records[:20],
-        "removed_component_faces": int(np.count_nonzero(~keep)),
-    }
 
 
-def cut_boundary_edges_from_face_mask(triangles: np.ndarray, remove: np.ndarray) -> np.ndarray:
-    edge_to_faces = triangle_edge_face_map(triangles)
-    remove = np.asarray(remove, dtype=bool)
-    edges: List[Tuple[int, int]] = []
-    for edge, owners in edge_to_faces.items():
-        flags = [bool(remove[face_id]) for face_id in owners]
-        if any(flags) and not all(flags):
-            edges.append(edge)
-    if not edges:
-        return np.empty((0, 2), dtype=np.int64)
-    return np.asarray(edges, dtype=np.int64)
 
 
 def map_source_points_to_target_mask(source_points: np.ndarray, target_points: np.ndarray, tolerance: float) -> np.ndarray:
@@ -440,198 +377,10 @@ def closest_points_on_surface(reference: pv.PolyData, query_points: np.ndarray) 
     return projected, distances
 
 
-def clipped_edge_point(
-    outside_id: int,
-    inside_id: int,
-    points: np.ndarray,
-    signed_distances: np.ndarray,
-) -> np.ndarray:
-    outside_distance = float(signed_distances[outside_id])
-    inside_distance = float(signed_distances[inside_id])
-    if np.isfinite(outside_distance) and np.isfinite(inside_distance) and abs(outside_distance - inside_distance) > 1e-12:
-        if outside_distance * inside_distance <= 0.0:
-            t = outside_distance / (outside_distance - inside_distance)
-        else:
-            denominator = abs(outside_distance) + abs(inside_distance)
-            t = abs(outside_distance) / denominator if denominator > 1e-12 else 0.5
-    else:
-        t = 0.5
-    t = float(np.clip(t, 0.02, 0.98))
-    return points[outside_id] + t * (points[inside_id] - points[outside_id])
 
 
-def compact_reconstructed_triangles(
-    points: np.ndarray,
-    triangles: Sequence[Sequence[int]],
-) -> Tuple[np.ndarray, np.ndarray]:
-    triangles_array = np.asarray(triangles, dtype=np.int64)
-    if len(triangles_array) == 0:
-        raise RuntimeError("No valid triangles remain after clipped reconstruction.")
-    used = np.unique(triangles_array.ravel())
-    point_map = -np.ones(len(points), dtype=np.int64)
-    point_map[used] = np.arange(len(used), dtype=np.int64)
-    return np.asarray(points, dtype=float)[used], point_map[triangles_array]
 
 
-def remove_intersecting_points_from_surface(
-    name: str,
-    surface: pv.PolyData,
-    lv_epi_reference: pv.PolyData,
-    args: argparse.Namespace,
-) -> Tuple[pv.PolyData, np.ndarray, Dict[str, object]]:
-    surface = surface.extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance)
-    lv_epi_reference = lv_epi_reference.extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance)
-    triangles = base.triangle_faces(surface)
-    points = np.asarray(surface.points, dtype=float)
-    clearance = float(args.surface_lvepi_clearance)
-
-    vertex_hit, vertex_distances, vertex_inside = inside_or_near_reference_surface(lv_epi_reference, points, args)
-    centers = points[triangles].mean(axis=1) if len(triangles) else np.empty((0, 3), dtype=float)
-    center_hit, _, center_inside = inside_or_near_reference_surface(lv_epi_reference, centers, args) if len(centers) else (np.empty((0,), dtype=bool), np.empty((0,), dtype=float), np.empty((0,), dtype=bool))
-
-    output_points: List[np.ndarray] = [point.copy() for point in points]
-    output_triangles: List[List[int]] = []
-    cut_edge_cache: Dict[Tuple[int, int], int] = {}
-    projected_cut_points: List[np.ndarray] = []
-    projection_distances: List[float] = []
-    fully_kept_faces = 0
-    fully_deleted_faces = 0
-    mixed_faces = 0
-    reconstructed_from_one_bad_vertex = 0
-    reconstructed_from_two_bad_vertices = 0
-    degenerate_reconstructed_triangles = 0
-    all_outside_center_hit_faces = 0
-
-    def output_vertex(vertex_id: int) -> int:
-        return int(vertex_id)
-
-    def cut_vertex(outside_id: int, inside_id: int) -> int:
-        key = tuple(sorted((int(outside_id), int(inside_id))))
-        cached = cut_edge_cache.get(key)
-        if cached is not None:
-            return cached
-        raw_point = clipped_edge_point(int(outside_id), int(inside_id), points, vertex_distances)
-        projected_point, projected_distance = closest_points_on_surface(lv_epi_reference, raw_point[None, :])
-        new_id = len(output_points)
-        output_points.append(projected_point[0])
-        projected_cut_points.append(projected_point[0])
-        projection_distances.append(float(projected_distance[0]))
-        cut_edge_cache[key] = new_id
-        return new_id
-
-    def triangle_area(a: int, b: int, c: int) -> float:
-        pa, pb, pc = output_points[a], output_points[b], output_points[c]
-        return 0.5 * float(np.linalg.norm(np.cross(pb - pa, pc - pa)))
-
-    def add_triangle(a: int, b: int, c: int) -> int:
-        if triangle_area(a, b, c) <= 1e-10:
-            return 0
-        output_triangles.append([int(a), int(b), int(c)])
-        return 1
-
-    for face_id, tri in enumerate(triangles):
-        flags = vertex_hit[tri]
-        bad_count = int(np.count_nonzero(flags))
-        if bad_count == 0:
-            output_triangles.append([int(tri[0]), int(tri[1]), int(tri[2])])
-            fully_kept_faces += 1
-            if len(center_hit) and bool(center_hit[face_id]):
-                all_outside_center_hit_faces += 1
-            continue
-        if bad_count == 3:
-            fully_deleted_faces += 1
-            continue
-
-        mixed_faces += 1
-        if bad_count == 1:
-            reconstructed_from_one_bad_vertex += 1
-        else:
-            reconstructed_from_two_bad_vertices += 1
-
-        polygon: List[int] = []
-        for local_id in range(3):
-            current = int(tri[local_id])
-            nxt = int(tri[(local_id + 1) % 3])
-            current_keep = not bool(vertex_hit[current])
-            next_keep = not bool(vertex_hit[nxt])
-            if current_keep and next_keep:
-                polygon.append(output_vertex(nxt))
-            elif current_keep and not next_keep:
-                polygon.append(cut_vertex(current, nxt))
-            elif not current_keep and next_keep:
-                polygon.append(cut_vertex(nxt, current))
-                polygon.append(output_vertex(nxt))
-
-        deduped: List[int] = []
-        for vertex_id in polygon:
-            if not deduped or deduped[-1] != vertex_id:
-                deduped.append(vertex_id)
-        if len(deduped) > 2 and deduped[0] == deduped[-1]:
-            deduped = deduped[:-1]
-
-        before_count = len(output_triangles)
-        if len(deduped) == 3:
-            add_triangle(deduped[0], deduped[1], deduped[2])
-        elif len(deduped) == 4:
-            add_triangle(deduped[0], deduped[1], deduped[2])
-            add_triangle(deduped[0], deduped[2], deduped[3])
-        if len(output_triangles) == before_count:
-            degenerate_reconstructed_triangles += 1
-
-    if not output_triangles:
-        raise RuntimeError(f"{name}: clipped reconstruction produced no valid triangles.")
-
-    all_points = np.vstack(output_points)
-    compact_points, compact_triangles = compact_reconstructed_triangles(all_points, output_triangles)
-    trimmed = pv.PolyData(compact_points, base.faces_from_triangles(compact_triangles))
-    trimmed = trimmed.extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance)
-
-    cut_points = np.asarray(projected_cut_points, dtype=float) if projected_cut_points else np.empty((0, 3), dtype=float)
-    cut_mask = map_source_points_to_target_mask(
-        cut_points,
-        np.asarray(trimmed.points, dtype=float),
-        max(float(args.boundary_match_tolerance), float(args.surface_clean_tolerance) * 10.0),
-    )
-    output_point_kept_from_original = map_source_points_to_target_mask(
-        points[~vertex_hit],
-        np.asarray(trimmed.points, dtype=float),
-        max(float(args.boundary_match_tolerance), float(args.surface_clean_tolerance) * 10.0),
-    )
-    return trimmed, cut_mask, {
-        "surface": name,
-        "method": "clip_mixed_triangles_against_closed_LVepi_and_project_cut_vertices_to_LVepi",
-        "input_points": int(surface.n_points),
-        "input_faces": int(len(triangles)),
-        "clearance_mm": clearance,
-        "reference_LVepi_free_edges": int(len(base.extract_boundary_edges(lv_epi_reference))),
-        "removed_points_by_LVepi_test": int(np.count_nonzero(vertex_hit)),
-        "removed_points_inside_closed_LVepi": int(np.count_nonzero(vertex_inside)),
-        "kept_original_outside_points_after_reconstruction": int(np.count_nonzero(output_point_kept_from_original)),
-        "additional_outside_points_unreferenced_after_reconstruction": int(np.count_nonzero(~vertex_hit) - np.count_nonzero(output_point_kept_from_original)),
-        "face_center_hits_not_used_for_removal": int(np.count_nonzero(center_hit)),
-        "face_centers_inside_closed_LVepi_not_used_for_removal": int(np.count_nonzero(center_inside)),
-        "all_outside_vertex_faces_with_hit_center_left_unchanged": int(all_outside_center_hit_faces),
-        "fully_kept_faces": int(fully_kept_faces),
-        "fully_deleted_faces_all_vertices_inside_or_near_LVepi": int(fully_deleted_faces),
-        "mixed_faces_reconstructed": int(mixed_faces),
-        "mixed_faces_with_one_bad_vertex": int(reconstructed_from_one_bad_vertex),
-        "mixed_faces_with_two_bad_vertices": int(reconstructed_from_two_bad_vertices),
-        "new_projected_cut_vertices_before_cleanup": int(len(projected_cut_points)),
-        "unique_cut_edges": int(len(cut_edge_cache)),
-        "cut_boundary_vertices_after_cleanup": int(np.count_nonzero(cut_mask)),
-        "degenerate_reconstructed_polygons_skipped": int(degenerate_reconstructed_triangles),
-        "reconstructed_triangles_before_cleanup": int(len(output_triangles)),
-        "output_points": int(trimmed.n_points),
-        "output_faces": int(trimmed.n_cells),
-        "min_signed_distance_to_LVepi": float(vertex_distances.min()) if len(vertex_distances) else None,
-        "cut_projection_to_LVepi": {
-            "method": "signed_distance_edge_crossing_then_vtkCellLocator_projection",
-            "raw_to_projected_distance_min": float(np.min(projection_distances)) if projection_distances else None,
-            "raw_to_projected_distance_mean": float(np.mean(projection_distances)) if projection_distances else None,
-            "raw_to_projected_distance_max": float(np.max(projection_distances)) if projection_distances else None,
-        },
-        "component_cleanup": {"applied": False, "reason": "clipped_reconstruction_preserves_local_surface_components"},
-    }
 
 
 def ordered_unique_indices(indices: np.ndarray) -> np.ndarray:
@@ -650,18 +399,6 @@ def ordered_unique_indices(indices: np.ndarray) -> np.ndarray:
     return np.asarray(ordered, dtype=np.int64)
 
 
-def loop_distance_to_reference(loop: pv.PolyData, reference_loop: pv.PolyData) -> Dict[str, object]:
-    pts = loop_points(loop)
-    ref = loop_points(reference_loop)
-    if len(pts) == 0 or len(ref) == 0:
-        return {"min": None, "mean": None, "p95": None, "max": None}
-    distances = cKDTree(ref).query(pts, k=1)[0]
-    return {
-        "min": float(np.min(distances)),
-        "mean": float(np.mean(distances)),
-        "p95": float(np.percentile(distances, 95)),
-        "max": float(np.max(distances)),
-    }
 
 
 def select_lvepi_cut_boundary_loops(
@@ -740,208 +477,12 @@ def select_lvepi_cut_boundary_loops(
     }
 
 
-def map_cut_loop_to_lvepi_existing_vertices(
-    name: str,
-    cut_loop: pv.PolyData,
-    lv_epi_reference: pv.PolyData,
-    args: argparse.Namespace,
-) -> Tuple[pv.PolyData, Dict[str, object]]:
-    cut_pts = loop_points(cut_loop)
-    lv_epi = lv_epi_reference.extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance)
-    lv_points = np.asarray(lv_epi.points, dtype=float)
-    if len(cut_pts) < 3 or len(lv_points) < 3:
-        raise RuntimeError(f"{name}: cannot map cut loop to LVepi existing vertices.")
-    distances, nearest_ids = cKDTree(lv_points).query(cut_pts, k=1)
-    ordered_ids = ordered_unique_indices(nearest_ids)
-    if len(ordered_ids) < 3:
-        raise RuntimeError(f"{name}: nearest LVepi vertex mapping produced fewer than three unique vertices.")
-    seam_points = lv_points[ordered_ids]
-    seam_loop = base.make_polyline(seam_points)
-    return seam_loop, {
-        "method": "ordered_nearest_existing_LVepi_vertices_no_projected_new_points",
-        "cut_loop_points": int(len(cut_pts)),
-        "mapped_LVepi_vertices_before_unique": int(len(nearest_ids)),
-        "unique_LVepi_vertices": int(len(ordered_ids)),
-        "duplicate_nearest_vertices_removed": int(len(nearest_ids) - len(ordered_ids)),
-        "nearest_distance_min": float(np.min(distances)) if len(distances) else None,
-        "nearest_distance_mean": float(np.mean(distances)) if len(distances) else None,
-        "nearest_distance_p95": float(np.percentile(distances, 95)) if len(distances) else None,
-        "nearest_distance_max": float(np.max(distances)) if len(distances) else None,
-        "lv_epi_vertex_ids": [int(v) for v in ordered_ids.tolist()],
-        "seam_loop": loop_record(seam_loop),
-    }
 
 
-def make_lvepi_stitch_surfaces(
-    name: str,
-    rv_cut_loops: Sequence[pv.PolyData],
-    lv_seam_loops: Sequence[pv.PolyData],
-    elem_tag: int,
-    args: argparse.Namespace,
-) -> Tuple[pv.PolyData, Dict[str, object]]:
-    if len(rv_cut_loops) != len(lv_seam_loops):
-        raise ValueError(f"{name}: RV cut loop count and LVepi seam loop count differ.")
-    stitches: List[pv.PolyData] = []
-    records: List[Dict[str, object]] = []
-    for loop_id, (cut_loop, seam_loop) in enumerate(zip(rv_cut_loops, lv_seam_loops)):
-        stitch = base.zipper_annulus(cut_loop, seam_loop).extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance)
-        stitch = tagged_surface(stitch, elem_tag)
-        stitches.append(stitch)
-        records.append({
-            "loop_id": int(loop_id),
-            "method": "zipper_annulus_between_RV_cut_boundary_and_existing_LVepi_vertex_seam_loop",
-            "rv_cut_loop": loop_record(cut_loop),
-            "lv_epi_seam_loop": loop_record(seam_loop),
-            "stitch_surface": surface_summary(stitch),
-        })
-    if not stitches:
-        empty = pv.PolyData(np.empty((0, 3), dtype=float), np.empty((0,), dtype=np.int64))
-        empty.cell_data["elemTag"] = np.empty((0,), dtype=np.int32)
-        return empty, {"method": "no_stitches_created", "stitch_count": 0, "stitches": []}
-    merged = merge_surfaces(stitches, args.combined_surface_merge_tolerance)
-    return merged, {
-        "method": "merge_all_LVepi_existing_vertex_stitch_annuli",
-        "stitch_count": int(len(stitches)),
-        "stitches": records,
-        "merged_stitch_surface": surface_summary(merged),
-    }
 
 
-def remove_intersecting_faces_and_stitch_to_lvepi(
-    name: str,
-    surface: pv.PolyData,
-    lv_epi_reference: pv.PolyData,
-    opening_loop: pv.PolyData,
-    elem_tag: int,
-    args: argparse.Namespace,
-) -> Dict[str, object]:
-    surface = surface.extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance)
-    lv_epi_reference = lv_epi_reference.extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance)
-    triangles = base.triangle_faces(surface)
-    points = np.asarray(surface.points, dtype=float)
-    if len(triangles) == 0:
-        raise RuntimeError(f"{name}: input surface has no triangles.")
-
-    vertex_hit, vertex_distances, vertex_inside = inside_or_near_reference_surface(lv_epi_reference, points, args)
-    centers = points[triangles].mean(axis=1)
-    center_hit, _, center_inside = inside_or_near_reference_surface(lv_epi_reference, centers, args)
-    initial_intersecting_faces = np.any(vertex_hit[triangles], axis=1) | center_hit
-    deleted_vertices = np.zeros(len(points), dtype=bool)
-    if np.any(initial_intersecting_faces):
-        deleted_vertices[np.unique(triangles[initial_intersecting_faces].ravel())] = True
-    keep_faces = ~np.any(deleted_vertices[triangles], axis=1)
-    if not np.any(keep_faces):
-        raise RuntimeError(f"{name}: deleting vertices from intersecting faces removed every triangle.")
-
-    trimmed = base.subset_mesh_faces(surface, keep_faces).extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance)
-    cut_loops, cut_loop_info = select_lvepi_cut_boundary_loops(name, trimmed, opening_loop, args)
-    lv_seam_loops: List[pv.PolyData] = []
-    seam_records: List[Dict[str, object]] = []
-    for loop_id, cut_loop in enumerate(cut_loops):
-        seam_loop, seam_info = map_cut_loop_to_lvepi_existing_vertices(
-            f"{name}_cut_loop_{loop_id}",
-            cut_loop,
-            lv_epi_reference,
-            args,
-        )
-        lv_seam_loops.append(seam_loop)
-        seam_records.append(seam_info)
-
-    stitch_surface, stitch_info = make_lvepi_stitch_surfaces(name, cut_loops, lv_seam_loops, elem_tag, args)
-    surface_with_stitch = merge_surfaces(
-        [tagged_surface(trimmed, elem_tag), stitch_surface],
-        args.combined_surface_merge_tolerance,
-    )
-    cut_points = []
-    for loop in list(cut_loops) + list(lv_seam_loops):
-        pts = loop_points(loop)
-        if len(pts):
-            cut_points.append(pts)
-    cut_point_cloud = np.vstack(cut_points) if cut_points else np.empty((0, 3), dtype=float)
-    mask_tol = max(float(args.boundary_match_tolerance), float(args.surface_clean_tolerance) * 10.0)
-    cut_mask = map_source_points_to_target_mask(cut_point_cloud, np.asarray(surface_with_stitch.points, dtype=float), mask_tol)
-    trimmed_cut_mask = map_source_points_to_target_mask(cut_point_cloud, np.asarray(trimmed.points, dtype=float), mask_tol)
-
-    info = {
-        "surface": name,
-        "method": "delete_vertices_of_intersecting_faces_then_stitch_RV_cut_boundary_to_existing_LVepi_vertices",
-        "new_projected_points_created": False,
-        "input_points": int(surface.n_points),
-        "input_faces": int(len(triangles)),
-        "clearance_mm": float(args.surface_lvepi_clearance),
-        "reference_LVepi_free_edges": int(len(base.extract_boundary_edges(lv_epi_reference))),
-        "initial_vertex_hits_by_LVepi_test": int(np.count_nonzero(vertex_hit)),
-        "initial_vertices_inside_closed_LVepi": int(np.count_nonzero(vertex_inside)),
-        "initial_face_center_hits_by_LVepi_test": int(np.count_nonzero(center_hit)),
-        "initial_face_centers_inside_closed_LVepi": int(np.count_nonzero(center_inside)),
-        "initial_intersecting_faces": int(np.count_nonzero(initial_intersecting_faces)),
-        "deleted_vertices_from_intersecting_faces": int(np.count_nonzero(deleted_vertices)),
-        "deleted_faces_after_vertex_rule": int(np.count_nonzero(~keep_faces)),
-        "kept_faces_after_vertex_rule": int(np.count_nonzero(keep_faces)),
-        "trimmed_surface": surface_summary(trimmed),
-        "cut_boundary_vertices_after_stitch_cleanup": int(np.count_nonzero(cut_mask)),
-        "cut_boundary_selection": cut_loop_info,
-        "lv_epi_seam_mapping": seam_records,
-        "stitch": stitch_info,
-        "surface_with_lvepi_stitch": surface_summary(surface_with_stitch),
-        "min_signed_distance_to_LVepi_before_deletion": float(vertex_distances.min()) if len(vertex_distances) else None,
-        "component_cleanup": {"applied": False, "reason": "explicit_intersecting_face_vertex_deletion_then_LVepi_seam_stitch"},
-    }
-    return {
-        "surface": surface_with_stitch,
-        "trimmed_surface": trimmed,
-        "stitch_surface": stitch_surface,
-        "cut_mask": cut_mask,
-        "trimmed_cut_mask": trimmed_cut_mask,
-        "rv_cut_loops": cut_loops,
-        "lv_seam_loops": lv_seam_loops,
-        "info": info,
-    }
 
 
-def rebuild_lvepi_stitch_after_surface_move(
-    name: str,
-    moved_surface: pv.PolyData,
-    reference_cut_loops: Sequence[pv.PolyData],
-    lv_seam_loops: Sequence[pv.PolyData],
-    elem_tag: int,
-    args: argparse.Namespace,
-) -> Dict[str, object]:
-    moved_surface = moved_surface.extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance)
-    moved_cut_loops: List[pv.PolyData] = []
-    match_records: List[Dict[str, object]] = []
-    for loop_id, reference_loop in enumerate(reference_cut_loops):
-        selected_loop, selected_info = select_boundary_loop_by_reference(
-            f"{name}_cut_loop_{loop_id}_after_move",
-            moved_surface,
-            reference_loop,
-        )
-        moved_cut_loops.append(selected_loop)
-        match_records.append(selected_info)
-    stitch_surface, stitch_info = make_lvepi_stitch_surfaces(
-        name,
-        moved_cut_loops,
-        lv_seam_loops,
-        elem_tag,
-        args,
-    )
-    stitched_surface = merge_surfaces(
-        [tagged_surface(moved_surface, elem_tag), stitch_surface],
-        args.combined_surface_merge_tolerance,
-    )
-    return {
-        "surface": stitched_surface,
-        "trimmed_surface": moved_surface,
-        "stitch_surface": stitch_surface,
-        "rv_cut_loops": moved_cut_loops,
-        "lv_seam_loops": list(lv_seam_loops),
-        "info": {
-            "method": "rebuild_RVendo_to_existing_LVepi_vertex_stitch_after_step7_distance_move",
-            "cut_loop_match_after_move": match_records,
-            "stitch": stitch_info,
-            "surface_with_lvepi_stitch": surface_summary(stitched_surface),
-        },
-    }
 
 
 
@@ -1766,17 +1307,6 @@ def triangle_aspect_for_ids(points: np.ndarray, ids: Sequence[int]) -> float:
     return float(np.max(lengths) / max(np.min(lengths), 1e-12))
 
 
-def same_count_ring_triangles(count: int, first_offset: int, second_offset: int) -> np.ndarray:
-    triangles: List[List[int]] = []
-    for index in range(int(count)):
-        nxt = (index + 1) % int(count)
-        a = int(first_offset + index)
-        b = int(first_offset + nxt)
-        c = int(second_offset + index)
-        d = int(second_offset + nxt)
-        triangles.append([a, b, c])
-        triangles.append([b, d, c])
-    return np.asarray(triangles, dtype=np.int64)
 
 
 def same_count_ring_triangles_best_diagonal(points: np.ndarray, count: int, first_offset: int, second_offset: int) -> np.ndarray:
@@ -2314,591 +1844,6 @@ def substitute_intersecting_vertices_with_lvepi_existing_vertices(
     }
 
 
-def step5_intersection_curve(first: pv.PolyData, second: pv.PolyData, tolerance: float) -> pv.PolyData:
-    intersector = vtk.vtkIntersectionPolyDataFilter()
-    intersector.SetInputData(0, first.extract_surface().triangulate().clean(tolerance=tolerance))
-    intersector.SetInputData(1, second.extract_surface().triangulate().clean(tolerance=tolerance))
-    intersector.SetTolerance(float(tolerance))
-    intersector.SplitFirstOutputOff()
-    intersector.SplitSecondOutputOff()
-    intersector.Update()
-    return pv.wrap(intersector.GetOutput()).clean(tolerance=tolerance)
-
-
-def step5_remove_1_from_open_rvepi(
-    rv_epi_open: pv.PolyData,
-    lv_epi_open: pv.PolyData,
-    rv_opening_loop: pv.PolyData,
-    elem_tag: int,
-    args: argparse.Namespace,
-    surface_name: str = "RVepi",
-    stage_name: str = "Step 5",
-) -> Tuple[pv.PolyData, pv.PolyData, Dict[str, object]]:
-    """Delete overlap vertices once; only their invalid triangles are omitted."""
-    rv = rv_epi_open.extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance)
-    lv = lv_epi_open.extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance)
-    triangles = base.triangle_faces(rv)
-    curve = step5_intersection_curve(rv, lv, args.surface_clean_tolerance)
-    if not curve.n_points:
-        raise RuntimeError(f"{stage_name} open-base {surface_name}/LVepi has no intersection curve from which to identify the overlap cut.")
-    crossing_face_ids = np.unique(rv.find_closest_cell(np.asarray(curve.points, dtype=float))).astype(np.int64)
-    signed = signed_distances(lv, np.asarray(rv.points, dtype=float))
-    near_tolerance = max(float(args.surface_clean_tolerance) * 100.0, 1e-5)
-    overlap_side = signed <= near_tolerance
-    neighbors, _ = lvepi_vertex_edge_graph(rv.n_points, triangles)
-    basal = clean_loop_points(loop_points(rv_opening_loop))
-    basal_distance = cKDTree(basal).query(np.asarray(rv.points, dtype=float))[0]
-    basal_guard = basal_distance <= max(float(args.step9_rv_openbase_loop_match_tolerance), 0.05)
-    seeds = np.unique(triangles[crossing_face_ids].ravel())
-    selected = np.zeros(rv.n_points, dtype=bool)
-    queue = deque(int(index) for index in seeds if overlap_side[index] and not basal_guard[index])
-    selected[list(queue)] = True
-    while queue:
-        index = queue.popleft()
-        for neighbor in neighbors[index]:
-            if overlap_side[neighbor] and not basal_guard[neighbor] and not selected[neighbor]:
-                selected[neighbor] = True
-                queue.append(int(neighbor))
-    invalid = np.any(selected[triangles], axis=1)
-    if not np.any(invalid) or np.all(invalid):
-        raise RuntimeError(f"{stage_name} open-base {surface_name} overlap vertex deletion did not leave a usable surface.")
-    clean = mesh_with_default_step56_point_data(
-        base.subset_mesh_faces(rv, ~invalid)
-            .extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance),
-        elem_tag,
-    )
-    remaining = step5_intersection_curve(clean, lv, args.surface_clean_tolerance)
-    if remaining.n_points:
-        raise RuntimeError(
-            f"{stage_name} {surface_name}_remove_1 still intersects open-base LVepi at {remaining.n_points} curve points; "
-            "the vertex-only deletion must be corrected before reconstructing triangles."
-        )
-    return clean, curve, {
-        "method": "open_base_LVepi_fixed_exact_crossing_seeded_local_overlap_vertex_deletion",
-        "reference": "open_base_LVepi_only",
-        f"input_{surface_name}": surface_summary(rv),
-        "crossing_curve_points": int(curve.n_points),
-        "crossing_seed_faces": int(len(crossing_face_ids)),
-        "intersecting_vertices_deleted": int(np.count_nonzero(selected)),
-        "triangles_omitted_because_they_reference_deleted_vertices": int(np.count_nonzero(invalid)),
-        "non_intersecting_vertices_retained_in_valid_faces": True,
-        "basal_opening_vertices_protected": int(np.count_nonzero(basal_guard)),
-        f"{surface_name}_remove_1": surface_summary(clean),
-        f"remaining_{surface_name}_remove_1_LVepi_crossings": int(remaining.n_points),
-    }
-
-
-def step5_seam_candidates(
-    rv_cut_loop: pv.PolyData,
-    lv_epi_open: pv.PolyData,
-    rv_opening_loop: pv.PolyData,
-    args: argparse.Namespace,
-) -> Tuple[List[Dict[str, object]], Dict[str, object]]:
-    """Use original LVepi vertices and LVepi triangle edges; density is quality-driven."""
-    lv = lv_epi_open.extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance)
-    lv_points = np.asarray(lv.points, dtype=float)
-    cut = clean_loop_points(loop_points(rv_cut_loop))
-    neighbors, edges = lvepi_vertex_edge_graph(lv.n_points, base.triangle_faces(lv))
-    _, _, axes = np.linalg.svd(cut - cut.mean(axis=0), full_matrices=False)
-    plane = axes[:2].T
-    origin = cut.mean(axis=0)
-
-    def area(coords: np.ndarray) -> float:
-        xy = (coords - origin) @ plane
-        return 0.5 * abs(float(np.sum(xy[:, 0] * np.roll(xy[:, 1], -1) - xy[:, 1] * np.roll(xy[:, 0], -1))))
-
-    cut_area = area(cut)
-    minimum_area = cut_area * 0.90
-    rv_median_edge = float(np.median(closed_loop_edge_lengths(cut)))
-    shortest = max(0.05, 0.20 * rv_median_edge)
-    longest = max(0.6, 1.5 * rv_median_edge)
-    rough_ids, _, trace = trace_existing_lvepi_edge_loop_from_cut_loop(
-        "Step5_RVepi_remove_1_LVepi_edge_seam", rv_cut_loop, lv, args,
-    )
-    initial = [rough_ids]
-    for record in trace["candidate_records"]:
-        if record.get("created") and record.get("quality", {}).get("valid"):
-            initial.append(np.asarray(record["lv_epi_vertex_ids"], dtype=np.int64))
-    records: List[Dict[str, object]] = []
-    candidates: List[Dict[str, object]] = []
-    seen = set()
-
-    def remember(ids: np.ndarray, initial_count: int, stage: str) -> None:
-        quality = lvepi_line_loop_quality_record(ids, lv_points, edges, None, len(cut))
-        seam_edges = closed_loop_edge_lengths(lv_points[ids])
-        valid = bool(
-            quality["valid"]
-            and area(lv_points[ids]) >= minimum_area
-        )
-        record = {
-            "stage": stage,
-            "initial_points": initial_count,
-            "refined_points": int(len(ids)),
-            "RVepi_cut_points": int(len(cut)),
-            "point_count_is_not_constrained_to_RVepi_cut": True,
-            "area_fraction": float(area(lv_points[ids]) / max(cut_area, 1e-12)),
-            "seam_edge_min_mm": float(np.min(seam_edges)),
-            "seam_edge_max_mm": float(np.max(seam_edges)),
-            "target_seam_edge_max_mm": float(longest),
-            "LVepi_edge_quality": quality,
-            "valid": valid,
-        }
-        records.append(record)
-        if valid and tuple(ids) not in {tuple(candidate["ids"]) for candidate in candidates}:
-            candidates.append({"ids": ids.copy(), "loop": base.make_polyline(lv_points[ids]), "record": record})
-
-    for source_ids in initial:
-        ids = loop_vertex_ids_without_duplicate_endpoint(source_ids)
-        if len(ids) < 3 or tuple(ids) in seen:
-            continue
-        seen.add(tuple(ids))
-        initial_count = len(ids)
-        if area(lv_points[ids]) < minimum_area:
-            records.append({"initial_points": initial_count, "valid": False, "reason": "seam_area_too_small"})
-            continue
-        remember(ids, initial_count, "rough_LVepi_edge_loop")
-        # A direct LVepi edge may be rerouted through a third vertex of one of
-        # its original triangles, but no seam vertex or LVepi triangle is moved.
-        while True:
-            seam_edges = closed_loop_edge_lengths(lv_points[ids])
-            if float(np.max(seam_edges)) <= longest:
-                break
-            used = set(map(int, ids))
-            options = []
-            for edge_index in np.argsort(-seam_edges):
-                first = int(ids[edge_index])
-                second = int(ids[(edge_index + 1) % len(ids)])
-                for extra in neighbors[first].intersection(neighbors[second]):
-                    if extra in used:
-                        continue
-                    lengths = np.asarray([
-                        np.linalg.norm(lv_points[first] - lv_points[extra]),
-                        np.linalg.norm(lv_points[extra] - lv_points[second]),
-                    ])
-                    if float(np.min(lengths)) < shortest or float(np.max(lengths)) >= seam_edges[edge_index]:
-                        continue
-                    trial = np.insert(ids, edge_index + 1, int(extra))
-                    quality = lvepi_line_loop_quality_record(trial, lv_points, edges, None, len(cut))
-                    if quality["valid"] and area(lv_points[trial]) >= minimum_area:
-                        options.append((float(np.max(lengths)), float(np.sum(lengths)), trial))
-                if options:
-                    break
-            if not options:
-                break
-            ids = min(options, key=lambda item: (item[0], item[1]))[2]
-            if (len(ids) - initial_count) % 12 == 0:
-                remember(ids, initial_count, "intermediate_edge_refinement")
-        remember(ids, initial_count, "final_edge_refinement")
-    if not candidates:
-        raise RuntimeError("Step 5 could not trace a sufficiently large LVepi-edge seam: " + json.dumps(records))
-    candidates.sort(key=lambda item: (abs(item["record"]["area_fraction"] - 1.0), item["record"]["LVepi_edge_quality"]["quality_score"]))
-    return candidates, {
-        "method": "uniform_sparse_RVepi_remove_1_guides_then_original_LVepi_triangle_edge_refinement",
-        "LVepi_vertices_created": 0,
-        "RVepi_cut_points": int(len(cut)),
-        "RVepi_cut_projected_area_mm2": float(cut_area),
-        "minimum_seam_projected_area_mm2": float(minimum_area),
-        "candidate_records": records,
-    }
-
-
-def step5_geometric_zipper(rv_ring: np.ndarray, lv_ring: np.ndarray, implicit: vtk.vtkImplicitPolyDataDistance) -> np.ndarray:
-    """Ordered variable-count triangulation with short bridges and no new seam points."""
-    outer, inner = len(rv_ring), len(lv_ring)
-    costs = np.full((outer + 1, inner + 1), np.inf)
-    previous = np.full((outer + 1, inner + 1), -1, dtype=np.int8)
-    costs[0, 0] = 0.0
-    for i in range(outer + 1):
-        for j in range(inner + 1):
-            if not np.isfinite(costs[i, j]):
-                continue
-            first, second = rv_ring[i % outer], lv_ring[j % inner]
-            for advance_outer in (True, False):
-                if advance_outer:
-                    if i == outer:
-                        continue
-                    next_i, next_j = i + 1, j
-                    third = rv_ring[next_i % outer]
-                else:
-                    if j == inner:
-                        continue
-                    next_i, next_j = i, j + 1
-                    third = lv_ring[next_j % inner]
-                bridge = float(np.linalg.norm(third - (second if advance_outer else first)))
-                signed = float(implicit.EvaluateFunction((first + second + third) / 3.0))
-                edge = float(np.linalg.norm(third - (first if advance_outer else second)))
-                trial = costs[i, j] + bridge ** 2 + 0.1 * edge + 200.0 * max(0.02 - signed, 0.0)
-                if trial < costs[next_i, next_j]:
-                    costs[next_i, next_j] = trial
-                    previous[next_i, next_j] = 0 if advance_outer else 1
-    if not np.isfinite(costs[-1, -1]):
-        raise RuntimeError("Step 5 could not triangulate its ordered RVepi and LVepi seam loops.")
-    rows = []
-    i, j = outer, inner
-    while i or j:
-        kind = previous[i, j]
-        if kind == 0:
-            rows.append([(i - 1) % outer, i % outer, outer + j % inner])
-            i -= 1
-        elif kind == 1:
-            rows.append([i % outer, outer + j % inner, outer + (j - 1) % inner])
-            j -= 1
-        else:
-            raise RuntimeError("Step 5 ordered zipper path is incomplete.")
-    rows.reverse()
-    return np.asarray(rows, dtype=np.int64)
-
-
-def step5_build_collar(
-    rv_cut_loop: pv.PolyData,
-    seam_ids: np.ndarray,
-    lv_epi_open: pv.PolyData,
-    elem_tag: int,
-    args: argparse.Namespace,
-    reverse_seam: bool = False,
-    seam_phase_fraction: float = 0.0,
-) -> Tuple[pv.PolyData, Dict[str, object]]:
-    rv_points = clean_loop_points(loop_points(rv_cut_loop))
-    lv = lv_epi_open.extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance)
-    lv_points = np.asarray(lv.points, dtype=float)
-    seam_ids = loop_vertex_ids_without_duplicate_endpoint(seam_ids)
-    if reverse_seam:
-        seam_ids = seam_ids[::-1]
-    seam = lv_points[seam_ids]
-    distances, nearest_seam = cKDTree(seam).query(rv_points)
-    rv_start = int(np.argmin(distances))
-    rv_points = np.roll(rv_points, -rv_start, axis=0)
-    seam_ids = np.roll(seam_ids, -int(nearest_seam[rv_start]))
-    if seam_phase_fraction:
-        seam_ids = np.roll(seam_ids, int(round(len(seam_ids) * seam_phase_fraction)))
-    seam = lv_points[seam_ids]
-    implicit = vtk.vtkImplicitPolyDataDistance()
-    implicit.SetInput(lv)
-    triangles = step5_geometric_zipper(rv_points, seam, implicit)
-    points = np.vstack([rv_points, seam])
-    source = np.full(len(points), -1, dtype=np.int32)
-    source[len(rv_points):] = seam_ids.astype(np.int32)
-    substitute = np.zeros(len(points), dtype=np.int32)
-    substitute[len(rv_points):] = 1
-    kept = 1 - substitute
-    collar = compact_tagged_triangle_surface_with_point_data(
-        points, triangles, np.full(len(triangles), elem_tag, dtype=np.int32),
-        {"lvepiSubstituteVertex": substitute, "lvepiSubstituteSourceId": source, "keptOriginalRVVertex": kept},
-        args.surface_clean_tolerance,
-    )
-    collar = mark_lvepi_substitute_vertices(collar, lv, seam_ids, args)
-    quality = triangle_quality_summary(points, triangles, float(args.step56_bad_aspect_threshold))
-    return collar, {
-        "method": "ordered_variable_count_triangle_collar_between_RVepi_remove_1_and_LVepi_edge_seam",
-        "interior_fill_in_points_created": 0,
-        "seam_points_created": 0,
-        "RVepi_cut_points": int(len(rv_points)),
-        "LVepi_seam_points": int(len(seam)),
-        "reverse_seam": bool(reverse_seam),
-        "seam_phase_fraction": float(seam_phase_fraction),
-        "quality": quality,
-    }
-
-
-def step5_self_intersection_pairs(surface: pv.PolyData) -> np.ndarray:
-    mesh = surface.extract_surface().triangulate().clean(tolerance=1e-7)
-    open3d_mesh = o3d.geometry.TriangleMesh(
-        o3d.utility.Vector3dVector(np.asarray(mesh.points, dtype=float)),
-        o3d.utility.Vector3iVector(base.triangle_faces(mesh).astype(np.int32)),
-    )
-    return np.asarray(open3d_mesh.get_self_intersecting_triangles(), dtype=np.int32).reshape(-1, 2)
-
-
-def step5_repair_rebuilt_self_intersections(
-    rebuilt: pv.PolyData,
-    raw_core: pv.PolyData,
-    collar: pv.PolyData,
-    rv_cut_loop: pv.PolyData,
-    seam_loop: pv.PolyData,
-    lv_epi_open: pv.PolyData,
-    args: argparse.Namespace,
-) -> Tuple[pv.PolyData, pv.PolyData, pv.PolyData, Dict[str, object]]:
-    """Repair inherited local RVepi collisions without moving either interface loop."""
-    original = rebuilt.extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance)
-    triangles = base.triangle_faces(original).astype(np.int32)
-    points = np.asarray(original.points, dtype=float).copy()
-    fixed = np.zeros(len(points), dtype=bool)
-    for loop in (rv_cut_loop, seam_loop):
-        fixed |= cKDTree(clean_loop_points(loop_points(loop))).query(points)[0] < 1e-5
-    implicit = vtk.vtkImplicitPolyDataDistance()
-    implicit.SetInput(lv_epi_open.extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance))
-    pairs = step5_self_intersection_pairs(original)
-    initial_count = len(pairs)
-    moves = []
-    for _ in range(initial_count + 4):
-        if not len(pairs):
-            break
-        accepted = None
-        for first_face, second_face in pairs:
-            for own_id, other_id in ((first_face, second_face), (second_face, first_face)):
-                own = points[triangles[own_id]]
-                other = points[triangles[other_id]]
-                normal = np.cross(other[1] - other[0], other[2] - other[0])
-                normal /= max(float(np.linalg.norm(normal)), 1e-10)
-                separation = own.mean(axis=0) - other.mean(axis=0)
-                separation /= max(float(np.linalg.norm(separation)), 1e-10)
-                for vertex_id in triangles[own_id]:
-                    if fixed[vertex_id]:
-                        continue
-                    for direction in (normal, -normal, separation):
-                        for displacement in (0.15, 0.30, 0.60, 1.0):
-                            trial = points.copy()
-                            trial[vertex_id] += displacement * direction
-                            if implicit.EvaluateFunction(trial[vertex_id]) < 0.01:
-                                continue
-                            test = pv.PolyData(trial, base.faces_from_triangles(triangles))
-                            trial_pairs = step5_self_intersection_pairs(test)
-                            if len(trial_pairs) < len(pairs):
-                                accepted = (trial, trial_pairs, int(vertex_id), float(displacement))
-                                break
-                        if accepted:
-                            break
-                    if accepted:
-                        break
-                if accepted:
-                    break
-            if accepted:
-                break
-        if accepted is None:
-            raise RuntimeError(f"Step 5 cannot repair {len(pairs)} RVepi self-intersection pairs without moving a fixed seam vertex.")
-        points, pairs, vertex_id, displacement = accepted
-        moves.append({"vertex_id": vertex_id, "displacement_mm": displacement})
-    if len(pairs):
-        raise RuntimeError(f"Step 5 retains {len(pairs)} RVepi self-intersection pairs after local repair.")
-    original.points = points
-
-    def propagate(part: pv.PolyData) -> pv.PolyData:
-        out = part.extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance)
-        distances, ids = cKDTree(np.asarray(rebuilt.points, dtype=float)).query(np.asarray(out.points, dtype=float))
-        if np.any(distances > 1e-5):
-            raise RuntimeError("Step 5 repaired vertex cannot be mapped back to its RVepi component.")
-        out.points = points[ids]
-        return out
-
-    repaired_core = propagate(raw_core)
-    repaired_collar = propagate(collar)
-    if len(step5_self_intersection_pairs(repaired_core)) or len(step5_self_intersection_pairs(repaired_collar)):
-        raise RuntimeError("Step 5 local repair left a component self-intersection.")
-    return original, repaired_core, repaired_collar, {
-        "initial_face_pair_count": int(initial_count),
-        "final_face_pair_count": 0,
-        "fixed_interface_vertices": int(np.count_nonzero(fixed)),
-        "moves": moves,
-    }
-
-
-def step5_validate_fixed_lvepi_seam(
-    rebuilt: pv.PolyData,
-    lv_epi_open: pv.PolyData,
-    seam_loop: pv.PolyData,
-    args: argparse.Namespace,
-) -> Dict[str, object]:
-    curve = step5_intersection_curve(rebuilt, lv_epi_open, args.surface_clean_tolerance)
-    seam_points = clean_loop_points(loop_points(seam_loop))
-    if not curve.n_points:
-        raise RuntimeError("Step 5 rebuilt RVepi has no shared seam contact with LVepi.")
-    seam_distances = cKDTree(seam_points).query(np.asarray(curve.points, dtype=float))[0]
-    off_seam = seam_distances > max(float(args.surface_clean_tolerance) * 100.0, 1e-5)
-    if np.any(off_seam):
-        raise RuntimeError(f"Step 5 rebuilt RVepi/LVepi has {int(np.count_nonzero(off_seam))} intersection points away from the shared seam.")
-    return {
-        "intersection_curve_points": int(curve.n_points),
-        "off_seam_intersection_points": 0,
-        "max_intersection_distance_to_seam_mm": float(np.max(seam_distances)),
-    }
-
-
-def rebuild_step5_open_rvepi(
-    rv_epi_open: pv.PolyData,
-    lv_epi_open: pv.PolyData,
-    rv_opening_loop: pv.PolyData,
-    elem_tag: int,
-    args: argparse.Namespace,
-) -> Dict[str, object]:
-    raw_core, _, removal = step5_remove_1_from_open_rvepi(
-        rv_epi_open, lv_epi_open, rv_opening_loop, elem_tag, args,
-    )
-    all_loops = base.boundary_loops(raw_core)
-    cut_loops, cut_info = select_lvepi_cut_boundary_loops(
-        "Step5_RVepi_remove_1", raw_core, rv_opening_loop, args,
-    )
-    if len(all_loops) != 2 or len(cut_loops) != 1:
-        raise RuntimeError(
-            f"Step 5 requires one intersection cut and the separate basal opening; "
-            f"RVepi_remove_1 has {len(all_loops)} total loops and {len(cut_loops)} intersection loops."
-        )
-    cut = cut_loops[0]
-    seam_candidates, seam_selection = step5_seam_candidates(cut, lv_epi_open, rv_opening_loop, args)
-    inherited = len(step5_self_intersection_pairs(raw_core))
-    failures = []
-    for option in seam_candidates:
-        try:
-            collar, collar_info = step5_build_collar(cut, option["ids"], lv_epi_open, elem_tag, args)
-            rebuilt = merge_tagged_triangle_surfaces_with_point_data(
-                [raw_core, collar], args.surface_clean_tolerance,
-            )
-            step5_validate_fixed_lvepi_seam(rebuilt, lv_epi_open, option["loop"], args)
-            initial_pairs = len(step5_self_intersection_pairs(rebuilt))
-            if initial_pairs > inherited + 4:
-                raise RuntimeError(f"collar introduced {initial_pairs - inherited} new RVepi self-intersection pairs")
-            repaired, repaired_core, repaired_collar, repair_info = step5_repair_rebuilt_self_intersections(
-                rebuilt, raw_core, collar, cut, option["loop"], lv_epi_open, args,
-            )
-            seam_check = step5_validate_fixed_lvepi_seam(repaired, lv_epi_open, option["loop"], args)
-            final_loops = base.boundary_loops(repaired)
-            if len(final_loops) != 2:
-                raise RuntimeError(f"rebuilt RVepi has {len(final_loops)} loops instead of the basal opening and shared seam")
-            rv_cut_points = clean_loop_points(loop_points(cut))
-            tolerance = max(float(args.boundary_match_tolerance), 1e-5)
-            cut_mask = map_source_points_to_target_mask(
-                np.vstack([rv_cut_points, clean_loop_points(loop_points(option["loop"]))]),
-                np.asarray(repaired.points, dtype=float), tolerance,
-            )
-            trimmed_cut_mask = map_source_points_to_target_mask(
-                rv_cut_points, np.asarray(repaired_core.points, dtype=float), tolerance,
-            )
-            return {
-                "surface": repaired,
-                "trimmed_surface": repaired_core,
-                "clean_surface": raw_core,
-                "stitch_surface": repaired_collar,
-                "cut_mask": cut_mask,
-                "trimmed_cut_mask": trimmed_cut_mask,
-                "rv_cut_loops": [cut],
-                "lv_seam_loops": [option["loop"]],
-                "info": {
-                    "method": "one_pass_open_base_RVepi_overlap_vertex_deletion_single_LVepi_edge_seam_collision_gated_collar",
-                    "RVepi_remove_1": removal,
-                    "cut_boundary": cut_info,
-                    "seam_selection": seam_selection,
-                    "selected_seam": option["record"],
-                    "collar": collar_info,
-                    "inherited_RVepi_remove_1_self_intersection_pairs": int(inherited),
-                    "self_intersection_repair": repair_info,
-                    "RVepi_rebuilt_LVepi_contact": seam_check,
-                    "rebuilt_boundary_loop_count": int(len(final_loops)),
-                    "other_candidate_failures": failures,
-                },
-            }
-        except RuntimeError as error:
-            failures.append({"seam_points": int(len(option["ids"])), "reason": str(error)})
-    raise RuntimeError("Step 5 could not rebuild collision-free RVepi from its one-pass cut: " + json.dumps(failures))
-
-
-def save_step5_requested_outputs(
-    pipeline_dir: Path,
-    subject_id: str,
-    frame: str,
-    step5: Dict[str, object],
-    elem_tag: int,
-    lv_epi_open: pv.PolyData,
-    args: argparse.Namespace,
-) -> Dict[str, str]:
-    pipeline_dir.mkdir(parents=True, exist_ok=True)
-    prefix = f"{subject_id}_{frame}_RVepi"
-    seam_path = pipeline_dir / f"{prefix}_new_boundary.vtk"
-    clean_path = pipeline_dir / f"{prefix}_clean_surf.vtk"
-    rebuilt_path = pipeline_dir / f"{prefix}_rebuilt_surf.vtk"
-    write_custom_line_loop_vtk(
-        seam_path, step5["lv_seam_loops"], loop_tag=elem_tag, duplicate_closing_point=False,
-        point_type="double", point_format="%.17g",
-    )
-    save_triangle_surface_vtk(
-        clean_path, step5["clean_surface"], elem_tag=elem_tag,
-        point_type="double", point_format="%.17g",
-    )
-    save_triangle_surface_vtk(
-        rebuilt_path, step5["surface"], elem_tag=elem_tag,
-        point_type="double", point_format="%.17g",
-    )
-    saved_rebuilt = pv.read(rebuilt_path).extract_surface().triangulate()
-    saved_seam = pv.read(seam_path)
-    if len(step5_self_intersection_pairs(saved_rebuilt)):
-        raise RuntimeError("Step 5 saved RVepi_rebuilt VTK gained a face self-intersection after serialization.")
-    step5_validate_fixed_lvepi_seam(saved_rebuilt, lv_epi_open, saved_seam, args)
-    return {
-        "LVRV_boundary": str(seam_path.resolve()),
-        "RVepi_remove_1": str(clean_path.resolve()),
-        "RVepi_rebuilt": str(rebuilt_path.resolve()),
-    }
-
-def resnap_lvepi_substitute_vertices_to_existing_lvepi(
-    name: str,
-    surface: pv.PolyData,
-    lv_epi_reference: pv.PolyData,
-    elem_tag: int,
-    args: argparse.Namespace,
-) -> Dict[str, object]:
-    surface = surface.extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance)
-    lv_epi_reference = lv_epi_reference.extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance)
-    lv_points = np.asarray(lv_epi_reference.points, dtype=float)
-    points = np.asarray(surface.points, dtype=float).copy()
-    sub_values = np.asarray(surface.point_data.get("lvepiSubstituteVertex", np.zeros(surface.n_points, dtype=np.int32))).reshape(-1)
-    substitute_mask = sub_values.astype(bool)
-    point_data = {key: np.asarray(value).copy() for key, value in surface.point_data.items() if len(value) == surface.n_points}
-    full_source_ids = np.asarray(point_data.get("lvepiSubstituteSourceId", np.full(surface.n_points, -1, dtype=np.int32))).reshape(-1).astype(np.int32)
-    substitute_indices = np.flatnonzero(substitute_mask)
-    distances = np.empty((0,), dtype=float)
-    source_ids = np.empty((0,), dtype=np.int64)
-    stored_source_count = 0
-    nearest_source_count = 0
-    if len(substitute_indices):
-        source_ids_full = full_source_ids[substitute_indices].astype(np.int64)
-        valid_stored = (source_ids_full >= 0) & (source_ids_full < len(lv_points))
-        if np.any(valid_stored):
-            valid_indices = substitute_indices[valid_stored]
-            points[valid_indices] = lv_points[source_ids_full[valid_stored]]
-            stored_source_count = int(np.count_nonzero(valid_stored))
-        if np.any(~valid_stored):
-            fallback_indices = substitute_indices[~valid_stored]
-            fallback_distances, fallback_source_ids = cKDTree(lv_points).query(points[fallback_indices], k=1)
-            points[fallback_indices] = lv_points[np.asarray(fallback_source_ids, dtype=np.int64)]
-            source_ids_full[~valid_stored] = np.asarray(fallback_source_ids, dtype=np.int64)
-            distances = np.asarray(fallback_distances, dtype=float)
-            nearest_source_count = int(len(fallback_indices))
-        full_source_ids[substitute_indices] = source_ids_full.astype(np.int32)
-        source_ids = source_ids_full
-        point_data["lvepiSubstituteSourceId"] = full_source_ids
-        point_data["lvepiSubstituteVertex"] = substitute_mask.astype(np.int32)
-    triangles = base.triangle_faces(surface)
-    tags = np.full(len(triangles), int(elem_tag), dtype=np.int32)
-    resnapped = compact_tagged_triangle_surface_with_point_data(
-        points,
-        triangles,
-        tags,
-        point_data,
-        args.surface_clean_tolerance,
-    )
-
-    sub_after = np.asarray(resnapped.point_data.get("lvepiSubstituteVertex", np.zeros(resnapped.n_points, dtype=np.int32))).reshape(-1).astype(bool)
-    source_after = np.asarray(resnapped.point_data.get("lvepiSubstituteSourceId", np.full(resnapped.n_points, -1, dtype=np.int32))).reshape(-1).astype(np.int64)
-    seam_source_ids = ordered_unique_indices(source_after[sub_after & (source_after >= 0)])
-    lv_seam_loops = [base.make_polyline(lv_points[seam_source_ids])] if len(seam_source_ids) >= 3 else []
-    return {
-        "surface": resnapped,
-        "cut_mask": sub_after,
-        "lv_seam_loops": lv_seam_loops,
-        "info": {
-            "method": "after_RVendo_distance_move_resnap_LVepi_interface_vertices_to_stored_existing_LVepi_source_ids",
-            "substitute_vertices_before_cleanup": int(np.count_nonzero(substitute_mask)),
-            "substitute_vertices_after_cleanup": int(np.count_nonzero(sub_after)),
-            "stored_LVepi_source_id_vertices_resnapped": int(stored_source_count),
-            "nearest_LVepi_fallback_vertices_resnapped": int(nearest_source_count),
-            "unique_existing_LVepi_vertices_after_resnap": int(len(seam_source_ids)),
-            "nearest_existing_LVepi_distance_min": float(np.min(distances)) if len(distances) else None,
-            "nearest_existing_LVepi_distance_mean": float(np.mean(distances)) if len(distances) else None,
-            "nearest_existing_LVepi_distance_p95": float(np.percentile(distances, 95)) if len(distances) else None,
-            "nearest_existing_LVepi_distance_max": float(np.max(distances)) if len(distances) else None,
-            "surface_after_resnap": surface_summary(resnapped),
-            "saved_LVepi_interface_seam_loops": [loop_record(loop) for loop in lv_seam_loops],
-        },
-    }
-
 def vertex_neighbors_from_surface(mesh: pv.PolyData) -> List[set]:
     triangles = base.triangle_faces(mesh.extract_surface().triangulate())
     neighbors = [set() for _ in range(mesh.n_points)]
@@ -3086,6 +2031,8 @@ def enforce_rvendo_distance_adaptive_opening_ring(
     rv_epi: pv.PolyData,
     opening_loop: pv.PolyData,
     args: argparse.Namespace,
+    protected_vertex_mask: Optional[np.ndarray] = None,
+    force_outward_from_fixed_surface: bool = False,
 ) -> Tuple[pv.PolyData, np.ndarray, np.ndarray, np.ndarray, pv.PolyData, Dict[str, object]]:
     rv_endo = rv_endo.extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance)
     rv_epi = rv_epi.extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance)
@@ -3095,6 +2042,15 @@ def enforce_rvendo_distance_adaptive_opening_ring(
         opening_loop,
         args,
     )
+    if protected_vertex_mask is None:
+        protected_vertex_mask = np.zeros(rv_endo.n_points, dtype=bool)
+    else:
+        protected_vertex_mask = np.asarray(protected_vertex_mask, dtype=bool).reshape(-1)
+        if len(protected_vertex_mask) != rv_endo.n_points:
+            raise ValueError(
+                "protected_vertex_mask must match the cleaned RVendo point count "
+                f"({len(protected_vertex_mask)} != {rv_endo.n_points})."
+            )
 
     original_points = np.asarray(rv_endo.points, dtype=float).copy()
     points = original_points.copy()
@@ -3104,6 +2060,143 @@ def enforce_rvendo_distance_adaptive_opening_ring(
 
     rv_epi_points = np.asarray(rv_epi.points, dtype=float)
     rv_epi_tree = cKDTree(rv_epi_points)
+    fixed_surface_center = rv_epi_points.mean(axis=0) if len(rv_epi_points) else np.zeros(3, dtype=float)
+    rv_endo_center = np.asarray(rv_endo.points, dtype=float).mean(axis=0) if rv_endo.n_points else np.zeros(3, dtype=float)
+    try:
+        rv_epi_normal_mesh = rv_epi.compute_normals(
+            point_normals=True,
+            cell_normals=False,
+            auto_orient_normals=True,
+            consistent_normals=True,
+            inplace=False,
+        )
+        rv_epi_normals = np.asarray(rv_epi_normal_mesh.point_data.get("Normals", np.zeros_like(rv_epi_points)), dtype=float)
+    except Exception:
+        rv_epi_normals = np.zeros_like(rv_epi_points)
+
+    def separation_unit_vectors(
+        query_points: np.ndarray,
+        nearest_ids: np.ndarray,
+        prefer_outward: bool = False,
+    ) -> np.ndarray:
+        """Return a separating direction, optionally restricted to fixed-surface outside."""
+        query_points = np.asarray(query_points, dtype=float)
+        nearest_ids = np.asarray(nearest_ids, dtype=np.int64).reshape(-1)
+        nearest = rv_epi_points[nearest_ids]
+        vectors = query_points - nearest
+        lengths = np.linalg.norm(vectors, axis=1)
+        if prefer_outward:
+            radial = nearest - fixed_surface_center[None, :]
+            radial_lengths = np.linalg.norm(radial, axis=1)
+            outward = rv_epi_normals[nearest_ids].copy()
+            normal_lengths = np.linalg.norm(outward, axis=1)
+            normal_valid = normal_lengths > 1e-8
+            if np.any(normal_valid):
+                normal_dot_radial = np.sum(outward[normal_valid] * radial[normal_valid], axis=1)
+                outward[normal_valid] *= np.where(normal_dot_radial >= 0.0, 1.0, -1.0)[:, None]
+            radial_valid = radial_lengths > 1e-8
+            use_radial = (~normal_valid) & radial_valid
+            if np.any(use_radial):
+                outward[use_radial] = radial[use_radial]
+                normal_lengths[use_radial] = radial_lengths[use_radial]
+            outward_lengths = np.linalg.norm(outward, axis=1)
+            outward_valid = outward_lengths > 1e-8
+            if np.any(outward_valid):
+                outward[outward_valid] /= outward_lengths[outward_valid, None]
+                dot_outward = np.sum(vectors * outward, axis=1)
+                use_outward = (~(lengths > 1e-8)) | (dot_outward <= 0.0)
+                vectors[use_outward] = outward[use_outward]
+                lengths[use_outward] = 1.0
+        zero = lengths <= 1e-8
+        if np.any(zero):
+            fallback = rv_endo_center[None, :] - nearest[zero]
+            fallback_lengths = np.linalg.norm(fallback, axis=1)
+            fallback_normals = rv_epi_normals[nearest_ids[zero]]
+            normal_lengths = np.linalg.norm(fallback_normals, axis=1)
+            normal_valid = normal_lengths > 1e-8
+            if np.any(normal_valid):
+                normal_dot_center = np.sum(
+                    fallback_normals[normal_valid] * fallback[normal_valid], axis=1
+                )
+                normal_sign = np.where(normal_dot_center >= 0.0, 1.0, -1.0)
+                fallback[normal_valid] = (
+                    fallback_normals[normal_valid]
+                    * normal_sign[:, None]
+                )
+                fallback_lengths[normal_valid] = normal_lengths[normal_valid]
+            valid_fallback = fallback_lengths > 1e-8
+            zero_indices = np.flatnonzero(zero)
+            if np.any(valid_fallback):
+                vectors[zero_indices[valid_fallback]] = fallback[valid_fallback]
+                lengths[zero_indices[valid_fallback]] = fallback_lengths[valid_fallback]
+            unresolved = zero_indices[~valid_fallback]
+            if len(unresolved):
+                vectors[unresolved] = np.array([0.0, 0.0, 1.0], dtype=float)
+                lengths[unresolved] = 1.0
+        return vectors / np.maximum(lengths, 1e-12)[:, None]
+
+    def apply_uniform_ring_outward_offset(
+        ring_candidate: np.ndarray,
+        target_distance: float,
+        protected_ring_mask: np.ndarray,
+        max_iterations: int,
+    ) -> Tuple[np.ndarray, List[Dict[str, object]]]:
+        """Move the opening ring with a smooth, shared step per iteration.
+
+        Independent vertex corrections can create local kinks when the nearest
+        fixed-surface feature changes from one ring vertex to the next.  The
+        ring direction is therefore smoothed around the closed loop, while a
+        single scalar step is applied to all movable ring vertices.
+        """
+        candidate = np.asarray(ring_candidate, dtype=float).copy()
+        protected_ring_mask = np.asarray(protected_ring_mask, dtype=bool).reshape(-1)
+        records: List[Dict[str, object]] = []
+        direction_iterations = max(2, int(args.rv_opening_ring_smooth_iterations) // 3)
+        direction_relaxation = min(float(args.rv_opening_ring_smooth_relaxation), 0.25)
+        for iteration in range(max(int(max_iterations), 1)):
+            distances, nearest_ids = rv_epi_tree.query(candidate, k=1)
+            movable = ~protected_ring_mask
+            minimum_distance = float(np.min(distances[movable])) if np.any(movable) else None
+            record = {
+                "iteration": int(iteration),
+                "vertices_below_target_before": int(np.count_nonzero((distances < target_distance) & movable)),
+                "minimum_distance_before": minimum_distance,
+                "uniform_step_mm": 0.0,
+            }
+            if not np.any(movable) or minimum_distance is None or minimum_distance >= target_distance:
+                records.append(record)
+                break
+
+            raw_directions = separation_unit_vectors(
+                candidate[movable],
+                nearest_ids[movable],
+                prefer_outward=False,
+            )
+            smooth_directions = smooth_closed_vectors(
+                raw_directions,
+                direction_iterations,
+                direction_relaxation,
+            )
+            direction_lengths = np.linalg.norm(smooth_directions, axis=1)
+            valid = direction_lengths > 1e-8
+            smooth_directions[valid] /= direction_lengths[valid, None]
+            smooth_directions[~valid] = raw_directions[~valid]
+            # Keep the smoothed field pointing in the local outward direction.
+            direction_sign = np.sum(smooth_directions * raw_directions, axis=1) < 0.0
+            smooth_directions[direction_sign] *= -1.0
+
+            step = min(
+                target_distance - minimum_distance + 1e-3,
+                float(args.rv_distance_max_step) * 0.5,
+            )
+            candidate[movable] += smooth_directions * step
+            record.update({
+                "vertices_corrected": int(np.count_nonzero(movable)),
+                "uniform_step_mm": float(step),
+            })
+            records.append(record)
+        return candidate, records
+
     requested_distance = float(args.rv_min_distance_to_rvepi)
     target = requested_distance + float(args.rv_distance_padding)
     total_direct_moved = np.zeros(len(points), dtype=bool)
@@ -3112,7 +2205,7 @@ def enforce_rvendo_distance_adaptive_opening_ring(
 
     for iteration in range(int(args.rv_distance_iterations)):
         distances, ids = rv_epi_tree.query(points, k=1)
-        movable = (distances < target) & (distances > 1e-8) & (~opening_mask)
+        movable = (distances < target) & (~opening_mask) & (~protected_vertex_mask)
         if not np.any(movable):
             iteration_records.append({
                 "iteration": int(iteration),
@@ -3122,9 +2215,11 @@ def enforce_rvendo_distance_adaptive_opening_ring(
                 "p05_distance_before": float(np.percentile(distances, 5)) if len(distances) else None,
             })
             break
-        nearest = rv_epi_points[ids[movable]]
-        vectors = points[movable] - nearest
-        unit = vectors / np.maximum(np.linalg.norm(vectors, axis=1), 1e-12)[:, None]
+        unit = separation_unit_vectors(
+            points[movable],
+            ids[movable],
+            prefer_outward=force_outward_from_fixed_surface,
+        )
         steps = np.minimum(target - distances[movable], float(args.rv_distance_max_step))
         points[movable] += unit * steps[:, None]
         total_direct_moved[movable] = True
@@ -3139,13 +2234,13 @@ def enforce_rvendo_distance_adaptive_opening_ring(
 
     displacement = points - original_points
     displacement_lengths = np.linalg.norm(displacement, axis=1)
-    support_ids = np.flatnonzero((ring_levels > 0) & total_direct_moved)
+    support_ids = np.flatnonzero((ring_levels > 0) & total_direct_moved & (~protected_vertex_mask))
     support_source = "moved_vertices_in_opening_neighborhood"
     if len(support_ids) < 3:
-        support_ids = np.flatnonzero((~opening_mask) & total_direct_moved)
+        support_ids = np.flatnonzero((~opening_mask) & total_direct_moved & (~protected_vertex_mask))
         support_source = "all_directly_moved_non_opening_vertices"
     if len(support_ids) < 3:
-        support_ids = np.flatnonzero(~opening_mask)
+        support_ids = np.flatnonzero((~opening_mask) & (~protected_vertex_mask))
         support_source = "all_non_opening_vertices_fallback"
 
     ring_displacement_raw = weighted_displacements_from_support(
@@ -3166,9 +2261,15 @@ def enforce_rvendo_distance_adaptive_opening_ring(
         int(args.rv_opening_ring_smooth_iterations),
         float(args.rv_opening_ring_smooth_relaxation),
     )
-    displacement[opening_ids] = ring_displacement_smoothed
+    protected_opening = protected_vertex_mask[opening_ids]
+    ring_displacement_smoothed[protected_opening] = 0.0
+    displacement[opening_ids[~protected_opening]] = ring_displacement_smoothed[~protected_opening]
 
-    extra_opening_ids = np.setdiff1d(np.flatnonzero(opening_mask), opening_ids, assume_unique=False)
+    extra_opening_ids = np.setdiff1d(
+        np.flatnonzero(opening_mask & (~protected_vertex_mask)),
+        opening_ids,
+        assume_unique=False,
+    )
     if len(extra_opening_ids):
         nearest = cKDTree(original_points[opening_ids]).query(original_points[extra_opening_ids], k=1)[1]
         displacement[extra_opening_ids] = ring_displacement_smoothed[np.asarray(nearest, dtype=np.int64)]
@@ -3176,7 +2277,7 @@ def enforce_rvendo_distance_adaptive_opening_ring(
     band_iterations = int(args.rv_opening_band_smooth_iterations)
     band_relaxation = float(args.rv_opening_band_smooth_relaxation)
     if band_iterations > 0 and band_relaxation > 0.0 and np.any(ring_levels > 0):
-        smooth_ids = np.flatnonzero(ring_levels > 0)
+        smooth_ids = np.flatnonzero((ring_levels > 0) & (~protected_vertex_mask))
         max_level = max(int(args.rv_opening_adaptive_rings), 1)
         for _ in range(band_iterations):
             next_displacement = displacement.copy()
@@ -3188,7 +2289,8 @@ def enforce_rvendo_distance_adaptive_opening_ring(
                 weight = band_relaxation * float(max_level - level + 1) / float(max_level + 1)
                 neighbor_mean = displacement[np.asarray(nb, dtype=np.int64)].mean(axis=0)
                 next_displacement[vertex_id] = displacement[vertex_id] + weight * (neighbor_mean - displacement[vertex_id])
-            next_displacement[opening_ids] = ring_displacement_smoothed
+            next_displacement[opening_ids[~protected_opening]] = ring_displacement_smoothed[~protected_opening]
+            next_displacement[protected_vertex_mask] = 0.0
             displacement = next_displacement
 
     ring_floor_records = []
@@ -3198,18 +2300,22 @@ def enforce_rvendo_distance_adaptive_opening_ring(
     for floor_iteration in range(max(int(args.rv_opening_ring_floor_iterations), 0)):
         current_points = original_points + displacement
         ring_distances, ring_epi_ids = rv_epi_tree.query(current_points[opening_ids], k=1)
-        ring_below = ring_distances < requested_distance
+        ring_below = (ring_distances < requested_distance) & (~protected_opening)
+        protected_ring_below = (ring_distances < requested_distance) & protected_opening
         record = {
             "iteration": int(floor_iteration),
             "opening_vertices_below_before": int(np.count_nonzero(ring_below)),
+            "protected_opening_vertices_below_before": int(np.count_nonzero(protected_ring_below)),
             "min_opening_distance_before": float(np.min(ring_distances)) if len(ring_distances) else None,
         }
         if not np.any(ring_below):
             ring_floor_records.append(record)
             break
-        nearest = rv_epi_points[ring_epi_ids[ring_below]]
-        vectors = current_points[opening_ids][ring_below] - nearest
-        unit = vectors / np.maximum(np.linalg.norm(vectors, axis=1), 1e-12)[:, None]
+        unit = separation_unit_vectors(
+            current_points[opening_ids][ring_below],
+            ring_epi_ids[ring_below],
+            prefer_outward=force_outward_from_fixed_surface,
+        )
         steps = np.minimum(requested_distance - ring_distances[ring_below] + ring_floor_padding, float(args.rv_distance_max_step) * 0.5)
         correction = np.zeros((len(opening_ids), 3), dtype=float)
         correction[ring_below] = unit * steps[:, None]
@@ -3219,10 +2325,11 @@ def enforce_rvendo_distance_adaptive_opening_ring(
             float(args.rv_opening_ring_smooth_relaxation),
         )
         correction, limited_floor = limit_displacement_vectors(correction, float(args.rv_distance_max_step) * 0.75)
-        displacement[opening_ids] += correction
+        correction[protected_opening] = 0.0
+        displacement[opening_ids[~protected_opening]] += correction[~protected_opening]
         if np.any(ring_levels > 0):
             for level in range(1, max_level + 1):
-                level_ids = np.flatnonzero(ring_levels == level)
+                level_ids = np.flatnonzero((ring_levels == level) & (~protected_vertex_mask))
                 if len(level_ids) == 0:
                     continue
                 nearest_ring = ring_tree.query(original_points[level_ids], k=1)[1]
@@ -3237,35 +2344,141 @@ def enforce_rvendo_distance_adaptive_opening_ring(
 
     points = original_points + displacement
     final_correction_moved = np.zeros(len(points), dtype=bool)
-    for correction_iteration in range(2):
+    for correction_iteration in range(max(2, int(args.rv_distance_iterations))):
         distances, ids = rv_epi_tree.query(points, k=1)
-        correct = (distances < requested_distance) & (distances > 1e-8) & (~opening_mask)
+        correct = (
+            (distances < requested_distance)
+            & (~protected_vertex_mask)
+            & ((~opening_mask) | force_outward_from_fixed_surface)
+        )
         if not np.any(correct):
             break
-        nearest = rv_epi_points[ids[correct]]
-        vectors = points[correct] - nearest
-        unit = vectors / np.maximum(np.linalg.norm(vectors, axis=1), 1e-12)[:, None]
+        unit = separation_unit_vectors(
+            points[correct],
+            ids[correct],
+            prefer_outward=force_outward_from_fixed_surface,
+        )
         steps = np.minimum(requested_distance - distances[correct] + 1e-3, float(args.rv_distance_max_step) * 0.5)
         points[correct] += unit * steps[:, None]
         final_correction_moved[correct] = True
 
+    opening_ring_post_smoothing_records = []
+    if force_outward_from_fixed_surface and len(opening_ids) >= 3:
+        ring_source_points = original_points[opening_ids].copy()
+        ring_displacement = points[opening_ids] - ring_source_points
+        ring_displacement = smooth_closed_vectors(
+            ring_displacement,
+            int(args.rv_opening_ring_smooth_iterations),
+            float(args.rv_opening_ring_smooth_relaxation),
+        )
+        ring_candidate = ring_source_points + ring_displacement
+        ring_smoothing_target = target
+        ring_candidate, opening_ring_post_smoothing_records = apply_uniform_ring_outward_offset(
+            ring_candidate,
+            ring_smoothing_target,
+            protected_opening,
+            max(4, int(args.rv_distance_iterations) * 3),
+        )
+        points[opening_ids[~protected_opening]] = ring_candidate[~protected_opening]
+
+    displacement = points - original_points
+    displacement[protected_vertex_mask] = 0.0
+    points = original_points + displacement
     final_source_moved = np.linalg.norm(points - original_points, axis=1) > max(float(args.boundary_match_tolerance), 1e-6)
     moved = rv_endo.copy(deep=True)
     moved.points = points
     moved = moved.extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance)
+    post_cleanup_correction_records = []
+    post_cleanup_iterations = max(4, int(args.rv_distance_iterations) * 4)
+    for correction_iteration in range(post_cleanup_iterations):
+        moved_points = np.asarray(moved.points, dtype=float)
+        distances, ids = rv_epi_tree.query(moved_points, k=1)
+        correct = distances < requested_distance
+        if len(protected_vertex_mask) == len(distances):
+            protected_after_cleanup_now = map_source_points_to_target_mask(
+                points[protected_vertex_mask],
+                moved_points,
+                max(float(args.boundary_match_tolerance), float(args.surface_clean_tolerance) * 10.0),
+            )
+            correct &= ~protected_after_cleanup_now
+        # The opening ring is handled by the closed-loop smoothing pass below;
+        # never apply independent cleanup corrections to its vertices.
+        opening_after_cleanup_now = map_source_points_to_target_mask(
+            points[opening_mask],
+            moved_points,
+            max(float(args.boundary_match_tolerance), float(args.surface_clean_tolerance) * 10.0),
+        )
+        correct &= ~opening_after_cleanup_now
+        record = {
+            "iteration": int(correction_iteration),
+            "vertices_below_before": int(np.count_nonzero(correct)),
+            "minimum_distance_before": float(np.min(distances)) if len(distances) else None,
+        }
+        if not np.any(correct):
+            post_cleanup_correction_records.append(record)
+            break
+        unit = separation_unit_vectors(
+            moved_points[correct],
+            ids[correct],
+            prefer_outward=force_outward_from_fixed_surface,
+        )
+        steps = np.minimum(
+            requested_distance - distances[correct] + float(args.rv_distance_padding),
+            float(args.rv_distance_max_step),
+        )
+        moved_points[correct] += unit * steps[:, None]
+        moved.points = moved_points
+        record.update({
+            "vertices_corrected": int(np.count_nonzero(correct)),
+            "maximum_step_mm": float(np.max(steps)) if len(steps) else 0.0,
+        })
+        post_cleanup_correction_records.append(record)
     cleanup_tolerance = max(float(args.boundary_match_tolerance), float(args.surface_clean_tolerance) * 10.0)
     moved_mask = map_source_points_to_target_mask(points[final_source_moved], np.asarray(moved.points, dtype=float), cleanup_tolerance)
     opening_after_cleanup = map_source_points_to_target_mask(points[opening_mask], np.asarray(moved.points, dtype=float), cleanup_tolerance)
+    if force_outward_from_fixed_surface and np.any(opening_after_cleanup):
+        moved_points = np.asarray(moved.points, dtype=float).copy()
+        cleaned_ring_ids = np.flatnonzero(opening_after_cleanup)
+        cleaned_ring_candidate, cleaned_ring_records = apply_uniform_ring_outward_offset(
+            moved_points[cleaned_ring_ids],
+            target,
+            np.zeros(len(cleaned_ring_ids), dtype=bool),
+            max(4, int(args.rv_distance_iterations) * 3),
+        )
+        moved_points[cleaned_ring_ids] = cleaned_ring_candidate
+        moved.points = moved_points
+        opening_ring_post_smoothing_records.append({
+            "post_cleanup_uniform_offset": True,
+            "records": cleaned_ring_records,
+        })
+        opening_after_cleanup = map_source_points_to_target_mask(
+            points[opening_mask],
+            np.asarray(moved.points, dtype=float),
+            cleanup_tolerance,
+        )
     band_after_cleanup = map_source_points_to_target_mask(points[transition_band_mask], np.asarray(moved.points, dtype=float), cleanup_tolerance)
+    protected_after_cleanup = map_source_points_to_target_mask(
+        points[protected_vertex_mask],
+        np.asarray(moved.points, dtype=float),
+        cleanup_tolerance,
+    )
     final_opening_loop = base.make_polyline(points[opening_ids])
 
     final_distances = rv_epi_tree.query(np.asarray(moved.points, dtype=float), k=1)[0]
     below_requested = final_distances < requested_distance
+    protected_below_requested = below_requested & protected_after_cleanup
+    movable_below_requested = below_requested & (~protected_after_cleanup)
     return moved, moved_mask, opening_after_cleanup, band_after_cleanup, final_opening_loop, {
         "method": "fix_RVepi_and_move_RVendo_to_minimum_distance_with_adaptive_openbase_ring",
         "minimum_requested_distance_mm": requested_distance,
         "target_distance_with_padding_mm": target,
         "rv_epi_fixed": True,
+        "force_outward_from_fixed_surface": bool(force_outward_from_fixed_surface),
+        "rvendo_lv_epi_intersection_vertices_frozen": True,
+        "protected_intersection_vertices": int(np.count_nonzero(protected_vertex_mask)),
+        "protected_intersection_vertices_after_cleanup": int(np.count_nonzero(protected_after_cleanup)),
+        "protected_opening_vertices": int(np.count_nonzero(protected_opening)),
+        "movable_vertices": int(np.count_nonzero(~protected_vertex_mask)),
         "rvendo_basal_opening_boundary_frozen": False,
         "rvendo_basal_opening_boundary_adaptive": True,
         "opening_loop_match": opening_match,
@@ -3284,6 +2497,9 @@ def enforce_rvendo_distance_adaptive_opening_ring(
         "adaptive_ring_raw_displacement_max_mm": float(np.max(np.linalg.norm(ring_displacement_raw, axis=1))) if len(ring_displacement_raw) else 0.0,
         "adaptive_ring_final_displacement_mean_mm": float(np.mean(np.linalg.norm(ring_displacement_smoothed, axis=1))) if len(ring_displacement_smoothed) else 0.0,
         "adaptive_ring_final_displacement_max_mm": float(np.max(np.linalg.norm(ring_displacement_smoothed, axis=1))) if len(ring_displacement_smoothed) else 0.0,
+        "opening_ring_post_movement_smoothing_applied": bool(force_outward_from_fixed_surface),
+        "opening_ring_post_movement_smoothing_iterations": int(args.rv_opening_ring_smooth_iterations) if force_outward_from_fixed_surface else 0,
+        "opening_ring_post_movement_smoothing_records": opening_ring_post_smoothing_records,
         "ring_smooth_iterations": int(args.rv_opening_ring_smooth_iterations),
         "ring_smooth_relaxation": float(args.rv_opening_ring_smooth_relaxation),
         "band_smooth_iterations": int(args.rv_opening_band_smooth_iterations),
@@ -3292,6 +2508,8 @@ def enforce_rvendo_distance_adaptive_opening_ring(
         "opening_ring_distance_floor_padding_mm": float(ring_floor_padding),
         "opening_ring_distance_floor_iterations": ring_floor_records,
         "initial_vertices_below_requested_distance": int(np.count_nonzero(initial_distances < requested_distance)) if len(initial_distances) else 0,
+        "initial_protected_vertices_below_requested_distance": int(np.count_nonzero(initial_distances[protected_vertex_mask] < requested_distance)) if np.any(protected_vertex_mask) else 0,
+        "initial_movable_vertices_below_requested_distance": int(np.count_nonzero(initial_distances[~protected_vertex_mask] < requested_distance)) if np.any(~protected_vertex_mask) else 0,
         "initial_opening_vertices_below_requested_distance": int(np.count_nonzero((initial_distances < requested_distance) & opening_mask)) if len(initial_distances) else 0,
         "initial_nonopening_vertices_below_requested_distance": int(np.count_nonzero((initial_distances < requested_distance) & (~opening_mask))) if len(initial_distances) else 0,
         "initial_min_distance_all_vertices": float(np.min(initial_distances)) if len(initial_distances) else None,
@@ -3299,13 +2517,50 @@ def enforce_rvendo_distance_adaptive_opening_ring(
         "iterations": iteration_records,
         "direct_vertices_moved_before_ring_adaptation": int(np.count_nonzero(total_direct_moved)),
         "final_correction_nonopening_vertices_moved": int(np.count_nonzero(final_correction_moved)),
+        "final_correction_opening_vertices_moved": int(np.count_nonzero(final_correction_moved & opening_mask)),
+        "post_cleanup_correction_iterations": post_cleanup_correction_records,
         "total_vertices_moved_after_adaptation": int(np.count_nonzero(final_source_moved)),
         "final_vertices_below_requested_distance": int(np.count_nonzero(below_requested)) if len(final_distances) else 0,
+        "final_protected_vertices_below_requested_distance": int(np.count_nonzero(protected_below_requested)) if len(final_distances) else 0,
+        "final_movable_vertices_below_requested_distance": int(np.count_nonzero(movable_below_requested)) if len(final_distances) else 0,
         "final_nonopening_vertices_below_requested_distance": int(np.count_nonzero(below_requested & (~opening_after_cleanup))) if len(final_distances) else 0,
         "final_adaptive_opening_vertices_below_requested_distance": int(np.count_nonzero(below_requested & opening_after_cleanup)) if len(final_distances) else 0,
         "final_min_distance_all_vertices": float(np.min(final_distances)) if len(final_distances) else None,
         "final_p05_distance_all_vertices": float(np.percentile(final_distances, 5)) if len(final_distances) else None,
     }
+
+
+def enforce_rvepi_distance_adaptive_opening_ring(
+    rv_epi: pv.PolyData,
+    rv_endo: pv.PolyData,
+    opening_loop: pv.PolyData,
+    args: argparse.Namespace,
+) -> Tuple[pv.PolyData, np.ndarray, np.ndarray, np.ndarray, pv.PolyData, Dict[str, object]]:
+    """Move RVepi away from fixed RVendo using the existing adaptive-ring solver."""
+    moved, moved_mask, opening_mask, transition_band_mask, final_opening_loop, info = (
+        enforce_rvendo_distance_adaptive_opening_ring(
+            rv_epi,
+            rv_endo,
+            opening_loop,
+            args,
+            protected_vertex_mask=np.zeros(
+                rv_epi.extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance).n_points,
+                dtype=bool,
+            ),
+            force_outward_from_fixed_surface=True,
+        )
+    )
+    info = dict(info)
+    info.update({
+        "method": "move_RVepi_to_minimum_distance_from_fixed_RVendo_with_adaptive_openbase_ring",
+        "moving_surface": "RVepi",
+        "fixed_surface": "RVendo",
+        "rv_endo_fixed": True,
+        "rv_epi_fixed": False,
+        "movement_side_constraint": "outward_from_fixed_RVendo_surface",
+        "LVepi_intersection_handling": "disabled_for_active_step5",
+    })
+    return moved, moved_mask, opening_mask, transition_band_mask, final_opening_loop, info
 
 
 def rebuild_rv_openbase_annulus_after_step7(
@@ -3396,70 +2651,6 @@ def nearest_eligible_lvepi_vertices_for_guide_points(
     }
 
 
-def closest_distances_to_closed_loop_edges(query_points: np.ndarray, loop_vertices: np.ndarray) -> np.ndarray:
-    queries = np.asarray(query_points, dtype=float).reshape(-1, 3)
-    ring = clean_loop_points(np.asarray(loop_vertices, dtype=float).reshape(-1, 3))
-    if len(ring) < 2:
-        raise RuntimeError("Cannot measure distance to a ring with fewer than two vertices.")
-    starts = ring
-    vectors = np.roll(ring, -1, axis=0) - ring
-    lengths2 = np.sum(vectors * vectors, axis=1)
-    distances = np.empty(len(queries), dtype=float)
-    for first in range(0, len(queries), 512):
-        chunk = queries[first:first + 512]
-        differences = chunk[:, None, :] - starts[None, :, :]
-        fractions = np.clip(np.sum(differences * vectors[None, :, :], axis=2) / np.maximum(lengths2, 1e-12), 0.0, 1.0)
-        residuals = differences - fractions[:, :, None] * vectors[None, :, :]
-        distances[first:first + len(chunk)] = np.sqrt(np.min(np.sum(residuals * residuals, axis=2), axis=1))
-    return distances
-
-
-def minimum_closed_loop_segment_distance(first_vertices: np.ndarray, second_vertices: np.ndarray) -> float:
-    first = clean_loop_points(np.asarray(first_vertices, dtype=float).reshape(-1, 3))
-    second = clean_loop_points(np.asarray(second_vertices, dtype=float).reshape(-1, 3))
-    if len(first) < 2 or len(second) < 2:
-        raise RuntimeError("Cannot compare two interface rings with fewer than two edges.")
-    second_start = second[None, :, :]
-    second_vector = (np.roll(second, -1, axis=0) - second)[None, :, :]
-    second_length2 = np.sum(second_vector * second_vector, axis=2)
-    minimum = np.inf
-    for offset in range(0, len(first), 64):
-        starts = first[offset:offset + 64, None, :]
-        vectors = (np.roll(first, -1, axis=0) - first)[offset:offset + 64, None, :]
-        differences = starts - second_start
-        first_length2 = np.sum(vectors * vectors, axis=2)
-        dot = np.sum(vectors * second_vector, axis=2)
-        first_projection = np.sum(vectors * differences, axis=2)
-        second_projection = np.sum(second_vector * differences, axis=2)
-        denominator = first_length2 * second_length2 - dot * dot
-        nonparallel = denominator > 1e-12 * np.maximum(first_length2 * second_length2, 1e-12)
-        s = np.zeros_like(denominator)
-        t = np.zeros_like(denominator)
-        numerator_s = dot * second_projection - second_length2 * first_projection
-        numerator_t = first_length2 * second_projection - dot * first_projection
-        s[nonparallel] = numerator_s[nonparallel] / denominator[nonparallel]
-        t[nonparallel] = numerator_t[nonparallel] / denominator[nonparallel]
-        interior = nonparallel & (s >= 0.0) & (s <= 1.0) & (t >= 0.0) & (t <= 1.0)
-        if np.any(interior):
-            residual = differences + s[:, :, None] * vectors - t[:, :, None] * second_vector
-            minimum = min(minimum, float(np.min(np.linalg.norm(residual[interior], axis=1))))
-
-        def endpoint_to_segment(endpoint: np.ndarray, start: np.ndarray, vector: np.ndarray, length2: np.ndarray) -> float:
-            delta = endpoint - start
-            fraction = np.clip(np.sum(delta * vector, axis=2) / np.maximum(length2, 1e-12), 0.0, 1.0)
-            residual = delta - fraction[:, :, None] * vector
-            return float(np.min(np.linalg.norm(residual, axis=2)))
-
-        minimum = min(
-            minimum,
-            endpoint_to_segment(starts, second_start, second_vector, second_length2),
-            endpoint_to_segment(starts + vectors, second_start, second_vector, second_length2),
-            endpoint_to_segment(second_start, starts, vectors, first_length2),
-            endpoint_to_segment(second_start + second_vector, starts, vectors, first_length2),
-        )
-    return float(minimum)
-
-
 def select_step7_lvepi_interface_loop_away_from_rvepi_boundary(
     name: str,
     guide_loop: pv.PolyData,
@@ -3467,7 +2658,6 @@ def select_step7_lvepi_interface_loop_away_from_rvepi_boundary(
     rv_epi_surface: pv.PolyData,
     lv_epi_reference: pv.PolyData,
     args: argparse.Namespace,
-    original_lv_epi_reference: Optional[pv.PolyData] = None,
 ) -> Tuple[np.ndarray, pv.PolyData, Dict[str, object]]:
     guide_pts = clean_loop_points(loop_points(guide_loop))
     if len(guide_pts) < 3:
@@ -3484,46 +2674,17 @@ def select_step7_lvepi_interface_loop_away_from_rvepi_boundary(
         raise RuntimeError(f"{name}: LVepi reference surface is empty.")
     neighbors, edge_set = lvepi_vertex_edge_graph(lv_epi.n_points, lv_triangles)
 
-    boundary_distances = np.min(
-        np.vstack([closest_distances_to_closed_loop_edges(lv_points, block) for block in rv_epi_boundary_blocks]),
-        axis=0,
-    )
+    rv_epi_boundary_points = np.vstack(rv_epi_boundary_blocks)
+    boundary_distances = cKDTree(rv_epi_boundary_points).query(lv_points, k=1)[0]
     _, rv_epi_surface_distances = closest_points_on_surface(rv_epi_surface, lv_points)
     requested = float(args.rv_min_distance_to_rvepi)
     tolerance = max(float(getattr(args, "step7_interface_ring_distance_tolerance", 1e-5)), float(args.surface_clean_tolerance) * 100.0)
     eligible_mask = (boundary_distances + tolerance >= requested) & (rv_epi_surface_distances + tolerance >= requested)
-    if original_lv_epi_reference is not None:
-        original_points = np.asarray(original_lv_epi_reference.points, dtype=float)
-        original_match = cKDTree(original_points).query(lv_points, k=1)[0] <= tolerance
-        eligible_mask &= original_match
     if np.count_nonzero(eligible_mask) < 3:
         raise RuntimeError(
             f"{name}: fewer than three LVepi vertices satisfy both Step 7 distance constraints "
             f"(requested={requested:g} mm)."
         )
-
-    # Endpoints alone do not guarantee that an LVepi edge clears the fixed RVepi.
-    # The traced seam may only traverse edges whose interiors also clear it.
-    eligible_neighbors = [set() for _ in range(lv_epi.n_points)]
-    edge_rows = np.asarray(sorted(edge_set), dtype=np.int64).reshape(-1, 2)
-    if len(edge_rows):
-        edge_samples = np.vstack([
-            lv_points[edge_rows[:, 0]] * (1.0 - fraction) + lv_points[edge_rows[:, 1]] * fraction
-            for fraction in (0.25, 0.5, 0.75)
-        ])
-        edge_surface_distance = closest_points_on_surface(rv_epi_surface, edge_samples)[1].reshape(3, -1)
-        edge_ring_distance = np.min(
-            np.vstack([closest_distances_to_closed_loop_edges(edge_samples, block) for block in rv_epi_boundary_blocks]),
-            axis=0,
-        ).reshape(3, -1)
-        edge_allowed = (
-            eligible_mask[edge_rows[:, 0]] & eligible_mask[edge_rows[:, 1]]
-            & np.all(edge_surface_distance + tolerance >= requested, axis=0)
-            & np.all(edge_ring_distance + tolerance >= requested, axis=0)
-        )
-        for first, second in edge_rows[edge_allowed]:
-            eligible_neighbors[int(first)].add(int(second))
-            eligible_neighbors[int(second)].add(int(first))
 
     guide_counts, guide_count_info = step56_candidate_guide_counts(len(guide_pts), args)
     if not guide_counts:
@@ -3567,7 +2728,7 @@ def select_step7_lvepi_interface_loop_away_from_rvepi_boundary(
         node_penalty = guide_distances * proximity_weight
         traced_ids, path_info = trace_lvepi_seed_loop_on_graph_strict_allowed(
             ordered_seed_ids,
-            eligible_neighbors,
+            neighbors,
             lv_points,
             eligible_mask,
             node_penalty,
@@ -3591,15 +2752,10 @@ def select_step7_lvepi_interface_loop_away_from_rvepi_boundary(
         )
         traced_boundary_distances = boundary_distances[traced_ids]
         traced_surface_distances = rv_epi_surface_distances[traced_ids]
-        exact_ring_distance = min(
-            minimum_closed_loop_segment_distance(lv_points[traced_ids], block)
-            for block in rv_epi_boundary_blocks
-        )
         distance_record = {
             "requested_min_distance_mm": float(requested),
             "tolerance_mm": float(tolerance),
             "min_distance_to_fixed_RVepi_boundary_ring": float(np.min(traced_boundary_distances)) if len(traced_boundary_distances) else None,
-            "exact_min_distance_between_RVendo_and_RVepi_ring_segments_mm": float(exact_ring_distance),
             "mean_distance_to_fixed_RVepi_boundary_ring": float(np.mean(traced_boundary_distances)) if len(traced_boundary_distances) else None,
             "p05_distance_to_fixed_RVepi_boundary_ring": float(np.percentile(traced_boundary_distances, 5)) if len(traced_boundary_distances) else None,
             "min_distance_to_fixed_RVepi_surface": float(np.min(traced_surface_distances)) if len(traced_surface_distances) else None,
@@ -3612,8 +2768,6 @@ def select_step7_lvepi_interface_loop_away_from_rvepi_boundary(
             quality.get("valid", False)
             and distance_record["vertices_below_boundary_ring_distance"] == 0
             and distance_record["vertices_below_surface_distance"] == 0
-            and exact_ring_distance + tolerance >= requested
-            and all(int(b) in eligible_neighbors[int(a)] for a, b in zip(traced_ids, np.roll(traced_ids, -1)))
         )
         score = float(quality.get("quality_score", 0.0))
         score += float(distance_record["vertices_below_boundary_ring_distance"] + distance_record["vertices_below_surface_distance"]) * 10000.0
@@ -3657,8 +2811,6 @@ def select_step7_lvepi_interface_loop_away_from_rvepi_boundary(
         "requested_min_distance_to_RVepi_boundary_ring_mm": float(requested),
         "requested_min_distance_to_RVepi_surface_mm": float(requested),
         "eligible_LVepi_vertices": int(np.count_nonzero(eligible_mask)),
-        "original_input_LVepi_vertices_required": bool(original_lv_epi_reference is not None),
-        "eligible_LVepi_edges_after_interior_clearance": int(sum(len(row) for row in eligible_neighbors) // 2),
         "total_LVepi_vertices": int(len(lv_points)),
         "guide_loop": loop_record(guide_loop),
         "fixed_RVepi_boundary_loops": [loop_record(loop) for loop in rv_epi_boundary_loops],
@@ -3678,7 +2830,6 @@ def select_step7_lvepi_interface_loops_away_from_rvepi_boundary(
     rv_epi_surface: pv.PolyData,
     lv_epi_reference: pv.PolyData,
     args: argparse.Namespace,
-    original_lv_epi_reference: Optional[pv.PolyData] = None,
 ) -> Tuple[List[np.ndarray], List[pv.PolyData], Dict[str, object]]:
     if not rv_endo_guide_loops:
         raise RuntimeError("Step 7 requires the Step 6 RVendo/LVepi seam loop as the guide for the new boundary ring.")
@@ -3693,7 +2844,6 @@ def select_step7_lvepi_interface_loops_away_from_rvepi_boundary(
             rv_epi_surface,
             lv_epi_reference,
             args,
-            original_lv_epi_reference,
         )
         vertex_id_loops.append(ids)
         output_loops.append(loop)
@@ -3720,11 +2870,13 @@ def enforce_surface_distance_to_rvepi_preserving_lvepi_boundary(
     tags = np.rint(np.asarray(surface.cell_data.get("elemTag", np.full(len(triangles), int(args.rv_tag), dtype=np.int32))).reshape(-1)).astype(np.int32)
     point_data = {key: np.asarray(value).copy() for key, value in surface.point_data.items() if len(value) == surface.n_points}
     fixed_mask = np.asarray(point_data.get("lvepiSubstituteVertex", np.zeros(surface.n_points, dtype=np.int32))).reshape(-1).astype(bool)
+    rv_epi_points = np.asarray(rv_epi_surface.points, dtype=float)
+    rv_epi_tree = cKDTree(rv_epi_points)
     requested = float(args.rv_min_distance_to_rvepi)
     target = requested + float(args.rv_distance_padding)
     iteration_records: List[Dict[str, object]] = []
     for iteration in range(max(1, int(args.rv_distance_iterations))):
-        nearest_points, distances = closest_points_on_surface(rv_epi_surface, points)
+        distances, ids = rv_epi_tree.query(points, k=1)
         movable = (distances < target) & (distances > 1e-8) & (~fixed_mask)
         iteration_records.append({
             "iteration": int(iteration),
@@ -3735,7 +2887,8 @@ def enforce_surface_distance_to_rvepi_preserving_lvepi_boundary(
         })
         if not np.any(movable):
             break
-        vectors = points[movable] - nearest_points[movable]
+        nearest = rv_epi_points[ids[movable]]
+        vectors = points[movable] - nearest
         unit = vectors / np.maximum(np.linalg.norm(vectors, axis=1), 1e-12)[:, None]
         steps = np.minimum(target - distances[movable], float(args.rv_distance_max_step))
         points[movable] += unit * steps[:, None]
@@ -3751,9 +2904,9 @@ def enforce_surface_distance_to_rvepi_preserving_lvepi_boundary(
     cleanup_tolerance = max(float(args.boundary_match_tolerance), float(args.surface_clean_tolerance) * 10.0)
     moved_mask = map_source_points_to_target_mask(points[moved_mask_source], np.asarray(corrected.points, dtype=float), cleanup_tolerance)
     fixed_after = np.asarray(corrected.point_data.get("lvepiSubstituteVertex", np.zeros(corrected.n_points, dtype=np.int32))).reshape(-1).astype(bool)
-    final_distances = closest_points_on_surface(rv_epi_surface, np.asarray(corrected.points, dtype=float))[1]
+    final_distances = rv_epi_tree.query(np.asarray(corrected.points, dtype=float), k=1)[0] if corrected.n_points else np.empty((0,), dtype=float)
     return corrected, moved_mask, {
-        "method": "final_RVendo_triangle_surface_distance_correction_preserving_selected_original_LVepi_interface_boundary_vertices",
+        "method": "final_RVendo_distance_correction_preserving_selected_original_LVepi_interface_boundary_vertices",
         "fixed_boundary_rule": "lvepiSubstituteVertex points are not moved by final distance correction",
         "requested_min_distance_mm": float(requested),
         "target_distance_with_padding_mm": float(target),
@@ -3769,87 +2922,6 @@ def enforce_surface_distance_to_rvepi_preserving_lvepi_boundary(
     }
 
 
-def step7_repair_collar_with_fill_in_points(
-    stitched: pv.PolyData,
-    lv_epi_open: pv.PolyData,
-    args: argparse.Namespace,
-) -> Tuple[pv.PolyData, Dict[str, object]]:
-    """Split only colliding collar faces; keep both interface loops unchanged."""
-    current = stitched.extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance)
-    implicit = vtk.vtkImplicitPolyDataDistance()
-    implicit.SetInput(lv_epi_open.extract_surface().triangulate())
-    moves = []
-    initial_pairs = step5_self_intersection_pairs(current)
-    for _ in range(min(len(initial_pairs) + 3, 8)):
-        pairs = step5_self_intersection_pairs(current)
-        if not len(pairs):
-            break
-        points = np.asarray(current.points, dtype=float)
-        triangles = base.triangle_faces(current)
-        tags = np.rint(np.asarray(current.cell_data["elemTag"])).astype(np.int32)
-        point_data = {key: np.asarray(value).copy() for key, value in current.point_data.items() if len(value) == len(points)}
-        substitute = np.asarray(point_data.get("lvepiSubstituteVertex", np.zeros(len(points))), dtype=bool)
-        accepted = None
-        for first_face, second_face in pairs:
-            for own_id, other_id in ((int(first_face), int(second_face)), (int(second_face), int(first_face))):
-                if not np.any(substitute[triangles[own_id]]):
-                    continue
-                own = points[triangles[own_id]]
-                other = points[triangles[other_id]]
-                own_normal = np.cross(own[1] - own[0], own[2] - own[0])
-                other_normal = np.cross(other[1] - other[0], other[2] - other[0])
-                separation = own.mean(axis=0) - other.mean(axis=0)
-                for direction in (own_normal, -own_normal, other_normal, -other_normal, separation):
-                    length = float(np.linalg.norm(direction))
-                    if length < 1e-10:
-                        continue
-                    unit = direction / length
-                    for distance in (0.25, 0.5, 1.0, 2.0, 3.0):
-                        fill_point = own.mean(axis=0) + distance * unit
-                        if implicit.EvaluateFunction(fill_point) < 0.01:
-                            continue
-                        a, b, c = map(int, triangles[own_id])
-                        fill_id = len(points)
-                        trial_triangles = np.vstack([
-                            np.delete(triangles, own_id, axis=0),
-                            [[a, b, fill_id], [b, c, fill_id], [c, a, fill_id]],
-                        ])
-                        trial_tags = np.concatenate([np.delete(tags, own_id), np.repeat(tags[own_id], 3)])
-                        trial_data = {}
-                        for key, values in point_data.items():
-                            value = -1 if key.endswith("SourceId") else 0
-                            trial_data[key] = np.concatenate([values, np.asarray([value], dtype=values.dtype)])
-                        trial = compact_tagged_triangle_surface_with_point_data(
-                            np.vstack([points, fill_point]), trial_triangles, trial_tags, trial_data,
-                            args.surface_clean_tolerance,
-                        )
-                        trial_pairs = step5_self_intersection_pairs(trial)
-                        if len(trial_pairs) < len(pairs):
-                            accepted = (trial, int(own_id), float(distance), int(len(trial_pairs)))
-                            break
-                    if accepted is not None:
-                        break
-                if accepted is not None:
-                    break
-            if accepted is not None:
-                break
-        if accepted is None:
-            raise RuntimeError(f"Step 7 cannot remove {len(pairs)} collar self-intersection pairs using local fill-in points.")
-        current, face_id, distance, remaining = accepted
-        moves.append({"split_face_id": face_id, "fill_point_offset_mm": distance, "remaining_pairs": remaining})
-    final_pairs = step5_self_intersection_pairs(current)
-    if len(final_pairs):
-        raise RuntimeError(f"Step 7 retains {len(final_pairs)} self-intersections after local fill-in repair.")
-    return current, {
-        "method": "split_only_colliding_collar_faces_with_internal_fill_in_vertices",
-        "initial_face_pair_count": int(len(initial_pairs)),
-        "final_face_pair_count": 0,
-        "new_boundary_vertices": 0,
-        "internal_fill_in_points_added": int(len(moves)),
-        "moves": moves,
-    }
-
-
 def rebuild_rvendo_lvepi_interface_after_step7(
     name: str,
     moved_core: pv.PolyData,
@@ -3860,8 +2932,6 @@ def rebuild_rvendo_lvepi_interface_after_step7(
     rv_epi_surface: pv.PolyData,
     elem_tag: int,
     args: argparse.Namespace,
-    reverse_seam: bool = False,
-    seam_phase_fraction: float = 0.0,
 ) -> Dict[str, object]:
     moved_core = moved_core.extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance)
     moved_cut_loops: List[pv.PolyData] = []
@@ -3878,51 +2948,25 @@ def rebuild_rvendo_lvepi_interface_after_step7(
         raise RuntimeError(
             f"{name}: moved RV cut loop count ({len(moved_cut_loops)}) does not match new LVepi seam loop count ({len(lv_seam_vertex_id_loops)})."
         )
-    collars = []
-    collar_records = []
-    for cut_loop, seam_ids in zip(moved_cut_loops, lv_seam_vertex_id_loops):
-        collar, record = step5_build_collar(
-            cut_loop, seam_ids, lv_epi_reference, elem_tag, args,
-            reverse_seam=reverse_seam, seam_phase_fraction=seam_phase_fraction,
-        )
-        collars.append(collar)
-        collar_records.append(record)
-    stitch_surface = merge_tagged_triangle_surfaces_with_point_data(collars, args.surface_clean_tolerance)
-    stitch_info = {"method": "ordered_variable_count_step7_collars", "collars": collar_records}
+    stitch_surface, stitch_info = make_lvepi_edge_conforming_stitch_surfaces(
+        name,
+        moved_cut_loops,
+        lv_seam_vertex_id_loops,
+        lv_epi_reference,
+        elem_tag,
+        args,
+    )
     core_tagged = mesh_with_default_step56_point_data(moved_core, elem_tag)
     stitched = merge_tagged_triangle_surfaces_with_point_data(
         [core_tagged, stitch_surface],
         args.surface_clean_tolerance,
     )
-    inherited_pairs = len(step5_self_intersection_pairs(core_tagged))
-    initial_pairs = len(step5_self_intersection_pairs(stitched))
-    if initial_pairs > inherited_pairs:
-        if initial_pairs - inherited_pairs > 3:
-            raise RuntimeError(
-                f"{name}: collar introduces {initial_pairs - inherited_pairs} self-intersecting face pairs; "
-                "try another fixed-loop alignment before local fill-in repair."
-            )
-        stitched, repair_info = step7_repair_collar_with_fill_in_points(stitched, lv_epi_reference, args)
-    else:
-        repair_info = {"initial_face_pair_count": int(initial_pairs), "moves": []}
     corrected, corrected_moved_mask, distance_info = enforce_surface_distance_to_rvepi_preserving_lvepi_boundary(
         name,
         stitched,
         rv_epi_surface,
         args,
     )
-    seam_checks = [step5_validate_fixed_lvepi_seam(corrected, lv_epi_reference, loop, args) for loop in lv_seam_loops]
-    self_pairs = step5_self_intersection_pairs(corrected)
-    if len(self_pairs):
-        raise RuntimeError(f"{name}: final RVendo has {len(self_pairs)} self-intersecting face pairs.")
-    if distance_info["final_vertices_below_requested_distance"]:
-        raise RuntimeError(
-            f"{name}: final RVendo has {distance_info['final_vertices_below_requested_distance']} vertices "
-            "closer than 3 mm to the fixed RVepi triangle surface."
-        )
-    final_loops = base.boundary_loops(corrected)
-    if len(final_loops) != 2:
-        raise RuntimeError(f"{name}: final RVendo has {len(final_loops)} free-edge loops, expected basal and interface loops.")
     substitute_mask = np.asarray(corrected.point_data.get("lvepiSubstituteVertex", np.zeros(corrected.n_points, dtype=np.int32))).reshape(-1).astype(bool)
     return {
         "surface": corrected,
@@ -3940,10 +2984,6 @@ def rebuild_rvendo_lvepi_interface_after_step7(
             "moved_core_cut_loop_match": match_records,
             "new_RVendo_LVepi_boundary_loops": [loop_record(loop) for loop in lv_seam_loops],
             "stitch": stitch_info,
-            "local_self_intersection_repair": repair_info,
-            "final_self_intersection_pairs": 0,
-            "final_boundary_loop_count": int(len(final_loops)),
-            "final_LVepi_shared_seam_contact": seam_checks,
             "distance_correction_after_stitch": distance_info,
             "surface_with_new_lvepi_boundary_ring": surface_summary(corrected),
         },
@@ -3963,115 +3003,14 @@ def loop_record(loop: pv.PolyData) -> Dict[str, object]:
     }
 
 
-def opening_loop_mask_on_surface(surface: pv.PolyData, opening_loop: pv.PolyData, args: argparse.Namespace) -> Tuple[np.ndarray, Dict[str, object]]:
-    surface = surface.extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance)
-    loop_pts = loop_points(opening_loop)
-    surface_pts = np.asarray(surface.points, dtype=float)
-    tolerance = max(float(args.boundary_match_tolerance), float(args.surface_clean_tolerance) * 10.0)
-    mask = map_source_points_to_target_mask(loop_pts, surface_pts, tolerance)
-    fallback_used = False
-    fallback_max_distance = None
-
-    if len(loop_pts) and np.count_nonzero(mask) < max(3, int(0.5 * len(loop_pts))):
-        distances, ids = cKDTree(surface_pts).query(loop_pts, k=1)
-        fallback_used = True
-        fallback_max_distance = float(np.max(distances)) if len(distances) else None
-        fallback_tol = max(tolerance, float(np.percentile(distances, 95)) if len(distances) else tolerance)
-        mask = np.zeros(len(surface_pts), dtype=bool)
-        mask[np.asarray(ids, dtype=np.int64)[distances <= fallback_tol]] = True
-
-    return mask, {
-        "method": "match_RVendo_basal_opening_loop_points_to_step7_input_surface",
-        "loop_points": int(len(loop_pts)),
-        "matched_surface_vertices": int(np.count_nonzero(mask)),
-        "match_tolerance_mm": float(tolerance),
-        "fallback_nearest_point_matching_used": bool(fallback_used),
-        "fallback_max_loop_to_surface_distance_mm": fallback_max_distance,
-    }
 
 
-def significant_boundary_loops(mesh: pv.PolyData, min_fraction: float = 0.02) -> List[pv.PolyData]:
-    loops = base.boundary_loops(mesh.extract_surface().triangulate().clean(tolerance=1e-7))
-    if not loops:
-        return []
-    longest = max(float(loop.length) for loop in loops)
-    selected = [loop for loop in loops if float(loop.length) >= longest * float(min_fraction)]
-    return selected or [loops[0]]
 
 
-def pair_loops(epi_loops: Sequence[pv.PolyData], endo_loops: Sequence[pv.PolyData]) -> List[Tuple[pv.PolyData, pv.PolyData, float]]:
-    candidates: List[Tuple[float, int, int]] = []
-    for epi_id, epi_loop in enumerate(epi_loops):
-        epi_center = loop_points(epi_loop).mean(axis=0)
-        for endo_id, endo_loop in enumerate(endo_loops):
-            endo_center = loop_points(endo_loop).mean(axis=0)
-            candidates.append((float(np.linalg.norm(epi_center - endo_center)), epi_id, endo_id))
-    candidates.sort(key=lambda item: item[0])
-    used_epi = set()
-    used_endo = set()
-    pairs: List[Tuple[pv.PolyData, pv.PolyData, float]] = []
-    for distance, epi_id, endo_id in candidates:
-        if epi_id in used_epi or endo_id in used_endo:
-            continue
-        used_epi.add(epi_id)
-        used_endo.add(endo_id)
-        pairs.append((epi_loops[epi_id], endo_loops[endo_id], distance))
-    return pairs
 
 
-def cap_loop(loop: pv.PolyData) -> pv.PolyData:
-    pts = loop_points(loop)
-    if len(pts) < 3:
-        raise RuntimeError("Cannot cap loop with fewer than three points.")
-    center = pts.mean(axis=0, keepdims=True)
-    cap_points = np.vstack([pts, center])
-    center_id = len(pts)
-    triangles = [[i, (i + 1) % len(pts), center_id] for i in range(len(pts))]
-    return pv.PolyData(cap_points, base.faces_from_triangles(np.asarray(triangles, dtype=np.int64))).extract_surface().triangulate().clean(tolerance=1e-7)
 
 
-def build_rv_closure_surfaces(rv_epi: pv.PolyData, rv_endo: pv.PolyData, args: argparse.Namespace) -> Tuple[List[pv.PolyData], Dict[str, object]]:
-    epi_loops = significant_boundary_loops(rv_epi, min_fraction=0.02)
-    endo_loops = significant_boundary_loops(rv_endo, min_fraction=0.02)
-    pairs = pair_loops(epi_loops, endo_loops)
-    used_epi = {id(pair[0]) for pair in pairs}
-    used_endo = {id(pair[1]) for pair in pairs}
-    surfaces: List[pv.PolyData] = []
-    records = []
-    for pair_id, (epi_loop, endo_loop, distance) in enumerate(pairs):
-        cut = cap_utils.smooth_myocardium_cut_surface(
-            epi_loop,
-            endo_loop,
-            sample_count=args.annulus_loop_points,
-            radial_layers=args.annulus_radial_layers,
-            smooth_iterations=args.annulus_smooth_iterations,
-            smooth_relaxation=args.annulus_smooth_relaxation,
-        )
-        surfaces.append(cut)
-        records.append({
-            "pair_id": int(pair_id),
-            "centroid_distance": float(distance),
-            "epi_loop": loop_record(epi_loop),
-            "endo_loop": loop_record(endo_loop),
-            "cut_surface_points": int(cut.n_points),
-            "cut_surface_faces": int(cut.n_cells),
-        })
-    unmatched_epi = [loop for loop in epi_loops if id(loop) not in used_epi]
-    unmatched_endo = [loop for loop in endo_loops if id(loop) not in used_endo]
-    for loop in unmatched_epi:
-        surfaces.append(cap_loop(loop))
-    for loop in unmatched_endo:
-        surfaces.append(cap_loop(loop))
-    return surfaces, {
-        "epi_loop_count": int(len(epi_loops)),
-        "endo_loop_count": int(len(endo_loops)),
-        "paired_loop_count": int(len(pairs)),
-        "unmatched_epi_loop_count": int(len(unmatched_epi)),
-        "unmatched_endo_loop_count": int(len(unmatched_endo)),
-        "pairs": records,
-        "unmatched_epi": [loop_record(loop) for loop in unmatched_epi],
-        "unmatched_endo": [loop_record(loop) for loop in unmatched_endo],
-    }
 
 
 def merge_surfaces(parts: Sequence[pv.PolyData], tolerance: float) -> pv.PolyData:
@@ -4670,8 +3609,6 @@ def write_custom_surface_vtk(
     triangles: np.ndarray,
     elem_tags: np.ndarray,
     point_data: Optional[Dict[str, np.ndarray]] = None,
-    point_type: str = "float",
-    point_format: str = "%.5f",
 ) -> None:
     """Write triangle surfaces in the same ASCII legacy style as write_custom_vtk."""
     points = np.asarray(points, dtype=float)
@@ -4686,8 +3623,8 @@ def write_custom_surface_vtk(
         handle.write("ASCII\n")
         handle.write("DATASET UNSTRUCTURED_GRID\n\n")
 
-        handle.write(f"POINTS {len(points)} {point_type}\n")
-        np.savetxt(handle, points, fmt=point_format, delimiter=" ")
+        handle.write(f"POINTS {len(points)} float\n")
+        np.savetxt(handle, points, fmt="%.5f", delimiter=" ")
         handle.write("\n")
 
         handle.write(f"CELL_TYPES {len(triangles)}\n")
@@ -4729,6 +3666,76 @@ def write_custom_surface_vtk(
                             handle.write("LOOKUP_TABLE default\n")
                             np.savetxt(handle, flat.astype(float).reshape(-1, 1), fmt="%.6g")
                         handle.write("\n")
+
+
+def write_custom_point_cloud_vtk(
+    filename: Path,
+    points: np.ndarray,
+    elem_tags: np.ndarray,
+    point_data: Optional[Dict[str, np.ndarray]] = None,
+) -> None:
+    """Write a legacy VTK point cloud using one VTK_VERTEX cell per point."""
+    points = np.asarray(points, dtype=float).reshape((-1, 3))
+    elem_tags = np.asarray(elem_tags, dtype=np.int32).reshape(-1)
+    if len(points) != len(elem_tags):
+        raise ValueError(f"Point count {len(points)} does not match elemTag count {len(elem_tags)}.")
+
+    with Path(filename).open("w") as handle:
+        handle.write("# vtk DataFile Version 3.0\n")
+        handle.write("surface point cloud\n")
+        handle.write("ASCII\n")
+        handle.write("DATASET UNSTRUCTURED_GRID\n\n")
+
+        handle.write(f"POINTS {len(points)} float\n")
+        if len(points):
+            np.savetxt(handle, points, fmt="%.5f", delimiter=" ")
+        handle.write("\n")
+
+        handle.write(f"CELLS {len(points)} {2 * len(points)}\n")
+        if len(points):
+            cell_lines = np.column_stack([
+                np.ones(len(points), dtype=np.int32),
+                np.arange(len(points), dtype=np.int32),
+            ])
+            np.savetxt(handle, cell_lines, fmt="%d")
+        handle.write("\n")
+
+        handle.write(f"CELL_TYPES {len(points)}\n")
+        if len(points):
+            np.savetxt(handle, np.ones(len(points), dtype=np.int32), fmt="%d")
+        handle.write("\n")
+
+        handle.write(f"CELL_DATA {len(points)}\n")
+        handle.write("SCALARS elemTag int 1\n")
+        handle.write("LOOKUP_TABLE default\n")
+        if len(elem_tags):
+            np.savetxt(handle, elem_tags.reshape(-1, 1), fmt="%d")
+        handle.write("\n")
+
+        valid_point_data = []
+        for name, values in (point_data or {}).items():
+            array = np.asarray(values)
+            if len(array) == len(points):
+                valid_point_data.append((name, array))
+        if not valid_point_data:
+            return
+
+        handle.write(f"POINT_DATA {len(points)}\n")
+        for name, array in valid_point_data:
+            vtk_name = "".join(char if char.isalnum() or char == "_" else "_" for char in str(name))
+            flat = array.reshape((len(points), -1))[:, 0] if array.ndim != 1 else array
+            if np.issubdtype(flat.dtype, np.integer) or np.issubdtype(flat.dtype, np.bool_):
+                handle.write(f"SCALARS {vtk_name} int 1\n")
+                handle.write("LOOKUP_TABLE default\n")
+                if len(flat):
+                    np.savetxt(handle, flat.astype(np.int32).reshape(-1, 1), fmt="%d")
+            else:
+                handle.write(f"SCALARS {vtk_name} float 1\n")
+                handle.write("LOOKUP_TABLE default\n")
+                if len(flat):
+                    np.savetxt(handle, flat.astype(float).reshape(-1, 1), fmt="%.6g")
+            handle.write("\n")
+
 
 def save_open_shell_stage_outputs(
     pipeline_dir: Path,
@@ -4800,8 +3807,6 @@ def save_triangle_surface_vtk(
     cut_mask: Optional[np.ndarray] = None,
     point_data: Optional[Dict[str, np.ndarray]] = None,
     elem_tag: Optional[int] = None,
-    point_type: str = "float",
-    point_format: str = "%.5f",
 ) -> Dict[str, object]:
     surface = mesh.extract_surface().triangulate().clean(tolerance=1e-7)
     cut_boundary_vertices = None
@@ -4820,10 +3825,7 @@ def save_triangle_surface_vtk(
     triangles = base.triangle_faces(surface)
     elem_tags = cell_tags_for_surface(surface, path, elem_tag)
     surface.cell_data["elemTag"] = elem_tags
-    write_custom_surface_vtk(
-        path, np.asarray(surface.points, dtype=float), triangles, elem_tags,
-        dict(surface.point_data), point_type=point_type, point_format=point_format,
-    )
+    write_custom_surface_vtk(path, np.asarray(surface.points, dtype=float), triangles, elem_tags, dict(surface.point_data))
 
     record = surface_summary(surface)
     tag_counts = Counter(map(int, elem_tags))
@@ -4842,9 +3844,6 @@ def write_custom_line_loop_vtk(
     filename: Path,
     loops: Sequence[pv.PolyData],
     loop_tag: int = 0,
-    duplicate_closing_point: bool = True,
-    point_type: str = "float",
-    point_format: str = "%.5f",
 ) -> Dict[str, object]:
     point_blocks: List[np.ndarray] = []
     line_rows: List[np.ndarray] = []
@@ -4855,11 +3854,10 @@ def write_custom_line_loop_vtk(
         pts = clean_loop_points(loop_points(loop))
         if len(pts) < 2:
             continue
-        closed_pts = np.vstack([pts, pts[0]]) if duplicate_closing_point else pts
+        closed_pts = np.vstack([pts, pts[0]])
         ids = np.arange(offset, offset + len(closed_pts), dtype=np.int64)
         point_blocks.append(closed_pts)
-        closed_ids = ids if duplicate_closing_point else np.concatenate([ids, ids[:1]])
-        line_rows.append(np.concatenate([[len(closed_ids)], closed_ids]).astype(np.int64))
+        line_rows.append(np.concatenate([[len(ids)], ids]).astype(np.int64))
         loop_ids.append(int(loop_id))
         loop_records.append(loop_record(base.make_polyline(pts)))
         offset += len(closed_pts)
@@ -4870,9 +3868,9 @@ def write_custom_line_loop_vtk(
         handle.write("vtk output\n")
         handle.write("ASCII\n")
         handle.write("DATASET POLYDATA\n\n")
-        handle.write(f"POINTS {len(all_points)} {point_type}\n")
+        handle.write(f"POINTS {len(all_points)} float\n")
         if len(all_points):
-            np.savetxt(handle, all_points, fmt=point_format, delimiter=" ")
+            np.savetxt(handle, all_points, fmt="%.5f", delimiter=" ")
         handle.write("\n")
         total_line_size = int(sum(len(row) for row in line_rows))
         handle.write(f"LINES {len(line_rows)} {total_line_size}\n")
@@ -5034,85 +4032,33 @@ def save_rvendo_distance_stage_outputs(
     return paths, summary
 
 
-def save_step7_requested_outputs(
-    pipeline_dir: Path,
-    subject_id: str,
-    frame: str,
-    seam_loop: pv.PolyData,
-    moved_clean: pv.PolyData,
-    rebuilt: pv.PolyData,
-    lv_epi_open: pv.PolyData,
-    rv_epi_fixed: pv.PolyData,
-    rv_epi_interface_loop: pv.PolyData,
-    rv_endo_opening_loop: pv.PolyData,
-    args: argparse.Namespace,
-    original_lv_epi_reference: pv.PolyData,
-) -> Dict[str, str]:
-    pipeline_dir.mkdir(parents=True, exist_ok=True)
-    prefix = f"{subject_id}_{frame}_RVendo_3mm"
-    seam_path = pipeline_dir / f"{prefix}_new_boundary.vtk"
-    clean_path = pipeline_dir / f"{prefix}_clean_surf.vtk"
-    rebuilt_path = pipeline_dir / f"{prefix}_rebuilt_surf.vtk"
-
-    def validate(surface: pv.PolyData, seam: pv.PolyData) -> None:
-        if len(step5_self_intersection_pairs(surface)):
-            raise RuntimeError("Step 7 rebuilt RVendo has face self-intersections.")
-        step5_validate_fixed_lvepi_seam(surface, lv_epi_open, seam, args)
-        if len(base.boundary_loops(surface)) != 2:
-            raise RuntimeError("Step 7 rebuilt RVendo must retain its basal opening and one LVepi interface seam.")
-        match_openbase_loop_on_surface("Step7_final_basal_opening", surface, rv_endo_opening_loop, args)
-        distances = closest_points_on_surface(rv_epi_fixed, np.asarray(surface.points, dtype=float))[1]
-        tolerance = max(float(args.step7_interface_ring_distance_tolerance), 1e-5)
-        if np.any(distances + tolerance < float(args.rv_min_distance_to_rvepi)):
-            raise RuntimeError("Step 7 rebuilt RVendo has vertices within 3 mm of the fixed RVepi surface.")
-        seam_points = clean_loop_points(loop_points(seam))
-        epi_ring_points = clean_loop_points(loop_points(rv_epi_interface_loop))
-        if len(seam_points) < 3 or len(epi_ring_points) < 3:
-            raise RuntimeError("Step 7 cannot validate an empty LVepi/RVepi interface ring.")
-        samples = np.vstack([
-            seam_points * (1.0 - fraction) + np.roll(seam_points, -1, axis=0) * fraction
-            for fraction in (0.0, 0.25, 0.5, 0.75)
-        ])
-        surface_clearance = closest_points_on_surface(rv_epi_fixed, samples)[1]
-        ring_clearance = closest_distances_to_closed_loop_edges(samples, epi_ring_points)
-        if np.any(surface_clearance + tolerance < float(args.rv_min_distance_to_rvepi)) or np.any(
-            ring_clearance + tolerance < float(args.rv_min_distance_to_rvepi)
-        ):
-            raise RuntimeError("Step 7 LVepi seam edges fail the 3 mm RVepi surface/ring clearance.")
-        exact_ring_distance = minimum_closed_loop_segment_distance(seam_points, epi_ring_points)
-        if exact_ring_distance + tolerance < float(args.rv_min_distance_to_rvepi):
-            raise RuntimeError("Step 7 interface rings have a line-segment gap smaller than 3 mm.")
-        lv_points = np.asarray(lv_epi_open.points, dtype=float)
-        seam_vertex_distance = cKDTree(lv_points).query(seam_points, k=1)[0]
-        if np.any(seam_vertex_distance > tolerance):
-            raise RuntimeError("Step 7 seam includes vertices not present on the original open-base LVepi.")
-        original_vertex_distance = cKDTree(np.asarray(original_lv_epi_reference.points, dtype=float)).query(seam_points, k=1)[0]
-        if np.any(original_vertex_distance > tolerance):
-            raise RuntimeError("Step 7 seam includes vertices not present in the original LVepi input VTK.")
-
-    validate(rebuilt, seam_loop)
-    write_custom_line_loop_vtk(
-        seam_path, [seam_loop], loop_tag=int(args.rv_tag), duplicate_closing_point=False,
-        point_type="double", point_format="%.17g",
-    )
-    save_triangle_surface_vtk(
-        clean_path, moved_clean, elem_tag=int(args.rv_tag),
-        point_type="double", point_format="%.17g",
-    )
-    save_triangle_surface_vtk(
-        rebuilt_path, rebuilt, elem_tag=int(args.rv_tag),
-        point_type="double", point_format="%.17g",
-    )
-    saved_seam = pv.read(seam_path)
-    saved_rebuilt = pv.read(rebuilt_path).extract_surface().triangulate()
-    validate(saved_rebuilt, saved_seam)
-    # Replace only the older Step 7 artifacts for this subject and frame.
-    for old_path in pipeline_dir.glob(f"{subject_id}_{frame}_stage07_*"):
-        old_path.unlink()
+def direct_surface_intersection_metrics(
+    name_a: str,
+    surface_a: pv.PolyData,
+    name_b: str,
+    surface_b: pv.PolyData,
+    tolerance: float,
+) -> Dict[str, object]:
+    first = surface_a.extract_surface().triangulate().clean(tolerance=1e-7)
+    second = surface_b.extract_surface().triangulate().clean(tolerance=1e-7)
+    intersector = vtk.vtkIntersectionPolyDataFilter()
+    intersector.SetInputData(0, first)
+    intersector.SetInputData(1, second)
+    if hasattr(intersector, "SetTolerance"):
+        intersector.SetTolerance(float(tolerance))
+    if hasattr(intersector, "SplitFirstOutputOff"):
+        intersector.SplitFirstOutputOff()
+    if hasattr(intersector, "SplitSecondOutputOff"):
+        intersector.SplitSecondOutputOff()
+    intersector.Update()
+    curve = pv.wrap(intersector.GetOutput()).clean(tolerance=float(tolerance))
     return {
-        "RVendo_3mm_new_boundary": str(seam_path.resolve()),
-        "RVendo_3mm_clean_surf": str(clean_path.resolve()),
-        "RVendo_3mm_rebuilt_surf": str(rebuilt_path.resolve()),
+        "surface_a": name_a,
+        "surface_b": name_b,
+        "has_intersection_curve": bool(curve.n_points > 0 or curve.n_cells > 0),
+        "intersection_points": int(curve.n_points),
+        "intersection_cells": int(curve.n_cells),
+        "intersection_length": float(curve.length) if curve.n_points else 0.0,
     }
 
 
@@ -5204,643 +4150,24 @@ def rebuild_openbase_annulus_from_current_surfaces(
     }
 
 
-def step8_edge_faces(triangles: np.ndarray) -> Dict[Tuple[int, int], List[int]]:
-    edges = defaultdict(list)
-    for face_id, face in enumerate(triangles):
-        for a, b in zip(face, np.roll(face, -1)):
-            edges[tuple(sorted((int(a), int(b))))].append(face_id)
-    return dict(edges)
-
-
-def step8_boundary_geometry(surface: pv.PolyData) -> Tuple[set, set]:
-    points = np.asarray(surface.points)
-    faces = base.triangle_faces(surface)
-    directed = np.vstack((faces[:, [0, 1]], faces[:, [1, 2]], faces[:, [2, 0]]))
-    ordered = np.sort(directed, axis=1)
-    unique, counts = np.unique(ordered, axis=0, return_counts=True)
-    boundary = unique[counts == 1]
-    edges = {tuple(sorted((tuple(points[a]), tuple(points[b])))) for a, b in boundary}
-    return edges, {point for edge in edges for point in edge}
-
-
-def step8_contact_is_shared_boundary(
-    first: np.ndarray, second: np.ndarray, allowed_edges: set,
-    allowed_vertices: set, tolerance: float,
-) -> bool:
-    """Classify Open3D contacts, including adjacent and coplanar triangles."""
-    common = np.flatnonzero(np.min(np.linalg.norm(first[:, None] - second[None], axis=2), axis=1) <= tolerance)
-    if not len(common) or len(common) == 3:
-        return False
-    if any(tuple(first[index]) not in allowed_vertices for index in common):
-        return False
-    normals = np.array([np.cross(t[1] - t[0], t[2] - t[0]) for t in (first, second)])
-    normals /= np.linalg.norm(normals, axis=1)[:, None]
-    coplanar = np.max(np.abs((second - first[0]) @ normals[0])) <= tolerance
-    if len(common) == 2:
-        if tuple(sorted(tuple(first[index]) for index in common)) not in allowed_edges:
-            return False
-        if not coplanar:
-            return True
-        a, b = first[common]
-        own = first[next(index for index in range(3) if index not in common)]
-        other = second[np.argmax(np.min(np.linalg.norm(second[:, None] - first[common][None], axis=2), axis=1))]
-        return bool(np.dot(np.cross(b - a, own - a), np.cross(b - a, other - a)) < 0.0)
-    shared = first[common[0]]
-    if coplanar:
-        # Separating axes detect positive-area overlap; collinear edge overlap
-        # needs a separate test because it may have zero area.
-        axes = np.vstack([np.cross(np.roll(t, -1, axis=0) - t, normals[0]) for t in (first, second)])
-        axes /= np.linalg.norm(axes, axis=1)[:, None]
-        p, q = first @ axes.T, second @ axes.T
-        overlaps = np.minimum(p.max(axis=0), q.max(axis=0)) - np.maximum(p.min(axis=0), q.min(axis=0))
-        if np.all(overlaps > tolerance):
-            return False
-        for a, b in zip(first, np.roll(first, -1, axis=0)):
-            direction = (b - a) / np.linalg.norm(b - a)
-            for c, d in zip(second, np.roll(second, -1, axis=0)):
-                if max(np.linalg.norm(np.cross(c - a, direction)), np.linalg.norm(np.cross(d - a, direction))) > tolerance:
-                    continue
-                low, high = sorted((float((c - a) @ direction), float((d - a) @ direction)))
-                if min(float(np.linalg.norm(b - a)), high) - max(0.0, low) > tolerance:
-                    return False
-        return True
-    direction = np.cross(normals[0], normals[1])
-    direction /= max(float(np.linalg.norm(direction)), 1e-30)
-    intervals = []
-    for triangle, plane_point, normal in ((first, second[0], normals[1]), (second, first[0], normals[0])):
-        distances = (triangle - plane_point) @ normal
-        contacts = list(triangle[np.abs(distances) <= tolerance])
-        for index in range(3):
-            following = (index + 1) % 3
-            if distances[index] * distances[following] < 0.0:
-                weight = distances[index] / (distances[index] - distances[following])
-                contacts.append(triangle[index] + weight * (triangle[following] - triangle[index]))
-        if not contacts:
-            return False
-        projected = (np.asarray(contacts) - shared) @ direction
-        intervals.append((float(projected.min()), float(projected.max())))
-    low = max(interval[0] for interval in intervals)
-    high = min(interval[1] for interval in intervals)
-    return bool(low >= -tolerance and high <= tolerance)
-
-
-def step8_annulus_collisions(
-    annulus: pv.PolyData, obstacles: Dict[str, pv.PolyData], tolerance: float = 1e-7,
-) -> Dict[str, List[List[int]]]:
-    """Only annulus contacts are tested; ventricular surfaces are never repaired.
-
-    Exploded annulus vertices prevent Open3D from silently excluding adjacent
-    faces. Expected contact is then allowed only on explicitly shared rims.
-    """
-    own_points = np.asarray(annulus.points, dtype=float)
-    own_faces = base.triangle_faces(annulus)
-    own_triangles = own_points[own_faces]
-    edges, vertices = step8_boundary_geometry(annulus)
-    points = [own_triangles.reshape(-1, 3)]
-    faces = [np.arange(3 * len(own_faces)).reshape(-1, 3)]
-    face_offset, point_offset = len(own_faces), len(points[0])
-    targets = []
-    low, high = own_points.min(axis=0) - tolerance, own_points.max(axis=0) + tolerance
-    for name, surface in obstacles.items():
-        target_points = np.asarray(surface.points, dtype=float)
-        target_faces = base.triangle_faces(surface)
-        triangles = target_points[target_faces]
-        ids = np.flatnonzero(np.all(triangles.max(axis=1) >= low, axis=1) & np.all(triangles.min(axis=1) <= high, axis=1))
-        if not len(ids):
-            continue
-        target_edges, target_vertices = step8_boundary_geometry(surface)
-        targets.append((face_offset, face_offset + len(ids), name, ids, triangles, edges & target_edges, vertices & target_vertices))
-        points.append(target_points)
-        faces.append(target_faces[ids] + point_offset)
-        face_offset += len(ids)
-        point_offset += len(target_points)
-    geometry = o3d.geometry.TriangleMesh(
-        o3d.utility.Vector3dVector(np.vstack(points)),
-        o3d.utility.Vector3iVector(np.vstack(faces).astype(np.int32)),
-    )
-    pairs = np.asarray(geometry.get_self_intersecting_triangles(), dtype=np.int64).reshape(-1, 2)
-    pairs.sort(axis=1)
-    pairs = pairs[pairs[:, 0] < len(own_faces)]
-    all_edges = {tuple(sorted((tuple(own_points[a]), tuple(own_points[b])))) for a, b in step8_edge_faces(own_faces)}
-    all_vertices = set(map(tuple, own_points))
-    bad = {name: [] for name in ("self", *obstacles)}
-    for first_id, second_id in pairs:
-        if second_id < len(own_faces):
-            name, original_id, triangle = "self", second_id, own_triangles[second_id]
-            allowed_edges, allowed_vertices = all_edges, all_vertices
-        else:
-            start, _, name, ids, triangles, allowed_edges, allowed_vertices = next(item for item in targets if item[0] <= second_id < item[1])
-            original_id = ids[second_id - start]
-            triangle = triangles[original_id]
-        if not step8_contact_is_shared_boundary(own_triangles[first_id], triangle, allowed_edges, allowed_vertices, tolerance):
-            bad[name].append([int(first_id), int(original_id)])
-    return bad
-
-
-def step8_validate_annulus_topology(annulus: pv.PolyData, reference: pv.PolyData) -> None:
-    points = np.asarray(annulus.points)
-    faces = base.triangle_faces(annulus)
-    if not np.all(np.isfinite(points)) or not len(faces):
-        raise RuntimeError("Step 8 annulus has invalid coordinates or no faces.")
-    double_area = np.linalg.norm(np.cross(points[faces[:, 1]] - points[faces[:, 0]], points[faces[:, 2]] - points[faces[:, 0]]), axis=1)
-    if np.any(double_area <= 1e-12) or len(np.unique(np.sort(faces, axis=1), axis=0)) != len(faces):
-        raise RuntimeError("Step 8 annulus contains degenerate or duplicate faces.")
-    edges = step8_edge_faces(faces)
-    if any(len(ids) > 2 for ids in edges.values()) or len(points) - len(edges) + len(faces) != 0:
-        raise RuntimeError("Step 8 annulus is not a manifold annular strip.")
-    if step8_boundary_geometry(annulus)[0] != step8_boundary_geometry(reference)[0]:
-        raise RuntimeError("Step 8 annulus changed its fixed boundary vertices or edges.")
-    neighbors = defaultdict(set)
-    for ids in edges.values():
-        if len(ids) == 2:
-            neighbors[ids[0]].add(ids[1])
-            neighbors[ids[1]].add(ids[0])
-    reached, pending = set(), [0]
-    while pending:
-        face_id = pending.pop()
-        if face_id not in reached:
-            reached.add(face_id)
-            pending.extend(neighbors[face_id] - reached)
-    if len(reached) != len(faces) or len(base.boundary_loops(annulus)) != 2:
-        raise RuntimeError("Step 8 annulus has disconnected parts or an extra opening.")
-
-
-class Step8AnnulusRepairError(RuntimeError):
-    def __init__(self, message: str, diagnostics: Dict[str, object]):
-        super().__init__(message)
-        self.diagnostics = diagnostics
-
-
-def step8_boundary_crossings(
-    annulus: pv.PolyData, obstacles: Dict[str, pv.PolyData], tolerance: float,
-) -> List[Dict[str, object]]:
-    """Return unintended intersections between annulus rim edges and faces."""
-    edges, vertices = step8_boundary_geometry(annulus)
-    crossings = []
-    for name, surface in obstacles.items():
-        locator = vtk.vtkStaticCellLocator()
-        locator.SetDataSet(surface)
-        locator.BuildLocator()
-        target_edges, target_vertices = step8_boundary_geometry(surface)
-        shared_edges = edges & target_edges
-        shared_vertices = vertices & target_vertices
-        for edge in sorted(edges):
-            a, b = np.asarray(edge, dtype=float)
-            low, high = np.minimum(a, b) - tolerance, np.maximum(a, b) + tolerance
-            cell_ids = vtk.vtkIdList()
-            locator.FindCellsWithinBounds(np.column_stack([low, high]).ravel(), cell_ids)
-            for index in range(cell_ids.GetNumberOfIds()):
-                face_id = cell_ids.GetId(index)
-                cell = surface.GetCell(face_id)
-                triangle = np.array([cell.GetPoints().GetPoint(i) for i in range(3)])
-                matches = np.min(np.linalg.norm(np.array([a, b])[:, None] - triangle[None], axis=2), axis=1) <= tolerance
-                if np.all(matches) and edge in shared_edges:
-                    continue
-                parameter, sub_id = vtk.reference(0.0), vtk.reference(0)
-                contact, pcoords = [0.0] * 3, [0.0] * 3
-                if not cell.IntersectWithLine(a, b, tolerance, parameter, contact, pcoords, sub_id):
-                    continue
-                if any(tuple(endpoint) in shared_vertices and np.linalg.norm(np.asarray(contact) - endpoint) <= tolerance for endpoint in (a, b)):
-                    continue
-                crossings.append({"surface": name, "surface_face_id": int(face_id),
-                                  "fixed_boundary_edge": [a.tolist(), b.tolist()],
-                                  "surface_triangle": triangle.tolist(), "intersection_point": contact,
-                                  "edge_parameter": float(parameter)})
-    return crossings
-
-
-def step8_direct_boundary_map(
-    annulus: pv.PolyData, epi: pv.PolyData, endo: pv.PolyData, tolerance: float,
-) -> Tuple[np.ndarray, np.ndarray]:
-    """Map every direct-annulus vertex to exactly one source opening rim."""
-    points = np.asarray(annulus.points, dtype=float)
-    epi_distance, epi_ids = cKDTree(np.asarray(epi.points, dtype=float)).query(points)
-    endo_distance, endo_ids = cKDTree(np.asarray(endo.points, dtype=float)).query(points)
-    match_tolerance = max(float(tolerance) * 100.0, 1e-5)
-    on_epi = epi_distance <= match_tolerance
-    on_endo = endo_distance <= match_tolerance
-    if np.any(on_epi == on_endo):
-        raise RuntimeError("Step 8 direct annulus vertices do not map uniquely to epi or endo opening boundaries.")
-    source_kind = np.where(on_epi, 0, 1).astype(np.int8)
-    source_id = np.where(on_epi, epi_ids, endo_ids).astype(np.int64)
-    return source_kind, source_id
-
-
-def step8_triangle_geometry_is_valid(candidate: pv.PolyData, reference: pv.PolyData) -> bool:
-    if candidate.n_points != reference.n_points or candidate.n_cells != reference.n_cells:
-        return False
-    faces = base.triangle_faces(reference)
-    if not np.array_equal(base.triangle_faces(candidate), faces):
-        return False
-    old = np.asarray(reference.points, dtype=float)[faces]
-    new = np.asarray(candidate.points, dtype=float)[faces]
-    old_cross = np.cross(old[:, 1] - old[:, 0], old[:, 2] - old[:, 0])
-    new_cross = np.cross(new[:, 1] - new[:, 0], new[:, 2] - new[:, 0])
-    old_area = np.linalg.norm(old_cross, axis=1)
-    new_area = np.linalg.norm(new_cross, axis=1)
-    valid = new_area > np.maximum(old_area * 1e-5, 1e-12)
-    valid &= np.einsum("ij,ij->i", old_cross, new_cross) > -1e-10 * old_area * new_area
-    return bool(np.all(valid))
-
-
-def step8_pair_set(surface: pv.PolyData) -> set:
-    return {tuple(sorted(map(int, pair))) for pair in step5_self_intersection_pairs(surface)}
-
-
-def step8_apply_boundary_displacements(
-    annulus: pv.PolyData,
-    epi: pv.PolyData,
-    endo: pv.PolyData,
-    source_kind: np.ndarray,
-    source_id: np.ndarray,
-    displacements: Dict[int, np.ndarray],
-) -> Tuple[pv.PolyData, pv.PolyData, pv.PolyData]:
-    trial_annulus = annulus.copy(deep=True)
-    trial_epi = epi.copy(deep=True)
-    trial_endo = endo.copy(deep=True)
-    annulus_points = np.asarray(trial_annulus.points, dtype=float).copy()
-    epi_points = np.asarray(trial_epi.points, dtype=float).copy()
-    endo_points = np.asarray(trial_endo.points, dtype=float).copy()
-    for annulus_id, displacement in displacements.items():
-        annulus_points[annulus_id] += displacement
-        if source_kind[annulus_id] == 0:
-            epi_points[source_id[annulus_id]] = annulus_points[annulus_id]
-        elif source_kind[annulus_id] == 1:
-            endo_points[source_id[annulus_id]] = annulus_points[annulus_id]
-        else:
-            raise RuntimeError(f"Step 8 annulus point {annulus_id} has an invalid source kind.")
-    trial_annulus.points = annulus_points
-    trial_epi.points = epi_points
-    trial_endo.points = endo_points
-    return trial_epi, trial_endo, trial_annulus
-
-
-def step8_direct_state_metrics(
-    annulus: pv.PolyData,
-    epi: pv.PolyData,
-    endo: pv.PolyData,
-    external_obstacles: Dict[str, pv.PolyData],
-    tolerance: float,
-) -> Tuple[Dict[str, pv.PolyData], List[Dict[str, object]], Dict[str, List[List[int]]]]:
-    obstacles = {"epi": epi, "endo": endo, **external_obstacles}
-    crossings = step8_boundary_crossings(annulus, obstacles, tolerance)
-    collisions = step8_annulus_collisions(annulus, obstacles, tolerance)
-    return obstacles, crossings, collisions
-
-
-def step8_collision_constraints(
-    annulus: pv.PolyData,
-    obstacles: Dict[str, pv.PolyData],
-    crossings: List[Dict[str, object]],
-    collisions: Dict[str, List[List[int]]],
-    source_kind: np.ndarray,
-) -> Tuple[List[Dict[str, object]], List[Dict[str, object]]]:
-    points = np.asarray(annulus.points, dtype=float)
-    tree = cKDTree(points)
-    constraints = []
-    blocked = []
-    crossing_groups = {}
-    for record in crossings:
-        distances, ids = tree.query(np.asarray(record["fixed_boundary_edge"], dtype=float))
-        if np.max(distances) > 1e-5:
-            continue
-        key = (record["surface"], int(record["surface_face_id"]))
-        group = crossing_groups.setdefault(key, {"ids": set(), "triangle": record["surface_triangle"]})
-        group["ids"].update(int(point_id) for point_id in ids)
-        if record["surface"] in ("epi", "endo"):
-            triangle_distance, triangle_ids = tree.query(np.asarray(record["surface_triangle"], dtype=float))
-            group["ids"].update(
-                int(point_id) for point_id, distance in zip(triangle_ids, triangle_distance)
-                if distance <= 1e-5
-            )
-    for (surface_name, face_id), group in crossing_groups.items():
-        if not group["ids"]:
-            blocked.append({
-                "source": f"boundary/{surface_name}/face_{face_id}",
-                "reason": "intersection_contains_no_movable_opening_boundary_point",
-                "obstacle_triangle": group["triangle"],
-            })
-            continue
-        constraints.append({
-            "annulus_vertex_ids": np.asarray(sorted(group["ids"]), dtype=np.int64),
-            "obstacle_triangle": np.asarray(group["triangle"], dtype=float),
-            "source": f"boundary/{surface_name}/face_{face_id}",
-        })
-    faces = base.triangle_faces(annulus)
-    for obstacle_name, pairs in collisions.items():
-        if not pairs:
-            continue
-        for first_id, second_id in pairs:
-            obstacle_triangle = (
-                points[faces[second_id]] if obstacle_name == "self"
-                else np.asarray(obstacles[obstacle_name].points)[base.triangle_faces(obstacles[obstacle_name])[second_id]]
-            )
-            movable = faces[first_id].astype(np.int64)
-            if obstacle_name == "self":
-                movable = np.unique(np.concatenate((movable, faces[second_id].astype(np.int64))))
-            elif obstacle_name in ("epi", "endo"):
-                obstacle_distance, obstacle_ids = tree.query(obstacle_triangle)
-                movable = np.unique(np.concatenate((movable, obstacle_ids[obstacle_distance <= 1e-5])))
-            if not len(movable):
-                blocked.append({
-                    "source": f"face/{obstacle_name}",
-                    "reason": "intersection_contains_no_movable_opening_boundary_point",
-                    "annulus_face_id": int(first_id),
-                    "obstacle_face_id": int(second_id),
-                })
-                continue
-            constraints.append({
-                "annulus_vertex_ids": movable,
-                "obstacle_triangle": np.asarray(obstacle_triangle, dtype=float),
-                "source": f"face/{obstacle_name}",
-            })
-    return constraints, blocked
-
-
-def repair_step8_direct_annulus_boundaries(
-    name: str,
-    epi: pv.PolyData,
-    endo: pv.PolyData,
-    annulus: pv.PolyData,
-    external_obstacles: Dict[str, pv.PolyData],
-    profile,
-    args: argparse.Namespace,
-) -> Tuple[pv.PolyData, pv.PolyData, pv.PolyData, Dict[str, object]]:
-    """Resolve direct-annulus collisions by minimally moving epi/endo rim vertices."""
-    tolerance = max(float(args.surface_clean_tolerance), 1e-7)
-    current_epi = epi.copy(deep=True)
-    current_endo = endo.copy(deep=True)
-    current_annulus = annulus.copy(deep=True)
-    reference_epi = epi.copy(deep=True)
-    reference_endo = endo.copy(deep=True)
-    reference_annulus = annulus.copy(deep=True)
-    source_kind, source_id = step8_direct_boundary_map(current_annulus, current_epi, current_endo, tolerance)
-    boundary_edges = np.asarray([edge for edge, incident in step8_edge_faces(base.triangle_faces(current_annulus)).items() if len(incident) == 1])
-    edge_lengths = np.linalg.norm(current_annulus.points[boundary_edges[:, 0]] - current_annulus.points[boundary_edges[:, 1]], axis=1)
-    local_scale = max(float(np.median(edge_lengths)), 1e-6)
-    max_displacement = local_scale * float(args.step8_boundary_max_displacement_edge_fraction)
-    adjacency = defaultdict(set)
-    for a, b in boundary_edges:
-        adjacency[int(a)].add(int(b))
-        adjacency[int(b)].add(int(a))
-
-    baseline_self = {
-        "epi": step8_pair_set(current_epi),
-        "endo": step8_pair_set(current_endo),
-    }
-    baseline_epi_endo = len(step8_annulus_collisions(current_epi, {"endo": current_endo}, tolerance)["endo"])
-    obstacles, crossings, collisions = step8_direct_state_metrics(
-        current_annulus, current_epi, current_endo, external_obstacles, tolerance,
-    )
-    initial_counts = {
-        "boundary_crossings": int(len(crossings)),
-        "collision_pairs": {key: int(len(value)) for key, value in collisions.items()},
-    }
-    history = []
-
-    for round_id in range(max(0, int(args.step8_boundary_repair_rounds))):
-        current_crossings = len(crossings)
-        current_collisions = sum(map(len, collisions.values()))
-        current_key = (current_crossings + current_collisions, current_crossings, current_collisions)
-        if current_key[0] == 0:
-            break
-        constraints, blocked = step8_collision_constraints(
-            current_annulus, obstacles, crossings, collisions, source_kind,
-        )
-        if blocked:
-            raise Step8AnnulusRepairError(
-                f"Step 8 {name}: an intersection contains no movable opening-boundary point.",
-                {"chamber": name, "reason": "intersection_not_repairable_by_opening_boundary",
-                 "blocked_intersections": blocked, "boundary_crossings": crossings,
-                 "collision_pairs": collisions, "repair_rounds": history,
-                 "surface_interiors_unchanged": True, "accepted_outputs_replaced": False},
-            )
-        ranked_candidates = []
-
-        def register_candidate(displacements: Dict[int, np.ndarray], details: Dict[str, object]) -> bool:
-            trial_epi, trial_endo, trial_annulus = step8_apply_boundary_displacements(
-                current_annulus, current_epi, current_endo, source_kind, source_id, displacements,
-            )
-            cumulative = np.linalg.norm(trial_annulus.points - reference_annulus.points, axis=1)
-            if np.max(cumulative) > max_displacement:
-                return False
-            if not all((
-                step8_triangle_geometry_is_valid(trial_annulus, reference_annulus),
-                step8_triangle_geometry_is_valid(trial_epi, reference_epi),
-                step8_triangle_geometry_is_valid(trial_endo, reference_endo),
-            )):
-                return False
-            trial_obstacles, trial_crossings, trial_collisions = step8_direct_state_metrics(
-                trial_annulus, trial_epi, trial_endo, external_obstacles, tolerance,
-            )
-            crossing_count = len(trial_crossings)
-            collision_count = sum(map(len, trial_collisions.values()))
-            trial_key = (crossing_count + collision_count, crossing_count, collision_count)
-            if trial_key >= current_key:
-                return False
-            displacement = trial_annulus.points - reference_annulus.points
-            smoothness = sum(
-                float(np.dot(displacement[a] - displacement[b], displacement[a] - displacement[b]))
-                for a, b in boundary_edges
-            )
-            objective = float(np.sum(displacement * displacement) + 0.1 * smoothness)
-            ranked_candidates.append((
-                (*trial_key, objective), trial_epi, trial_endo, trial_annulus,
-                trial_obstacles, trial_crossings, trial_collisions,
-                {**details, "moved_annulus_point_ids": sorted(displacements)},
-            ))
-            return trial_key[0] == 0
-
-        core_ids = sorted({
-            int(point_id)
-            for constraint in constraints
-            for point_id in np.asarray(constraint["annulus_vertex_ids"], dtype=np.int64)
-        })
-        basal_direction = np.array([0.0, 0.0, 1.0 if profile.base_side == "high_z" else -1.0])
-        normals = []
-        for constraint in constraints:
-            triangle = np.asarray(constraint["obstacle_triangle"], dtype=float)
-            normal = np.cross(triangle[1] - triangle[0], triangle[2] - triangle[0])
-            normal_length = float(np.linalg.norm(normal))
-            if normal_length <= 1e-12:
-                continue
-            normal /= normal_length
-            if np.dot(normal, basal_direction) < 0.0:
-                normal *= -1.0
-            normals.append(normal)
-        basal_directions = [("coherent_apical", -basal_direction), ("coherent_basal", basal_direction)]
-        normal_directions = []
-        if normals:
-            mean_normal = np.sum(normals, axis=0)
-            mean_length = float(np.linalg.norm(mean_normal))
-            if mean_length > 1e-12:
-                mean_normal /= mean_length
-                normal_directions = [("coherent_mean_normal", mean_normal),
-                                     ("coherent_opposite_mean_normal", -mean_normal)]
-
-        def generate_coherent_candidates(directions: List[Tuple[str, np.ndarray]]) -> None:
-            for expansion_rings in (0, 1, 2):
-                layers = {point_id: 0 for point_id in core_ids}
-                frontier = set(core_ids)
-                for depth in range(1, expansion_rings + 1):
-                    frontier = {
-                        neighbor for point_id in frontier for neighbor in adjacency[point_id]
-                        if neighbor not in layers
-                    }
-                    for point_id in frontier:
-                        layers[point_id] = depth
-                for direction_name, direction in directions:
-                    for displacement_fraction in (0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.5, 0.75, 1.0):
-                        amount = local_scale * displacement_fraction
-                        displacements = {
-                            point_id: direction * amount * (0.5 ** depth)
-                            for point_id, depth in layers.items()
-                        }
-                        collision_free = register_candidate(displacements, {
-                            "constraint": "coherent_collision_patch",
-                            "direction": direction_name,
-                            "displacement_fraction": displacement_fraction,
-                            "boundary_expansion_rings": expansion_rings,
-                        })
-                        if collision_free:
-                            break
-
-        generate_coherent_candidates(basal_directions)
-        if not ranked_candidates and normal_directions:
-            generate_coherent_candidates(normal_directions)
-
-        # A local plane-normal move remains useful for isolated contacts. Limit
-        # this fallback because exact full-surface intersection tests are costly.
-        for constraint in ([] if ranked_candidates else constraints[:8]):
-            annulus_ids = np.asarray(constraint["annulus_vertex_ids"], dtype=np.int64)
-            triangle = np.asarray(constraint["obstacle_triangle"], dtype=float)
-            normal = np.cross(triangle[1] - triangle[0], triangle[2] - triangle[0])
-            normal_length = float(np.linalg.norm(normal))
-            if normal_length <= 1e-12:
-                continue
-            normal /= normal_length
-            signed_distance = (current_annulus.points[annulus_ids] - triangle[0]) @ normal
-            for side in (-1.0, 1.0):
-                # Plane-normal movement is the minimum Euclidean displacement
-                # that places the crossing rim edge on one side of the face.
-                direction = side * normal
-                for clearance_fraction in (1e-4, 2.5e-4, 5e-4, 1e-3, 2.5e-3, 5e-3):
-                    clearance = local_scale * clearance_fraction
-                    required = np.maximum(0.0, clearance - side * signed_distance)
-                    if not np.any(required > 0.0):
-                        continue
-                    direct = {int(point_id): direction * amount for point_id, amount in zip(annulus_ids, required) if amount > 0.0}
-                    for blend in (0.0, 0.15):
-                        displacements = {point_id: value.copy() for point_id, value in direct.items()}
-                        if blend:
-                            for point_id, value in direct.items():
-                                for neighbor in adjacency[point_id]:
-                                    if neighbor not in direct:
-                                        displacements[neighbor] = displacements.get(neighbor, np.zeros(3)) + blend * value
-                        register_candidate(displacements, {
-                            "constraint": constraint["source"], "side": int(side),
-                            "direction": "minimum_plane_normal", "clearance_fraction": clearance_fraction,
-                            "neighbor_blend": blend,
-                        })
-        best = None
-        for candidate in sorted(ranked_candidates, key=lambda item: item[0]):
-            _, trial_epi, trial_endo, _, _, _, _, _ = candidate
-            if step8_pair_set(trial_epi) - baseline_self["epi"]:
-                continue
-            if step8_pair_set(trial_endo) - baseline_self["endo"]:
-                continue
-            epi_endo_pairs = len(step8_annulus_collisions(trial_epi, {"endo": trial_endo}, tolerance)["endo"])
-            if epi_endo_pairs > baseline_epi_endo:
-                continue
-            if name == "RV":
-                rv_distance = closest_points_on_surface(trial_epi, np.asarray(trial_endo.points, dtype=float))[1]
-                if np.min(rv_distance) + float(args.step7_interface_ring_distance_tolerance) < float(args.rv_min_distance_to_rvepi):
-                    continue
-            best = candidate
-            break
-        if best is None:
-            raise Step8AnnulusRepairError(
-                f"Step 8 {name}: no valid boundary displacement reduces the remaining intersections.",
-                {"chamber": name, "reason": "boundary_displacement_search_exhausted",
-                 "boundary_crossings": crossings, "collision_pairs": collisions, "repair_rounds": history},
-            )
-        _, current_epi, current_endo, current_annulus, obstacles, crossings, collisions, accepted = best
-        accepted["round"] = round_id + 1
-        accepted["boundary_crossings_after"] = len(crossings)
-        accepted["collision_pairs_after"] = {key: len(value) for key, value in collisions.items()}
-        accepted["max_cumulative_displacement_mm"] = float(np.max(np.linalg.norm(current_annulus.points - reference_annulus.points, axis=1)))
-        history.append(accepted)
-        log_stage(f"Step 8 {name} boundary repair round {round_id + 1}: {len(crossings)} rim crossings, {sum(map(len, collisions.values()))} collision pairs")
-
-    if crossings or any(collisions.values()):
-        raise Step8AnnulusRepairError(
-            f"Step 8 {name}: boundary repair limit reached before all intersections were removed.",
-            {"chamber": name, "reason": "boundary_repair_limit_reached",
-             "boundary_crossings": crossings, "collision_pairs": collisions, "repair_rounds": history},
-        )
-    epi_self_pairs = step8_pair_set(current_epi)
-    if epi_self_pairs - baseline_self["epi"]:
-        raise RuntimeError(f"Step 8 {name} introduced a new epi self-intersection.")
-    endo_self_pairs = step8_pair_set(current_endo)
-    if endo_self_pairs:
-        raise Step8AnnulusRepairError(
-            f"Step 8 {name}: endo still has a self-intersection after boundary repair.",
-            {"chamber": name, "reason": "endo_self_intersection_remains",
-             "endo_self_intersection_pairs": sorted(endo_self_pairs), "repair_rounds": history},
-        )
-    final_epi_endo = step8_annulus_collisions(current_epi, {"endo": current_endo}, tolerance)["endo"]
-    if final_epi_endo:
-        raise Step8AnnulusRepairError(
-            f"Step 8 {name}: epi and endo still intersect after boundary repair.",
-            {"chamber": name, "reason": "epi_endo_intersection_remains",
-             "epi_endo_intersection_pairs": final_epi_endo, "repair_rounds": history},
-        )
-    np.testing.assert_array_equal(current_epi.faces, reference_epi.faces)
-    if name == "RV":
-        final_distance = closest_points_on_surface(current_epi, np.asarray(current_endo.points, dtype=float))[1]
-        if np.min(final_distance) + float(args.step7_interface_ring_distance_tolerance) < float(args.rv_min_distance_to_rvepi):
-            raise RuntimeError("Step 8 RV boundary repair violated the 3 mm RVendo-to-RVepi distance.")
-    step8_validate_annulus_topology(current_annulus, current_annulus)
-    displacement = np.linalg.norm(current_annulus.points - reference_annulus.points, axis=1)
-    moved = np.flatnonzero(displacement > 0.0)
-    moved_epi = moved[source_kind[moved] == 0]
-    moved_endo = moved[source_kind[moved] == 1]
-    return current_epi, current_endo, current_annulus, {
-        "method": "direct_zipper_annulus_minimum_epi_endo_opening_boundary_displacement",
-        "initial": initial_counts,
-        "final": {"boundary_crossings": 0, "collision_pairs": {key: 0 for key in collisions}},
-        "local_boundary_edge_scale_mm": local_scale,
-        "maximum_allowed_displacement_mm": max_displacement,
-        "moved_epi_boundary_point_count": int(len(moved_epi)),
-        "moved_epi_annulus_point_ids": moved_epi.astype(int).tolist(),
-        "moved_endo_boundary_point_count": int(len(moved_endo)),
-        "moved_endo_annulus_point_ids": moved_endo.astype(int).tolist(),
-        "maximum_boundary_displacement_mm": float(np.max(displacement)) if len(displacement) else 0.0,
-        "mean_moved_boundary_displacement_mm": float(np.mean(displacement[moved])) if len(moved) else 0.0,
-        "epi_interior_points_moved": False,
-        "endo_interior_points_moved": False,
-        "surface_connectivity_unchanged": True,
-        "annulus_connectivity_unchanged": True,
-        "added_points": 0,
-        "repair_rounds": history,
-        "annulus": surface_summary(current_annulus),
-    }
-
-
-def rebuild_step8_openbase_surfaces(
+def fix_intersections_and_rebuild_new_surfaces(
     lv_epi_open: pv.PolyData,
     lv_endo_open: pv.PolyData,
     rv_epi: pv.PolyData,
     rv_endo: pv.PolyData,
+    lv_epi_intersection_reference: pv.PolyData,
     lv_profile,
     rv_profile,
     args: argparse.Namespace,
-) -> Tuple[Dict[str, pv.PolyData], Dict[str, object]]:
-    lv_epi_fixed, lv_endo_fixed, rv_epi_fixed, rv_endo_fixed = [
-        surface.copy(deep=True) for surface in (lv_epi_open, lv_endo_open, rv_epi, rv_endo)
-    ]
-    for surface, tag in ((lv_epi_fixed, args.lv_tag), (lv_endo_fixed, args.lv_tag), (rv_epi_fixed, args.rv_tag), (rv_endo_fixed, args.rv_tag)):
-        surface.cell_data["elemTag"] = np.full(surface.n_cells, int(tag), dtype=np.int32)
+) -> Tuple[Dict[str, pv.PolyData], Dict[str, np.ndarray], Dict[str, object]]:
+    lv_epi_fixed = tagged_surface(lv_epi_open.extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance), args.lv_tag)
+    lv_endo_fixed = tagged_surface(lv_endo_open.extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance), args.lv_tag)
+    rv_epi_fixed = tagged_surface(rv_epi.extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance), args.rv_tag)
+    rv_endo_fixed = tagged_surface(rv_endo.extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance), args.rv_tag)
+    lv_epi_reference = lv_epi_intersection_reference.extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance)
+
+    rv_epi_cut_mask = np.zeros(rv_epi_fixed.n_points, dtype=bool)
+    rv_endo_cut_mask = np.zeros(rv_endo_fixed.n_points, dtype=bool)
 
     lv_epi_loop, lv_endo_loop, lv_annulus, lv_annulus_info = rebuild_openbase_annulus_from_current_surfaces(
         "LV",
@@ -5857,39 +4184,22 @@ def rebuild_step8_openbase_surfaces(
         args,
     )
 
-    tolerance = max(float(args.surface_clean_tolerance), 1e-7)
-    lv_epi_fixed, lv_endo_fixed, lv_annulus, lv_repair = repair_step8_direct_annulus_boundaries(
-        "LV", lv_epi_fixed, lv_endo_fixed, lv_annulus,
-        {"RVepi": rv_epi_fixed, "RVendo": rv_endo_fixed, "RV_annulus": rv_annulus},
-        lv_profile, args,
-    )
-    rv_epi_fixed, rv_endo_fixed, rv_annulus, rv_repair = repair_step8_direct_annulus_boundaries(
-        "RV", rv_epi_fixed, rv_endo_fixed, rv_annulus,
-        {"LVepi": lv_epi_fixed, "LVendo": lv_endo_fixed, "LV_annulus": lv_annulus},
-        rv_profile, args,
-    )
-    final_lv = step8_annulus_collisions(
-        lv_annulus,
-        {"LVepi": lv_epi_fixed, "LVendo": lv_endo_fixed, "RVepi": rv_epi_fixed,
-         "RVendo": rv_endo_fixed, "RV_annulus": rv_annulus},
-        tolerance,
-    )
-    final_rv = step8_annulus_collisions(
-        rv_annulus,
-        {"RVepi": rv_epi_fixed, "RVendo": rv_endo_fixed, "LVepi": lv_epi_fixed,
-         "LVendo": lv_endo_fixed, "LV_annulus": lv_annulus},
-        tolerance,
-    )
-    if any(final_lv.values()) or any(final_rv.values()):
-        raise Step8AnnulusRepairError(
-            "Step 8 sequential boundary repair left a cross-chamber annulus intersection.",
-            {"reason": "final_cross_chamber_validation_failed", "LV_collision_pairs": final_lv,
-             "RV_collision_pairs": final_rv, "accepted_outputs_replaced": False},
-        )
-    lv_annulus_info["collision_repair"] = lv_repair
-    rv_annulus_info["collision_repair"] = rv_repair
-    lv_annulus_info["annulus"] = surface_summary(lv_annulus)
-    rv_annulus_info["annulus"] = surface_summary(rv_annulus)
+    intersection_checks = {
+        "RVepi_step5_stitched_vs_LVepi_fixed": direct_surface_intersection_metrics(
+            "RVepi_step5_stitched",
+            rv_epi_fixed,
+            "LVepi_fixed",
+            lv_epi_fixed,
+            args.stage8_intersection_check_tolerance,
+        ),
+        "RVendo_step7_stitched_vs_LVepi_fixed": direct_surface_intersection_metrics(
+            "RVendo_step7_stitched",
+            rv_endo_fixed,
+            "LVepi_fixed",
+            lv_epi_fixed,
+            args.stage8_intersection_check_tolerance,
+        ),
+    }
 
     surfaces = {
         "LVendo": lv_endo_fixed,
@@ -5899,17 +4209,22 @@ def rebuild_step8_openbase_surfaces(
         "LV_openbase_annulus": tagged_surface(lv_annulus, args.lv_tag),
         "RV_openbase_annulus": tagged_surface(rv_annulus, args.rv_tag),
     }
+    masks = {
+        "RVepi_cut_boundary": rv_epi_cut_mask,
+        "RVendo_cut_boundary": rv_endo_cut_mask,
+    }
     info = {
-        "description": "Step 8 uses direct zipper annuli and minimally moves epi and/or endo opening-boundary vertices involved in invalid intersections; each moved coordinate is shared by its annulus and source surface, while all surface-interior points remain fixed.",
-        "LVepi_boundary_moved": bool(lv_repair["moved_epi_boundary_point_count"]),
-        "RVepi_boundary_moved": bool(rv_repair["moved_epi_boundary_point_count"]),
-        "LVendo_boundary_moved": bool(lv_repair["moved_endo_boundary_point_count"]),
-        "RVendo_boundary_moved": bool(rv_repair["moved_endo_boundary_point_count"]),
-        "surface_interior_points_moved": False,
-        "surface_and_annulus_connectivity_changed": False,
+        "description": "Step 8 no longer re-runs projection-based intersection removal. It preserves the Step 5/6 existing-LVepi-vertex seam stitches, keeps LV surfaces fixed, and only rebuilds basal open-base annuli from the current surface loops.",
+        "LV_surfaces_moved": False,
+        "RV_surfaces_moved_by_step8": False,
+        "RV_surface_fix_method": "pass_through_after_step5_6_face_vertex_deletion_and_LVepi_existing_vertex_stitch",
+        "LVepi_intersection_reference": surface_summary(lv_epi_reference),
+        "RVepi_fix": {"method": "not_retrimmed_in_step8", "reason": "Step 5 already deleted intersecting RVepi faces/vertices and stitched to existing LVepi vertices."},
+        "RVendo_fix": {"method": "not_retrimmed_in_step8", "reason": "Step 6/7 already deleted intersecting RVendo faces/vertices and rebuilt the LVepi stitch after distance movement."},
         "annuli_rebuilt_from_final_surfaces": True,
         "LV_annulus": lv_annulus_info,
         "RV_annulus": rv_annulus_info,
+        "surface_intersection_checks_after_step8": intersection_checks,
         "surface_summaries": {name: surface_summary(mesh) for name, mesh in surfaces.items()},
         "loops": {
             "LVepi_openbase": loop_record(lv_epi_loop),
@@ -5918,101 +4233,49 @@ def rebuild_step8_openbase_surfaces(
             "RVendo_openbase": loop_record(rv_endo_loop),
         },
     }
-    return surfaces, info
+    return surfaces, masks, info
 
 
-def validate_step8_saved_outputs(paths: Dict[str, str], surfaces: Dict[str, pv.PolyData]) -> None:
-    saved = {
-        key: pv.read(paths[stem]).extract_surface().triangulate()
-        for key, stem in (
-            ("LVendo", "LVendo_openbase_surf"), ("LVepi", "LVepi_openbase_surf"),
-            ("RVendo", "RVendo_openbase_surf"), ("RVepi", "RVepi_openbase_surf"),
-            ("LV_openbase_annulus", "LV_openbase_annulus_surf"),
-            ("RV_openbase_annulus", "RV_openbase_annulus_surf"),
-        )
-    }
-    for key, mesh in saved.items():
-        # The custom writer may reorder vertices, but must not round coordinates.
-        distances, ids = cKDTree(surfaces[key].points).query(mesh.points)
-        if mesh.n_points != surfaces[key].n_points or np.any(distances != 0.0) or len(np.unique(ids)) != mesh.n_points:
-            raise RuntimeError(f"Step 8 serialized {key} changed its geometry.")
-        expected = sorted(map(tuple, np.sort(base.triangle_faces(surfaces[key]), axis=1)))
-        actual = sorted(map(tuple, np.sort(ids[base.triangle_faces(mesh)], axis=1)))
-        if actual != expected:
-            raise RuntimeError(f"Step 8 serialized {key} changed its connectivity.")
-    for chamber, other in (("LV", "RV"), ("RV", "LV")):
-        key = f"{chamber}_openbase_annulus"
-        step8_validate_annulus_topology(saved[key], surfaces[key])
-        obstacles = {name: saved[name] for name in ("LVendo", "LVepi", "RVendo", "RVepi")}
-        obstacles[f"{other}_annulus"] = saved[f"{other}_openbase_annulus"]
-        if any(step8_annulus_collisions(saved[key], obstacles).values()):
-            raise RuntimeError(f"Step 8 serialized {chamber} annulus has an unexpected collision.")
-        endo_key = f"{chamber}endo"
-        epi_key = f"{chamber}epi"
-        if step8_pair_set(saved[endo_key]):
-            raise RuntimeError(f"Step 8 serialized {chamber} endo has a self-intersection.")
-        if step8_annulus_collisions(saved[epi_key], {"endo": saved[endo_key]})["endo"]:
-            raise RuntimeError(f"Step 8 serialized {chamber} epi and endo intersect.")
-
-
-def save_step8_openbase_surface_outputs(
+def save_fix_intersection_new_surface_stage_outputs(
     pipeline_dir: Path,
     subject_id: str,
     frame: str,
     surfaces: Dict[str, pv.PolyData],
-    annulus_info: Dict[str, object],
+    masks: Dict[str, np.ndarray],
+    fix_info: Dict[str, object],
 ) -> Tuple[Dict[str, str], Dict[str, object]]:
     pipeline_dir.mkdir(parents=True, exist_ok=True)
     paths: Dict[str, str] = {}
     records: Dict[str, object] = {}
+
     stage_items = [
-        ("LVendo_openbase_surf", surfaces["LVendo"]),
-        ("LVepi_openbase_surf", surfaces["LVepi"]),
-        ("LV_openbase_annulus_surf", surfaces["LV_openbase_annulus"]),
-        ("RVendo_openbase_surf", surfaces["RVendo"]),
-        ("RVepi_openbase_surf", surfaces["RVepi"]),
-        ("RV_openbase_annulus_surf", surfaces["RV_openbase_annulus"]),
+        ("stage08_LVendo_openbase_surface", surfaces["LVendo"], None),
+        ("stage08_LVepi_openbase_surface", surfaces["LVepi"], None),
+        ("stage08_RVendo_fixed_openbase_surface", surfaces["RVendo"], masks.get("RVendo_cut_boundary")),
+        ("stage08_RVepi_fixed_openbase_surface", surfaces["RVepi"], masks.get("RVepi_cut_boundary")),
+        ("stage08_LV_openbase_annulus_surface", surfaces["LV_openbase_annulus"], None),
+        ("stage08_RV_openbase_annulus_surface", surfaces["RV_openbase_annulus"], None),
     ]
-    # Validate serialization before replacing any of the previous stage files.
-    with tempfile.TemporaryDirectory(prefix=".step8_annuli_", dir=pipeline_dir) as temporary:
-        staged_paths = {}
-        for name, mesh in stage_items:
-            filename = f"{subject_id}_{frame}_{name}.vtk"
-            staged = Path(temporary) / filename
-            records[name] = save_triangle_surface_vtk(staged, mesh, point_type="double", point_format="%.17g")
-            staged_paths[name] = str(staged)
-            paths[name] = str((pipeline_dir / filename).resolve())
-            records[name]["path"] = paths[name]
-        validate_step8_saved_outputs(staged_paths, surfaces)
-        for name, staged_path in staged_paths.items():
-            Path(staged_path).replace(paths[name])
+    for name, mesh, cut_mask in stage_items:
+        surface_path = pipeline_dir / f"{subject_id}_{frame}_{name}.vtk"
+        records[name] = save_triangle_surface_vtk(surface_path, mesh, cut_mask)
+        paths[name] = str(surface_path.resolve())
 
     summary = {
-        "description": "Step 8 rebuilt direct open-base annuli and applied minimum collision-removing displacement to mapped epi and/or endo opening-boundary points while keeping all surface-interior points fixed.",
+        "description": "Step 8 fixed/intersection-cleaned final open-base surfaces and newly rebuilt LV/RV open-base annuli.",
         "subject": subject_id,
         "frame": frame,
         "output_dir": str(pipeline_dir.resolve()),
         "paths": paths,
         "surfaces": records,
-        "openbase_annulus_rebuild": annulus_info,
-        "serialized_geometry_and_collisions_validated": True,
+        "fix_intersection_new_surface": fix_info,
     }
-    summary_path = pipeline_dir / f"{subject_id}_{frame}_stage08_openbase_surfaces_summary.json"
+    summary_path = pipeline_dir / f"{subject_id}_{frame}_stage08_fix_intersection_new_surfaces_summary.json"
     summary_path.write_text(json.dumps(summary, indent=2))
     paths["stage08_summary"] = str(summary_path.resolve())
     return paths, summary
 
 
-def tagged_surface_face_arrays(mesh: pv.PolyData) -> Tuple[pv.PolyData, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    surface = mesh.extract_surface().triangulate().clean(tolerance=1e-7)
-    triangles = base.triangle_faces(surface)
-    points = np.asarray(surface.points, dtype=float)
-    centers = points[triangles].mean(axis=1) if len(triangles) else np.empty((0, 3), dtype=float)
-    tags = surface.cell_data.get("elemTag")
-    if tags is None or len(tags) != len(triangles):
-        raise RuntimeError("Surface must contain one elemTag value for each triangle cell.")
-    tags = np.rint(np.asarray(tags).reshape(-1)).astype(np.int32)
-    return surface, points, triangles, centers, tags
 
 
 def compact_tagged_triangle_surface(points: np.ndarray, triangles: np.ndarray, elem_tags: np.ndarray) -> pv.PolyData:
@@ -6028,179 +4291,10 @@ def compact_tagged_triangle_surface(points: np.ndarray, triangles: np.ndarray, e
     return out.extract_surface().triangulate().clean(tolerance=1e-7)
 
 
-def loop_to_point_cloud_distance_record(loop: pv.PolyData, target_points: np.ndarray) -> Dict[str, object]:
-    pts = loop_points(loop)
-    if len(pts) == 0 or len(target_points) == 0:
-        return {"loop_points": int(len(pts)), "min": None, "mean": None, "p95": None, "max": None}
-    distances = cKDTree(np.asarray(target_points, dtype=float)).query(pts, k=1)[0]
-    return {
-        "loop_points": int(len(pts)),
-        "min": float(np.min(distances)),
-        "mean": float(np.mean(distances)),
-        "p95": float(np.percentile(distances, 95)),
-        "max": float(np.max(distances)),
-    }
 
 
-def rv_lvepi_intersection_boundary_loops(
-    name: str,
-    rv_surface: pv.PolyData,
-    rv_openbase_annulus: pv.PolyData,
-    args: argparse.Namespace,
-) -> Tuple[List[pv.PolyData], Dict[str, object]]:
-    surface = rv_surface.extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance)
-    annulus = rv_openbase_annulus.extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance)
-    loops = base.boundary_loops(surface)
-    if not loops:
-        raise RuntimeError(f"{name}: no boundary loops detected for LVepi patch removal.")
-    annulus_points = np.asarray(annulus.points, dtype=float)
-    if len(annulus_points) == 0:
-        raise RuntimeError(f"{name}: RV open-base annulus has no points; cannot separate basal loop from LVepi-intersection loop.")
-
-    annulus_tree = cKDTree(annulus_points)
-    records: List[Dict[str, object]] = []
-    gap_loops: List[pv.PolyData] = []
-    for loop_id, loop in enumerate(loops):
-        pts = loop_points(loop)
-        distances = annulus_tree.query(pts, k=1)[0] if len(pts) else np.empty((0,), dtype=float)
-        p95 = float(np.percentile(distances, 95)) if len(distances) else float("inf")
-        is_openbase = p95 <= float(args.step9_rv_openbase_loop_match_tolerance)
-        records.append({
-            "loop_id": int(loop_id),
-            "points": int(len(pts)),
-            "length": float(loop.length),
-            "annulus_distance_p95": p95,
-            "annulus_distance_max": float(np.max(distances)) if len(distances) else None,
-            "classified_as": "RV_openbase_boundary" if is_openbase else "RV_LVepi_intersection_boundary",
-        })
-        if not is_openbase and len(pts) >= 3:
-            gap_loops.append(base.make_polyline(pts))
-
-    if not gap_loops:
-        fallback = sorted(records, key=lambda item: float(item["annulus_distance_p95"]), reverse=True)[0]
-        fallback_id = int(fallback["loop_id"])
-        gap_loops = [base.make_polyline(loop_points(loops[fallback_id]))]
-        records[fallback_id]["classified_as"] = "RV_LVepi_intersection_boundary_fallback_farthest_from_openbase_annulus"
-
-    return gap_loops, {
-        "surface": name,
-        "method": "RV_boundary_loops_not_matching_RV_openbase_annulus_are_used_as_LVepi_intersection_boundaries",
-        "loop_count": int(len(loops)),
-        "gap_loop_count": int(len(gap_loops)),
-        "rv_openbase_loop_match_tolerance_mm": float(args.step9_rv_openbase_loop_match_tolerance),
-        "loops": records,
-    }
 
 
-def remove_lvepi_patch_between_rv_boundaries_from_whole_epi_endo(
-    whole_epi_endo_surface: pv.PolyData,
-    lv_epi_surface: pv.PolyData,
-    rv_epi_surface: pv.PolyData,
-    rv_endo_surface: pv.PolyData,
-    rv_openbase_annulus: pv.PolyData,
-    rv_epi_reference: pv.PolyData,
-    rv_endo_reference: pv.PolyData,
-    args: argparse.Namespace,
-) -> Tuple[pv.PolyData, pv.PolyData, Dict[str, object]]:
-    whole, points, triangles, centers, tags = tagged_surface_face_arrays(whole_epi_endo_surface)
-    lv_epi = lv_epi_surface.extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance)
-    rv_epi_ref = rv_epi_reference.extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance)
-    rv_endo_ref = rv_endo_reference.extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance)
-
-    rv_epi_gap_loops, rv_epi_loop_info = rv_lvepi_intersection_boundary_loops(
-        "RVepi_step9", rv_epi_surface, rv_openbase_annulus, args
-    )
-    rv_endo_gap_loops, rv_endo_loop_info = rv_lvepi_intersection_boundary_loops(
-        "RVendo_step9", rv_endo_surface, rv_openbase_annulus, args
-    )
-
-    _, distances_to_lv_epi = closest_points_on_surface(lv_epi, centers)
-    lv_epi_face_mask = (tags == int(args.lv_tag)) & (distances_to_lv_epi <= float(args.step9_lvepi_face_match_tolerance))
-    inside_rv_epi = base.enclosed_mask(centers, rv_epi_ref)
-    inside_rv_endo = base.enclosed_mask(centers, rv_endo_ref)
-    candidate_mask = lv_epi_face_mask & inside_rv_epi & (~inside_rv_endo)
-    candidate_source = "LVepi_faces_from_saved_whole_epi_endo_with_centers_inside_original_RVepi_and_outside_original_RVendo"
-
-    if not np.any(candidate_mask):
-        loop_point_sets = [loop_points(loop) for loop in list(rv_epi_gap_loops) + list(rv_endo_gap_loops)]
-        loop_point_sets = [pts for pts in loop_point_sets if len(pts)]
-        if not loop_point_sets:
-            raise RuntimeError("No RV/LVepi boundary loop points available for LVepi patch fallback selection.")
-        all_loop_points = np.vstack(loop_point_sets)
-        loop_distances = cKDTree(all_loop_points).query(centers, k=1)[0]
-        candidate_mask = lv_epi_face_mask & (loop_distances <= float(args.step9_lvepi_patch_loop_tolerance))
-        candidate_source = "fallback_LVepi_faces_from_saved_whole_epi_endo_near_RV_LVepi_boundary_loops"
-
-    components = connected_face_components(candidate_mask, triangles)
-    if not components:
-        raise RuntimeError("No LVepi patch component found between RVendo/RVepi intersection boundaries.")
-
-    areas = face_areas(points, triangles)
-    component_records: List[Dict[str, object]] = []
-    selected_components: List[np.ndarray] = []
-    loop_tolerance = float(args.step9_lvepi_patch_loop_tolerance)
-    for component_id, component in enumerate(components):
-        component_vertices = np.unique(triangles[component].ravel())
-        component_points = points[component_vertices]
-        epi_distances = [loop_to_point_cloud_distance_record(loop, component_points) for loop in rv_epi_gap_loops]
-        endo_distances = [loop_to_point_cloud_distance_record(loop, component_points) for loop in rv_endo_gap_loops]
-        epi_p95 = [float(record["p95"]) for record in epi_distances if record["p95"] is not None]
-        endo_p95 = [float(record["p95"]) for record in endo_distances if record["p95"] is not None]
-        close_to_epi = bool(epi_p95 and min(epi_p95) <= loop_tolerance)
-        close_to_endo = bool(endo_p95 and min(endo_p95) <= loop_tolerance)
-        record = {
-            "component_id": int(component_id),
-            "faces": int(len(component)),
-            "vertices": int(len(component_vertices)),
-            "area": float(areas[component].sum()),
-            "close_to_RVepi_LVepi_boundary": close_to_epi,
-            "close_to_RVendo_LVepi_boundary": close_to_endo,
-            "RVepi_boundary_distances": epi_distances,
-            "RVendo_boundary_distances": endo_distances,
-        }
-        component_records.append(record)
-        if close_to_epi and close_to_endo:
-            selected_components.append(component)
-
-    selection_method = "connected_LVepi_components_between_RVepi_and_RVendo_LVepi_boundaries"
-    if not selected_components:
-        selected_components = [components[0]]
-        selection_method = "fallback_largest_connected_LVepi_candidate_component"
-
-    max_selected_area = max(float(areas[component].sum()) for component in selected_components)
-    min_selected_area = max_selected_area * float(args.step9_lvepi_patch_component_min_fraction)
-    selected_components = [component for component in selected_components if float(areas[component].sum()) >= min_selected_area]
-
-    remove_mask = np.zeros(len(triangles), dtype=bool)
-    for component in selected_components:
-        remove_mask[component] = True
-    if not np.any(remove_mask):
-        raise RuntimeError("LVepi patch selection produced an empty removal mask.")
-
-    kept_surface = compact_tagged_triangle_surface(points, triangles[~remove_mask], tags[~remove_mask])
-    patch_surface = compact_tagged_triangle_surface(points, triangles[remove_mask], tags[remove_mask])
-    info = {
-        "method": "derive_from_saved_whole_epi_endo_and_remove_LVepi_patch_between_RVepi_LVepi_and_RVendo_LVepi_boundaries",
-        "source_surface": "saved_stage09_whole_epi_endo_surface_vtk",
-        "candidate_source": candidate_source,
-        "whole_surface": surface_summary(whole),
-        "whole_surface_elemTag_counts": {str(k): int(v) for k, v in sorted(Counter(map(int, tags)).items())},
-        "LVepi_face_match_tolerance_mm": float(args.step9_lvepi_face_match_tolerance),
-        "RV_boundary_loop_tolerance_mm": loop_tolerance,
-        "LVepi_faces_in_saved_whole_surface": int(np.count_nonzero(lv_epi_face_mask)),
-        "candidate_patch_faces_before_component_selection": int(np.count_nonzero(candidate_mask)),
-        "candidate_component_count": int(len(components)),
-        "selected_component_count": int(len(selected_components)),
-        "selection_method": selection_method,
-        "removed_patch_faces": int(np.count_nonzero(remove_mask)),
-        "removed_patch_area": float(areas[remove_mask].sum()),
-        "rv_epi_intersection_boundary_detection": rv_epi_loop_info,
-        "rv_endo_intersection_boundary_detection": rv_endo_loop_info,
-        "component_records": component_records[:30],
-        "output_surface": surface_summary(kept_surface),
-        "removed_patch_surface": surface_summary(patch_surface),
-    }
-    return kept_surface, patch_surface, info
 
 
 
@@ -6375,80 +4469,6 @@ def map_seam_loops_to_lvepi_vertices(
     }
 
 
-def build_lvepi_barrier_edges_from_seams(
-    name: str,
-    seam_loops: Sequence[pv.PolyData],
-    lv_epi: pv.PolyData,
-    neighbors: Sequence[set],
-    edge_set: set,
-    args: argparse.Namespace,
-) -> Tuple[set, np.ndarray, Dict[str, object]]:
-    lv_points = np.asarray(lv_epi.points, dtype=float)
-    mapped_loops, mapping_info = map_seam_loops_to_lvepi_vertices(name, seam_loops, lv_epi, args)
-    barrier_edges = set()
-    all_path_vertices: List[int] = []
-    loop_records: List[Dict[str, object]] = []
-    for loop_id, raw_ids in enumerate(mapped_loops):
-        ordered_ids, order_info = order_lvepi_seam_vertex_ids(f"{name}_loop_{loop_id}", lv_points, raw_ids, edge_set)
-        local_tree = cKDTree(lv_points[ordered_ids])
-        local_distances = local_tree.query(lv_points, k=1)[0]
-        allowed_radius = max(float(args.step9_lvepi_patch_loop_tolerance), 1.0)
-        allowed_mask = local_distances <= allowed_radius
-        allowed_mask[ordered_ids] = True
-        path_records: List[Dict[str, object]] = []
-        fallback_paths = 0
-        failed_paths = 0
-        for index in range(len(ordered_ids)):
-            start = int(ordered_ids[index])
-            goal = int(ordered_ids[(index + 1) % len(ordered_ids)])
-            if start == goal:
-                continue
-            path_ids = shortest_path_on_allowed_lvepi_graph(start, goal, neighbors, allowed_mask)
-            used_fallback = False
-            if not path_ids:
-                path_ids = shortest_path_on_allowed_lvepi_graph(start, goal, neighbors, None)
-                used_fallback = True
-                fallback_paths += 1
-            if len(path_ids) < 2:
-                failed_paths += 1
-                path_records.append({
-                    "segment_id": int(index),
-                    "start": start,
-                    "goal": goal,
-                    "path_vertices": int(len(path_ids)),
-                    "failed": True,
-                })
-                continue
-            for a, b in zip(path_ids[:-1], path_ids[1:]):
-                barrier_edges.add(sorted_edge_key(a, b))
-            all_path_vertices.extend(int(v) for v in path_ids)
-            path_records.append({
-                "segment_id": int(index),
-                "start": start,
-                "goal": goal,
-                "path_vertices": int(len(path_ids)),
-                "used_unrestricted_fallback": bool(used_fallback),
-            })
-        loop_records.append({
-            "loop_id": int(loop_id),
-            "ordered_vertices": int(len(ordered_ids)),
-            "barrier_edges_after_loop": int(len(barrier_edges)),
-            "allowed_radius_mm": float(allowed_radius),
-            "fallback_unrestricted_path_count": int(fallback_paths),
-            "failed_path_count": int(failed_paths),
-            "ordering": order_info,
-            "path_records_sample": path_records[:20],
-        })
-    if not barrier_edges:
-        raise RuntimeError(f"{name}: could not create LVepi barrier edges from seam vertices.")
-    return barrier_edges, np.unique(np.asarray(all_path_vertices, dtype=np.int64)), {
-        "method": "trace_closed_LVepi_barrier_edges_through_LVepi_mesh_from_RV_substitute_boundary_vertices",
-        "name": name,
-        "mapping": mapping_info,
-        "barrier_edge_count": int(len(barrier_edges)),
-        "barrier_vertex_count": int(len(set(all_path_vertices))),
-        "loops": loop_records,
-    }
 
 
 
@@ -6550,100 +4570,6 @@ def build_lvepi_barrier_edges_from_saved_line_loops(
         "loops": loop_records,
     }
 
-def build_lvepi_barrier_edges_from_rv_substitute_edges(
-    name: str,
-    rv_surface: pv.PolyData,
-    lv_epi: pv.PolyData,
-    neighbors: Sequence[set],
-    edge_set: set,
-    fallback_seam_loops: Sequence[pv.PolyData],
-    args: argparse.Namespace,
-) -> Tuple[set, np.ndarray, Dict[str, object]]:
-    rv_surface = rv_surface.extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance)
-    lv_epi = lv_epi.extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance)
-    rv_triangles = base.triangle_faces(rv_surface)
-    sub = np.asarray(rv_surface.point_data.get("lvepiSubstituteVertex", np.zeros(rv_surface.n_points, dtype=np.int32))).reshape(-1).astype(bool)
-    source_ids = np.asarray(rv_surface.point_data.get("lvepiSubstituteSourceId", np.full(rv_surface.n_points, -1, dtype=np.int32))).reshape(-1).astype(np.int64)
-    lv_points = np.asarray(lv_epi.points, dtype=float)
-    lv_tree = cKDTree(lv_points)
-    rv_points = np.asarray(rv_surface.points, dtype=float)
-
-    barrier_edges = set()
-    barrier_vertices: List[int] = []
-    candidate_edges = set()
-    exact_edges = 0
-    graph_completed_edges = 0
-    failed_graph_edges = 0
-    same_vertex_edges = 0
-    face_sub_counts = Counter(map(int, np.count_nonzero(sub[rv_triangles], axis=1))) if len(rv_triangles) else Counter()
-
-    def lvepi_id_for_rv_point(point_id: int) -> int:
-        source_id = int(source_ids[int(point_id)]) if int(point_id) < len(source_ids) else -1
-        if 0 <= source_id < lv_epi.n_points:
-            return source_id
-        _, nearest = lv_tree.query(rv_points[int(point_id)], k=1)
-        return int(nearest)
-
-    for tri in rv_triangles:
-        for local_a, local_b in ((0, 1), (1, 2), (2, 0)):
-            rv_a = int(tri[local_a])
-            rv_b = int(tri[local_b])
-            if not (sub[rv_a] and sub[rv_b]):
-                continue
-            lv_a = lvepi_id_for_rv_point(rv_a)
-            lv_b = lvepi_id_for_rv_point(rv_b)
-            if lv_a == lv_b:
-                same_vertex_edges += 1
-                continue
-            candidate_edges.add(sorted_edge_key(lv_a, lv_b))
-
-    for lv_a, lv_b in sorted(candidate_edges):
-        edge = sorted_edge_key(lv_a, lv_b)
-        if edge in edge_set:
-            barrier_edges.add(edge)
-            barrier_vertices.extend([lv_a, lv_b])
-            exact_edges += 1
-            continue
-        path_ids = shortest_path_on_allowed_lvepi_graph(lv_a, lv_b, neighbors, None)
-        if len(path_ids) < 2:
-            failed_graph_edges += 1
-            continue
-        for a, b in zip(path_ids[:-1], path_ids[1:]):
-            barrier_edges.add(sorted_edge_key(a, b))
-        barrier_vertices.extend(int(v) for v in path_ids)
-        graph_completed_edges += 1
-
-    method = "actual_RV_substitute_edges_mapped_to_existing_LVepi_edges"
-    fallback_info: Optional[Dict[str, object]] = None
-    if len(barrier_edges) < 3:
-        fallback_edges, fallback_vertices, fallback_info = build_lvepi_barrier_edges_from_seams(
-            f"{name}_fallback_from_saved_seam_points",
-            fallback_seam_loops,
-            lv_epi,
-            neighbors,
-            edge_set,
-            args,
-        )
-        barrier_edges = fallback_edges
-        barrier_vertices = [int(v) for v in fallback_vertices]
-        method = "fallback_saved_seam_points_traced_on_LVepi_graph"
-
-    return barrier_edges, np.unique(np.asarray(barrier_vertices, dtype=np.int64)), {
-        "method": method,
-        "name": name,
-        "rv_surface_points": int(rv_surface.n_points),
-        "rv_surface_faces": int(len(rv_triangles)),
-        "substitute_vertices_on_rv_surface": int(np.count_nonzero(sub)),
-        "rv_face_substitute_vertex_count_histogram": {str(k): int(v) for k, v in sorted(face_sub_counts.items())},
-        "candidate_substitute_edges": int(len(candidate_edges)),
-        "exact_existing_LVepi_edges": int(exact_edges),
-        "graph_completed_nonedge_substitute_edges": int(graph_completed_edges),
-        "failed_graph_completion_edges": int(failed_graph_edges),
-        "same_LVepi_vertex_edges_skipped": int(same_vertex_edges),
-        "barrier_edge_count": int(len(barrier_edges)),
-        "barrier_vertex_count": int(len(set(barrier_vertices))),
-        "fallback": fallback_info,
-    }
 
 def face_components_split_by_barrier_edges(triangles: np.ndarray, barrier_edges: set) -> List[np.ndarray]:
     edge_to_faces = triangle_edge_face_map(triangles)
@@ -6684,185 +4610,10 @@ def component_barrier_edge_contacts(component: np.ndarray, edge_to_faces: Dict[T
     return int(contacts)
 
 
-def select_lvepi_faces_between_barrier_loops(
-    lv_epi: pv.PolyData,
-    rv_epi_barrier_edges: set,
-    rv_endo_barrier_edges: set,
-    args: argparse.Namespace,
-) -> Tuple[np.ndarray, Dict[str, object]]:
-    lv_epi = lv_epi.extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance)
-    lv_points = np.asarray(lv_epi.points, dtype=float)
-    lv_triangles = base.triangle_faces(lv_epi)
-    all_barriers = set(rv_epi_barrier_edges) | set(rv_endo_barrier_edges)
-    components = face_components_split_by_barrier_edges(lv_triangles, all_barriers)
-    if not components:
-        raise RuntimeError("No LVepi face components found after splitting by RVepi/RVendo barrier loops.")
-    edge_to_faces = triangle_edge_face_map(lv_triangles)
-    areas = face_areas(lv_points, lv_triangles)
-    records: List[Dict[str, object]] = []
-    candidates: List[Tuple[float, int, np.ndarray]] = []
-    for component_id, component in enumerate(components):
-        epi_contacts = component_barrier_edge_contacts(component, edge_to_faces, rv_epi_barrier_edges)
-        endo_contacts = component_barrier_edge_contacts(component, edge_to_faces, rv_endo_barrier_edges)
-        area = float(areas[component].sum()) if len(component) else 0.0
-        touches_both = epi_contacts > 0 and endo_contacts > 0
-        records.append({
-            "component_id": int(component_id),
-            "faces": int(len(component)),
-            "area": area,
-            "RVepi_barrier_edge_contacts": int(epi_contacts),
-            "RVendo_barrier_edge_contacts": int(endo_contacts),
-            "touches_both_barriers": bool(touches_both),
-        })
-        if touches_both:
-            balanced_contacts = min(int(epi_contacts), int(endo_contacts))
-            total_contacts = int(epi_contacts) + int(endo_contacts)
-            candidates.append((-balanced_contacts, -total_contacts, area, int(component_id), component))
-    if not candidates:
-        raise RuntimeError("No LVepi component is bounded by both RVepi and RVendo LVepi barrier loops.")
-    candidates.sort(key=lambda item: (item[0], item[1], item[2]))
-    _, _, selected_area, selected_component_id, selected_component = candidates[0]
-    remove_mask = np.zeros(len(lv_triangles), dtype=bool)
-    remove_mask[selected_component] = True
-    return remove_mask, {
-        "method": "delete_LVepi_face_component_directly_between_RVepi_and_RVendo_LVepi_barrier_edges",
-        "selection_method": "largest_balanced_RVepi_RVendo_barrier_contact_component_then_smaller_area_tiebreak",
-        "component_count_after_barrier_split": int(len(components)),
-        "candidate_component_count": int(len(candidates)),
-        "selected_component_id": int(selected_component_id),
-        "selected_component_faces": int(len(selected_component)),
-        "selected_component_area": float(selected_area),
-        "component_records": records[:40],
-    }
-
-def remove_lvepi_patch_between_saved_lvepi_seams_from_whole_epi_endo(
-    whole_epi_endo_surface: pv.PolyData,
-    lv_epi_surface: pv.PolyData,
-    rv_epi_surface: pv.PolyData,
-    rv_endo_surface: pv.PolyData,
-    rv_epi_lvepi_seam_loops: Sequence[pv.PolyData],
-    rv_endo_lvepi_seam_loops: Sequence[pv.PolyData],
-    rv_epi_reference: pv.PolyData,
-    rv_endo_reference: pv.PolyData,
-    args: argparse.Namespace,
-) -> Tuple[pv.PolyData, pv.PolyData, Dict[str, object]]:
-    if not rv_epi_lvepi_seam_loops or not rv_endo_lvepi_seam_loops:
-        raise RuntimeError("Step 9 direct LVepi patch deletion requires the RVepi LVepi-interface boundary after Step 5/6 and the displaced RVendo LVepi-interface boundary from Step 7.")
-
-    whole, points, triangles, centers, tags = tagged_surface_face_arrays(whole_epi_endo_surface)
-    lv_epi = lv_epi_surface.extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance)
-    lv_points = np.asarray(lv_epi.points, dtype=float)
-    lv_triangles = base.triangle_faces(lv_epi)
-    if len(lv_triangles) == 0:
-        raise RuntimeError("Step 9 LVepi patch deletion received an LVepi surface with no triangles.")
-
-    neighbors, edge_set = lvepi_vertex_edge_graph(lv_epi.n_points, lv_triangles)
-    rv_epi_barrier_edges, rv_epi_barrier_vertices, rv_epi_barrier_info = build_lvepi_barrier_edges_from_saved_line_loops(
-        "RVepi_step6_state_LVepi_boundary_ring",
-        rv_epi_lvepi_seam_loops,
-        lv_epi,
-        neighbors,
-        edge_set,
-        args,
-    )
-    rv_endo_barrier_edges, rv_endo_barrier_vertices, rv_endo_barrier_info = build_lvepi_barrier_edges_from_saved_line_loops(
-        "RVendo_step7_displaced_LVepi_boundary_ring",
-        rv_endo_lvepi_seam_loops,
-        lv_epi,
-        neighbors,
-        edge_set,
-        args,
-    )
-    lv_remove_mask, topology_info = select_lvepi_faces_between_barrier_loops(
-        lv_epi,
-        rv_epi_barrier_edges,
-        rv_endo_barrier_edges,
-        args,
-    )
-
-    _, distances_to_lv_epi = closest_points_on_surface(lv_epi, centers)
-    lv_epi_face_mask = (tags == int(args.lv_tag)) & (distances_to_lv_epi <= float(args.step9_lvepi_face_match_tolerance))
-    selected_lv_centers = lv_points[lv_triangles[lv_remove_mask]].mean(axis=1)
-    if len(selected_lv_centers) == 0:
-        raise RuntimeError("Step 9 direct LVepi patch deletion selected zero LVepi faces.")
-    center_distances = cKDTree(selected_lv_centers).query(centers, k=1)[0]
-    whole_remove_mask = lv_epi_face_mask & (center_distances <= float(args.step9_lvepi_face_match_tolerance))
-    if not np.any(whole_remove_mask):
-        selected_lv_vertex_points = lv_points[np.unique(lv_triangles[lv_remove_mask].ravel())]
-        vertex_distances = cKDTree(selected_lv_vertex_points).query(points[triangles].reshape((-1, 3)), k=1)[0].reshape((-1, 3))
-        whole_remove_mask = lv_epi_face_mask & np.all(vertex_distances <= float(args.step9_lvepi_face_match_tolerance), axis=1)
-    if not np.any(whole_remove_mask):
-        raise RuntimeError("Could not map the directly selected LVepi patch faces back to the saved whole_epi_endo surface.")
-
-    kept_surface = compact_tagged_triangle_surface(points, triangles[~whole_remove_mask], tags[~whole_remove_mask])
-    patch_surface = compact_tagged_triangle_surface(points, triangles[whole_remove_mask], tags[whole_remove_mask])
-
-    patch_boundary_ids: List[int] = []
-    lv_tree = cKDTree(lv_points)
-    for loop in base.boundary_loops(patch_surface):
-        loop_pts = loop_points(loop)
-        if len(loop_pts):
-            distances, ids = lv_tree.query(loop_pts, k=1)
-            patch_boundary_ids.extend(int(v) for v in np.asarray(ids, dtype=np.int64)[distances <= float(args.step9_lvepi_face_match_tolerance)])
-    patch_boundary_ids_array = np.unique(np.asarray(patch_boundary_ids, dtype=np.int64)) if patch_boundary_ids else np.empty((0,), dtype=np.int64)
-    expected_boundary_ids = np.union1d(rv_epi_barrier_vertices, rv_endo_barrier_vertices)
-    boundary_hit_count = int(len(np.intersect1d(patch_boundary_ids_array, expected_boundary_ids)))
-
-    info = {
-        "method": "direct_topology_delete_LVepi_surface_between_RVepi_step6_state_and_step7_RVendo_boundary_rings",
-        "source_surface": "saved_stage09_whole_epi_endo_surface_vtk",
-        "deletion_rule": "After whole_epi_endo_surface is merged, use the RVepi LVepi-interface line loop after Step 5/6 and the new displaced RVendo LVepi-interface line loop from Step 7 as direct LVepi barrier rings, then delete the LVepi face component between them.",
-        "broad_inside_outside_mask_used_for_deletion": False,
-        "whole_surface": surface_summary(whole),
-        "whole_surface_elemTag_counts": {str(k): int(v) for k, v in sorted(Counter(map(int, tags)).items())},
-        "LVepi_face_match_tolerance_mm": float(args.step9_lvepi_face_match_tolerance),
-        "LVepi_faces_in_saved_whole_surface": int(np.count_nonzero(lv_epi_face_mask)),
-        "direct_LVepi_faces_selected_on_LVepi_mesh": int(np.count_nonzero(lv_remove_mask)),
-        "removed_patch_faces": int(np.count_nonzero(whole_remove_mask)),
-        "removed_patch_area": float(face_areas(points, triangles)[whole_remove_mask].sum()),
-        "RVepi_boundary_on_LVepi": rv_epi_barrier_info,
-        "RVendo_boundary_on_LVepi": rv_endo_barrier_info,
-        "topology_patch_selection": topology_info,
-        "saved_RVepi_LVepi_seam_loops": [loop_record(loop) for loop in rv_epi_lvepi_seam_loops],
-        "saved_step7_RVendo_LVepi_seam_loops": [loop_record(loop) for loop in rv_endo_lvepi_seam_loops],
-        "removed_patch_boundary_LVepi_vertices": int(len(patch_boundary_ids_array)),
-        "expected_boundary_LVepi_vertices_from_RVepi_RVendo": int(len(expected_boundary_ids)),
-        "removed_patch_boundary_vertices_matching_expected_boundary": boundary_hit_count,
-        "removed_patch_boundary_match_fraction": float(boundary_hit_count / max(len(expected_boundary_ids), 1)),
-        "output_surface": surface_summary(kept_surface),
-        "removed_patch_surface": surface_summary(patch_surface),
-    }
-    return kept_surface, patch_surface, info
-
-def point_segment_distance_2d(point: np.ndarray, start: np.ndarray, end: np.ndarray) -> float:
-    vector = end - start
-    denom = float(np.dot(vector, vector))
-    if denom <= 1e-20:
-        return float(np.linalg.norm(point - start))
-    t = float(np.clip(np.dot(point - start, vector) / denom, 0.0, 1.0))
-    return float(np.linalg.norm(point - (start + t * vector)))
 
 
-def point_inside_or_on_polygon_2d(point: np.ndarray, polygon: np.ndarray, tolerance: float = 1e-8) -> bool:
-    if len(polygon) < 3:
-        return False
-    for index in range(len(polygon)):
-        if point_segment_distance_2d(point, polygon[index], polygon[(index + 1) % len(polygon)]) <= tolerance:
-            return True
 
-    x, y = float(point[0]), float(point[1])
-    inside = False
-    previous = len(polygon) - 1
-    for current in range(len(polygon)):
-        xi, yi = float(polygon[current, 0]), float(polygon[current, 1])
-        xj, yj = float(polygon[previous, 0]), float(polygon[previous, 1])
-        crosses = (yi > y) != (yj > y)
-        if crosses:
-            x_intersection = (xj - xi) * (y - yi) / max(yj - yi, 1e-20) + xi
-            if x < x_intersection:
-                inside = not inside
-        previous = current
-    return inside
+
 
 
 def clean_loop_points(points: np.ndarray, tolerance: float = 1e-8) -> np.ndarray:
@@ -6875,552 +4626,18 @@ def clean_loop_points(points: np.ndarray, tolerance: float = 1e-8) -> np.ndarray
     return np.asarray(cleaned, dtype=float)
 
 
-def fan_cap_loop_points(loop_points_array: np.ndarray) -> Tuple[np.ndarray, np.ndarray, Dict[str, object]]:
-    pts = clean_loop_points(loop_points_array)
-    if len(pts) < 3:
-        raise RuntimeError("Cannot fan-cap a boundary loop with fewer than three points.")
-    center = pts.mean(axis=0, keepdims=True)
-    out_points = np.vstack([pts, center])
-    center_id = len(pts)
-    triangles = np.asarray([[index, (index + 1) % len(pts), center_id] for index in range(len(pts))], dtype=np.int64)
-    return out_points, triangles, {
-        "method": "fallback_center_fan_cap",
-        "loop_points": int(len(pts)),
-        "triangles": int(len(triangles)),
-    }
 
 
-def triangulate_boundary_loop_points(loop_points_array: np.ndarray) -> Tuple[np.ndarray, np.ndarray, Dict[str, object]]:
-    pts = clean_loop_points(loop_points_array)
-    if len(pts) < 3:
-        raise RuntimeError("Cannot triangulate a boundary loop with fewer than three points.")
-    if len(pts) == 3:
-        return pts, np.asarray([[0, 1, 2]], dtype=np.int64), {
-            "method": "single_triangle_loop_cap",
-            "loop_points": 3,
-            "triangles": 1,
-            "fallback_used": False,
-        }
-
-    centered = pts - pts.mean(axis=0)
-    try:
-        _, singular_values, vh = np.linalg.svd(centered, full_matrices=False)
-        if len(singular_values) < 2 or float(singular_values[1]) <= 1e-10:
-            raise RuntimeError("Boundary loop is nearly collinear in best-fit plane.")
-        basis = vh[:2].T
-        coords = centered @ basis
-        if len(np.unique(np.round(coords, decimals=8), axis=0)) < 3:
-            raise RuntimeError("Boundary loop projection has fewer than three unique points.")
-        delaunay = Delaunay(coords)
-        polygon_tolerance = max(float(np.ptp(coords[:, 0])), float(np.ptp(coords[:, 1])), 1.0) * 1e-8
-        selected: List[List[int]] = []
-        rejected = 0
-        for simplex in np.asarray(delaunay.simplices, dtype=np.int64):
-            tri_coords = coords[simplex]
-            centroid = tri_coords.mean(axis=0)
-            midpoints = np.asarray([
-                0.5 * (tri_coords[0] + tri_coords[1]),
-                0.5 * (tri_coords[1] + tri_coords[2]),
-                0.5 * (tri_coords[2] + tri_coords[0]),
-            ])
-            probes = [centroid, *midpoints]
-            if all(point_inside_or_on_polygon_2d(probe, coords, polygon_tolerance) for probe in probes):
-                area = 0.5 * float(np.linalg.norm(np.cross(pts[simplex[1]] - pts[simplex[0]], pts[simplex[2]] - pts[simplex[0]])))
-                if area > 1e-10:
-                    selected.append([int(v) for v in simplex])
-                else:
-                    rejected += 1
-            else:
-                rejected += 1
-        if not selected:
-            raise RuntimeError("Delaunay loop triangulation produced no interior triangles.")
-        triangles = np.asarray(selected, dtype=np.int64)
-        expected_edges = {tuple(sorted((index, (index + 1) % len(pts)))) for index in range(len(pts))}
-        observed_edge_map = triangle_edge_face_map(triangles)
-        observed_boundary_edges = {edge for edge, owners in observed_edge_map.items() if len(owners) == 1}
-        if observed_boundary_edges != expected_edges:
-            missing = len(expected_edges - observed_boundary_edges)
-            extra = len(observed_boundary_edges - expected_edges)
-            raise RuntimeError(
-                "Delaunay loop triangulation did not close exactly on the source loop "
-                f"(missing_boundary_edges={missing}, extra_boundary_edges={extra})."
-            )
-        return pts, triangles, {
-            "method": "best_fit_plane_delaunay_loop_cap",
-            "loop_points": int(len(pts)),
-            "triangles": int(len(triangles)),
-            "rejected_delaunay_triangles": int(rejected),
-            "fallback_used": False,
-            "best_fit_plane_singular_values": [float(v) for v in singular_values[:3]],
-        }
-    except Exception as exc:
-        cap_points, cap_triangles, cap_info = fan_cap_loop_points(pts)
-        cap_info.update({
-            "fallback_used": True,
-            "fallback_reason": f"{type(exc).__name__}: {exc}",
-        })
-        return cap_points, cap_triangles, cap_info
 
 
-def loop_pair_distance_score(first: np.ndarray, second: np.ndarray) -> Dict[str, float]:
-    first = clean_loop_points(first)
-    second = clean_loop_points(second)
-    if len(first) == 0 or len(second) == 0:
-        return {"score": float("inf"), "mean": float("inf"), "p95": float("inf"), "max": float("inf"), "centroid": float("inf")}
-    first_tree = cKDTree(first)
-    second_tree = cKDTree(second)
-    first_to_second = second_tree.query(first, k=1)[0]
-    second_to_first = first_tree.query(second, k=1)[0]
-    centroid = float(np.linalg.norm(first.mean(axis=0) - second.mean(axis=0)))
-    p95 = max(float(np.percentile(first_to_second, 95)), float(np.percentile(second_to_first, 95)))
-    mean = 0.5 * (float(np.mean(first_to_second)) + float(np.mean(second_to_first)))
-    max_distance = max(float(np.max(first_to_second)), float(np.max(second_to_first)))
-    return {
-        "score": float(p95 + 0.05 * centroid),
-        "mean": mean,
-        "p95": p95,
-        "max": max_distance,
-        "centroid": centroid,
-    }
 
 
-def annulus_between_boundary_loop_points(first: np.ndarray, second: np.ndarray) -> Tuple[np.ndarray, np.ndarray, Dict[str, object]]:
-    first_pts = clean_loop_points(first)
-    second_pts = clean_loop_points(second)
-    if len(first_pts) < 3 or len(second_pts) < 3:
-        raise RuntimeError("Cannot stitch boundary loops with fewer than three points.")
-    annulus = base.zipper_annulus(base.make_polyline(first_pts), base.make_polyline(second_pts))
-    annulus = annulus.extract_surface().triangulate().clean(tolerance=1e-7)
-    triangles = base.triangle_faces(annulus)
-    if len(triangles) == 0:
-        raise RuntimeError("Boundary-loop annulus stitching produced no triangles.")
-    return np.asarray(annulus.points, dtype=float), triangles, {
-        "method": "zipper_annulus_between_paired_patch_and_RV_boundary_loops",
-        "first_loop_points": int(len(first_pts)),
-        "second_loop_points": int(len(second_pts)),
-        "annulus_points": int(annulus.n_points),
-        "annulus_triangles": int(len(triangles)),
-        "annulus_free_edges_before_merge": int(len(base.extract_boundary_edges(annulus))),
-    }
 
 
-def greedy_pair_loop_ids(primary_ids: Sequence[int], secondary_ids: Sequence[int], loop_points_by_id: Dict[int, np.ndarray]) -> List[Tuple[int, int, Dict[str, float]]]:
-    available_primary = set(int(v) for v in primary_ids)
-    available_secondary = set(int(v) for v in secondary_ids)
-    pairs: List[Tuple[int, int, Dict[str, float]]] = []
-    while available_primary and available_secondary:
-        candidates: List[Tuple[float, int, int, Dict[str, float]]] = []
-        for first_id in available_primary:
-            for second_id in available_secondary:
-                score_record = loop_pair_distance_score(loop_points_by_id[first_id], loop_points_by_id[second_id])
-                candidates.append((float(score_record["score"]), int(first_id), int(second_id), score_record))
-        candidates.sort(key=lambda item: item[0])
-        _, first_id, second_id, score_record = candidates[0]
-        pairs.append((first_id, second_id, score_record))
-        available_primary.remove(first_id)
-        available_secondary.remove(second_id)
-    return pairs
 
 
-def fill_lvepi_patch_removed_holes(
-    surface: pv.PolyData,
-    removed_patch: pv.PolyData,
-    args: argparse.Namespace,
-) -> Tuple[pv.PolyData, Dict[str, object]]:
-    surface, points, triangles, _, tags = tagged_surface_face_arrays(surface)
-    free_edges_before = int(len(base.extract_boundary_edges(surface)))
-    boundary_loops = base.boundary_loops(surface)
-    patch_boundary_loops = base.boundary_loops(removed_patch.extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance))
-    patch_boundary_points = [loop_points(loop) for loop in patch_boundary_loops]
-    patch_boundary_points = [pts for pts in patch_boundary_points if len(pts) >= 3]
-    if free_edges_before == 0 or not boundary_loops or not patch_boundary_points or not bool(args.step9_fill_lvepi_patch_holes):
-        return surface, {
-            "enabled": bool(args.step9_fill_lvepi_patch_holes),
-            "method": "pair_patch_and_RV_boundary_loops_then_stitch_annuli",
-            "applied": False,
-            "reason": "no_matching_input_boundary" if free_edges_before else "surface_already_has_no_free_edges",
-            "free_edges_before": free_edges_before,
-            "boundary_loop_count_before": int(len(boundary_loops)),
-            "removed_patch_boundary_loop_count": int(len(patch_boundary_points)),
-            "output_surface": surface_summary(surface),
-        }
-
-    patch_tree = cKDTree(np.vstack(patch_boundary_points))
-    match_tolerance = max(
-        float(args.step9_hole_fill_boundary_match_tolerance),
-        float(args.boundary_match_tolerance),
-        float(args.surface_clean_tolerance) * 10.0,
-    )
-    exact_patch_tolerance = max(float(args.boundary_match_tolerance) * 10.0, float(args.surface_clean_tolerance) * 100.0, 1e-4)
-    selected_loop_ids: List[int] = []
-    exact_patch_loop_ids: List[int] = []
-    partner_loop_ids: List[int] = []
-    loop_points_by_id: Dict[int, np.ndarray] = {}
-    loop_records: List[Dict[str, object]] = []
-
-    for loop_id, loop in enumerate(boundary_loops):
-        pts = clean_loop_points(loop_points(loop))
-        if len(pts) < 3:
-            loop_records.append({
-                "loop_id": int(loop_id),
-                "points": int(len(pts)),
-                "selected_for_fill": False,
-                "reason": "fewer_than_3_points",
-            })
-            continue
-        distances = patch_tree.query(pts, k=1)[0]
-        p95 = float(np.percentile(distances, 95)) if len(distances) else float("inf")
-        max_distance = float(np.max(distances)) if len(distances) else float("inf")
-        selected = p95 <= match_tolerance
-        exact_patch_boundary = p95 <= exact_patch_tolerance and max_distance <= max(exact_patch_tolerance * 10.0, 1e-3)
-        loop_points_by_id[int(loop_id)] = pts
-        if selected:
-            selected_loop_ids.append(int(loop_id))
-            if exact_patch_boundary:
-                exact_patch_loop_ids.append(int(loop_id))
-            else:
-                partner_loop_ids.append(int(loop_id))
-        loop_records.append({
-            "loop_id": int(loop_id),
-            "points": int(len(pts)),
-            "length": float(loop.length),
-            "area_best_plane": float(abs(base.signed_area_in_best_plane(pts))),
-            "distance_to_removed_patch_boundary_min": float(np.min(distances)) if len(distances) else None,
-            "distance_to_removed_patch_boundary_mean": float(np.mean(distances)) if len(distances) else None,
-            "distance_to_removed_patch_boundary_p95": p95,
-            "distance_to_removed_patch_boundary_max": max_distance,
-            "selected_for_fill": bool(selected),
-            "classified_as_exact_removed_patch_boundary": bool(exact_patch_boundary),
-        })
-
-    if not selected_loop_ids:
-        return surface, {
-            "enabled": bool(args.step9_fill_lvepi_patch_holes),
-            "method": "pair_patch_and_RV_boundary_loops_then_stitch_annuli",
-            "applied": False,
-            "reason": "no_surface_boundary_loop_matched_removed_patch_boundary",
-            "match_tolerance_mm": float(match_tolerance),
-            "exact_patch_tolerance_mm": float(exact_patch_tolerance),
-            "free_edges_before": free_edges_before,
-            "boundary_loop_count_before": int(len(boundary_loops)),
-            "removed_patch_boundary_loop_count": int(len(patch_boundary_points)),
-            "loop_records": loop_records,
-            "output_surface": surface_summary(surface),
-        }
-
-    pairs: List[Tuple[int, int, Dict[str, float]]] = []
-    if exact_patch_loop_ids and partner_loop_ids:
-        pairs = greedy_pair_loop_ids(exact_patch_loop_ids, partner_loop_ids, loop_points_by_id)
-        pair_method = "pair_exact_removed_patch_boundary_loops_to_nearby_RV_boundary_loops"
-    else:
-        unpaired_ids = set(selected_loop_ids)
-        pair_method = "fallback_greedy_pair_all_selected_boundary_loops"
-        while len(unpaired_ids) >= 2:
-            candidates: List[Tuple[float, int, int, Dict[str, float]]] = []
-            ids = sorted(unpaired_ids)
-            for pos, first_id in enumerate(ids):
-                for second_id in ids[pos + 1:]:
-                    score_record = loop_pair_distance_score(loop_points_by_id[first_id], loop_points_by_id[second_id])
-                    candidates.append((float(score_record["score"]), int(first_id), int(second_id), score_record))
-            candidates.sort(key=lambda item: item[0])
-            _, first_id, second_id, score_record = candidates[0]
-            pairs.append((first_id, second_id, score_record))
-            unpaired_ids.remove(first_id)
-            unpaired_ids.remove(second_id)
-
-    paired_ids = {loop_id for pair in pairs for loop_id in pair[:2]}
-    unpaired_selected_ids = [loop_id for loop_id in selected_loop_ids if loop_id not in paired_ids]
-
-    fill_points_blocks: List[np.ndarray] = [points]
-    fill_triangles_blocks: List[np.ndarray] = [triangles]
-    fill_tags_blocks: List[np.ndarray] = [tags]
-    fill_operations: List[Dict[str, object]] = []
-    point_offset = len(points)
-    added_triangles = 0
-    added_points = 0
-
-    for pair_id, (first_id, second_id, score_record) in enumerate(pairs):
-        try:
-            fill_points, fill_triangles, fill_info = annulus_between_boundary_loop_points(
-                loop_points_by_id[first_id],
-                loop_points_by_id[second_id],
-            )
-        except Exception as exc:
-            fill_points, fill_triangles, fill_info = fan_cap_loop_points(loop_points_by_id[first_id])
-            fill_info.update({
-                "method": "fallback_center_fan_cap_for_first_loop_after_annulus_failure",
-                "annulus_failure": f"{type(exc).__name__}: {exc}",
-            })
-            unpaired_selected_ids.append(second_id)
-        fill_points_blocks.append(fill_points)
-        fill_triangles_blocks.append(fill_triangles + point_offset)
-        fill_tags_blocks.append(np.full(len(fill_triangles), int(args.rv_tag), dtype=np.int32))
-        point_offset += len(fill_points)
-        added_points += int(len(fill_points))
-        added_triangles += int(len(fill_triangles))
-        fill_operations.append({
-            "operation": "stitch_boundary_loop_pair",
-            "pair_id": int(pair_id),
-            "first_loop_id": int(first_id),
-            "second_loop_id": int(second_id),
-            "pair_score": score_record,
-            "fill": fill_info,
-        })
-
-    for loop_id in unpaired_selected_ids:
-        fill_points, fill_triangles, fill_info = fan_cap_loop_points(loop_points_by_id[loop_id])
-        fill_points_blocks.append(fill_points)
-        fill_triangles_blocks.append(fill_triangles + point_offset)
-        fill_tags_blocks.append(np.full(len(fill_triangles), int(args.rv_tag), dtype=np.int32))
-        point_offset += len(fill_points)
-        added_points += int(len(fill_points))
-        added_triangles += int(len(fill_triangles))
-        fill_operations.append({
-            "operation": "fallback_cap_unpaired_boundary_loop",
-            "loop_id": int(loop_id),
-            "fill": fill_info,
-        })
-
-    if not fill_operations:
-        return surface, {
-            "enabled": bool(args.step9_fill_lvepi_patch_holes),
-            "method": "pair_patch_and_RV_boundary_loops_then_stitch_annuli",
-            "applied": False,
-            "reason": "selected_boundary_loops_could_not_be_paired_or_filled",
-            "match_tolerance_mm": float(match_tolerance),
-            "exact_patch_tolerance_mm": float(exact_patch_tolerance),
-            "free_edges_before": free_edges_before,
-            "boundary_loop_count_before": int(len(boundary_loops)),
-            "removed_patch_boundary_loop_count": int(len(patch_boundary_points)),
-            "selected_boundary_loop_count": int(len(selected_loop_ids)),
-            "loop_records": loop_records,
-            "output_surface": surface_summary(surface),
-        }
-
-    merged_points = np.vstack(fill_points_blocks)
-    merged_triangles = np.vstack(fill_triangles_blocks)
-    merged_tags = np.concatenate(fill_tags_blocks)
-    filled = compact_tagged_triangle_surface(merged_points, merged_triangles, merged_tags)
-    free_edges_after_pairing = int(len(base.extract_boundary_edges(filled)))
-
-    remaining_fill_operations: List[Dict[str, object]] = []
-    remaining_boundary_loop_count = 0
-    if free_edges_after_pairing > 0:
-        remaining_loops = base.boundary_loops(filled)
-        remaining_boundary_loop_count = int(len(remaining_loops))
-        if remaining_loops:
-            _, filled_points, filled_triangles, _, filled_tags = tagged_surface_face_arrays(filled)
-            rem_points_blocks: List[np.ndarray] = [filled_points]
-            rem_triangles_blocks: List[np.ndarray] = [filled_triangles]
-            rem_tags_blocks: List[np.ndarray] = [filled_tags]
-            rem_offset = len(filled_points)
-            for loop_id, loop in enumerate(remaining_loops):
-                pts = clean_loop_points(loop_points(loop))
-                if len(pts) < 3:
-                    remaining_fill_operations.append({
-                        "operation": "skip_remaining_boundary_loop",
-                        "loop_id": int(loop_id),
-                        "reason": "fewer_than_3_points",
-                    })
-                    continue
-                try:
-                    cap_points, cap_triangles, cap_info = triangulate_boundary_loop_points(pts)
-                except Exception as exc:
-                    cap_points, cap_triangles, cap_info = fan_cap_loop_points(pts)
-                    cap_info.update({
-                        "fallback_used": True,
-                        "fallback_reason": f"{type(exc).__name__}: {exc}",
-                    })
-                rem_points_blocks.append(cap_points)
-                rem_triangles_blocks.append(cap_triangles + rem_offset)
-                rem_tags_blocks.append(np.full(len(cap_triangles), int(args.rv_tag), dtype=np.int32))
-                rem_offset += len(cap_points)
-                added_points += int(len(cap_points))
-                added_triangles += int(len(cap_triangles))
-                remaining_fill_operations.append({
-                    "operation": "cap_remaining_boundary_loop_after_patch_pairing",
-                    "loop_id": int(loop_id),
-                    "loop_points": int(len(pts)),
-                    "fill": cap_info,
-                })
-            if len(rem_points_blocks) > 1:
-                filled = compact_tagged_triangle_surface(
-                    np.vstack(rem_points_blocks),
-                    np.vstack(rem_triangles_blocks),
-                    np.concatenate(rem_tags_blocks),
-                )
-
-    free_edges_after = int(len(base.extract_boundary_edges(filled)))
-    return filled, {
-        "enabled": bool(args.step9_fill_lvepi_patch_holes),
-        "method": "pair_patch_and_RV_boundary_loops_then_stitch_annuli",
-        "applied": True,
-        "pair_method": pair_method,
-        "fill_tag": int(args.rv_tag),
-        "match_tolerance_mm": float(match_tolerance),
-        "exact_patch_tolerance_mm": float(exact_patch_tolerance),
-        "free_edges_before": free_edges_before,
-        "free_edges_after_pairing": free_edges_after_pairing,
-        "free_edges_after": free_edges_after,
-        "free_edges_reduced_by": int(free_edges_before - free_edges_after),
-        "remaining_boundary_loop_count_after_pairing": int(remaining_boundary_loop_count),
-        "remaining_boundary_cap_count": int(len(remaining_fill_operations)),
-        "boundary_loop_count_before": int(len(boundary_loops)),
-        "removed_patch_boundary_loop_count": int(len(patch_boundary_points)),
-        "selected_boundary_loop_count": int(len(selected_loop_ids)),
-        "exact_removed_patch_boundary_loop_count": int(len(exact_patch_loop_ids)),
-        "partner_boundary_loop_count": int(len(partner_loop_ids)),
-        "stitched_pair_count": int(len(pairs)),
-        "unpaired_fallback_cap_count": int(len(unpaired_selected_ids)),
-        "added_points_before_cleanup": int(added_points),
-        "added_triangles_before_cleanup": int(added_triangles),
-        "loop_records": loop_records,
-        "fill_operations": fill_operations,
-        "remaining_boundary_fill_operations": remaining_fill_operations,
-        "output_surface": surface_summary(filled),
-    }
 
 
-def cap_small_local_seam_loops_with_rv_tag(
-    surface: pv.PolyData,
-    args: argparse.Namespace,
-) -> Tuple[pv.PolyData, Dict[str, object]]:
-    """Close only tiny local free-edge loops, assigning the new cap faces to RV."""
-    surface, points, triangles, _, tags = tagged_surface_face_arrays(surface)
-    free_edges_before = int(len(base.extract_boundary_edges(surface)))
-    boundary_loops = base.boundary_loops(surface)
-    max_loop_points = max(3, int(args.step9_small_local_seam_max_loop_points))
-    max_area = max(0.0, float(args.step9_small_local_seam_max_area))
-    enabled = bool(args.step9_fill_lvepi_patch_holes) and bool(args.step9_fill_small_local_seams)
-
-    loop_records: List[Dict[str, object]] = []
-    if not enabled or free_edges_before == 0 or not boundary_loops:
-        return surface, {
-            "enabled": enabled,
-            "method": "cap_small_local_free_edge_loops_with_RV_tag",
-            "applied": False,
-            "reason": "disabled" if not enabled else "surface_already_has_no_free_edges",
-            "fill_tag": int(args.rv_tag),
-            "free_edges_before": free_edges_before,
-            "free_edges_after": free_edges_before,
-            "boundary_loop_count_before": int(len(boundary_loops)),
-            "capped_loop_count": 0,
-            "output_surface": surface_summary(surface),
-        }
-
-    point_blocks: List[np.ndarray] = [points]
-    triangle_blocks: List[np.ndarray] = [triangles]
-    tag_blocks: List[np.ndarray] = [tags]
-    point_offset = len(points)
-    capped_count = 0
-    added_points = 0
-    added_triangles = 0
-
-    source_tree = cKDTree(points) if len(points) else None
-    source_normals = np.cross(points[triangles[:, 1]] - points[triangles[:, 0]], points[triangles[:, 2]] - points[triangles[:, 0]]) if len(triangles) else np.empty((0, 3), dtype=float)
-    normal_lengths = np.linalg.norm(source_normals, axis=1) if len(source_normals) else np.empty((0,), dtype=float)
-    valid_normal_mask = normal_lengths > 1e-12
-    source_normals[valid_normal_mask] /= normal_lengths[valid_normal_mask][:, None]
-
-    for loop_id, loop in enumerate(boundary_loops):
-        pts = clean_loop_points(loop_points(loop))
-        loop_area = float(abs(base.signed_area_in_best_plane(pts))) if len(pts) >= 3 else 0.0
-        record: Dict[str, object] = {
-            "loop_id": int(loop_id),
-            "points": int(len(pts)),
-            "length": float(loop.length),
-            "area_best_plane": loop_area,
-            "selected_for_RV_seam_cap": False,
-        }
-        if len(pts) < 3:
-            record["reason"] = "fewer_than_3_points"
-            loop_records.append(record)
-            continue
-        if len(pts) > max_loop_points:
-            record["reason"] = "loop_has_too_many_points_for_local_seam_cap"
-            loop_records.append(record)
-            continue
-        if max_area > 0.0 and loop_area > max_area:
-            record["reason"] = "loop_area_exceeds_local_seam_cap_limit"
-            loop_records.append(record)
-            continue
-        try:
-            cap_points, cap_triangles, cap_info = triangulate_boundary_loop_points(pts)
-        except Exception as exc:
-            record.update({
-                "reason": "triangulation_failed",
-                "error_type": type(exc).__name__,
-                "error": str(exc),
-            })
-            loop_records.append(record)
-            continue
-
-        orientation_flipped = False
-        if source_tree is not None and len(cap_triangles) and len(triangles):
-            distances, ids = source_tree.query(cap_points, k=1)
-            matched_ids = np.unique(np.asarray(ids, dtype=np.int64)[np.asarray(distances) <= max(float(args.surface_clean_tolerance) * 100.0, 1e-5)])
-            if len(matched_ids):
-                incident_mask = np.isin(triangles, matched_ids).any(axis=1) & valid_normal_mask
-                if np.any(incident_mask):
-                    neighbor_normal = source_normals[incident_mask].mean(axis=0)
-                    neighbor_norm = float(np.linalg.norm(neighbor_normal))
-                    cap_normal = np.cross(cap_points[cap_triangles[:, 1]] - cap_points[cap_triangles[:, 0]], cap_points[cap_triangles[:, 2]] - cap_points[cap_triangles[:, 0]]).mean(axis=0)
-                    cap_norm = float(np.linalg.norm(cap_normal))
-                    if neighbor_norm > 1e-12 and cap_norm > 1e-12 and float(np.dot(cap_normal / cap_norm, neighbor_normal / neighbor_norm)) < 0.0:
-                        cap_triangles = cap_triangles[:, [0, 2, 1]]
-                        orientation_flipped = True
-
-        point_blocks.append(np.asarray(cap_points, dtype=float))
-        triangle_blocks.append(np.asarray(cap_triangles, dtype=np.int64) + point_offset)
-        tag_blocks.append(np.full(len(cap_triangles), int(args.rv_tag), dtype=np.int32))
-        point_offset += len(cap_points)
-        added_points += int(len(cap_points))
-        added_triangles += int(len(cap_triangles))
-        capped_count += 1
-        record.update({
-            "selected_for_RV_seam_cap": True,
-            "fill_tag": int(args.rv_tag),
-            "orientation_flipped_to_match_neighbors": bool(orientation_flipped),
-            "fill": cap_info,
-        })
-        loop_records.append(record)
-
-    if capped_count == 0:
-        return surface, {
-            "enabled": enabled,
-            "method": "cap_small_local_free_edge_loops_with_RV_tag",
-            "applied": False,
-            "reason": "no_boundary_loop_satisfied_small_local_seam_constraints",
-            "fill_tag": int(args.rv_tag),
-            "free_edges_before": free_edges_before,
-            "free_edges_after": free_edges_before,
-            "boundary_loop_count_before": int(len(boundary_loops)),
-            "max_loop_points": int(max_loop_points),
-            "max_area": float(max_area),
-            "capped_loop_count": 0,
-            "loop_records": loop_records,
-            "output_surface": surface_summary(surface),
-        }
-
-    filled = compact_tagged_triangle_surface(np.vstack(point_blocks), np.vstack(triangle_blocks), np.concatenate(tag_blocks))
-    free_edges_after = int(len(base.extract_boundary_edges(filled)))
-    return filled, {
-        "enabled": enabled,
-        "method": "cap_small_local_free_edge_loops_with_RV_tag",
-        "applied": True,
-        "fill_tag": int(args.rv_tag),
-        "free_edges_before": free_edges_before,
-        "free_edges_after": free_edges_after,
-        "free_edges_reduced_by": int(free_edges_before - free_edges_after),
-        "boundary_loop_count_before": int(len(boundary_loops)),
-        "max_loop_points": int(max_loop_points),
-        "max_area": float(max_area),
-        "capped_loop_count": int(capped_count),
-        "added_points_before_cleanup": int(added_points),
-        "added_triangles_before_cleanup": int(added_triangles),
-        "loop_records": loop_records,
-        "output_surface": surface_summary(filled),
-    }
 
 
 def edge_topology_report(mesh: pv.PolyData, args: argparse.Namespace) -> Dict[str, object]:
@@ -7938,6 +5155,914 @@ def save_tetgen_stage_outputs(
     return paths, summary
 
 
+def save_pipeline_summary(stage_dir: Path, subject_id: str, frame: str, name: str, summary: Dict[str, object]) -> str:
+    stage_dir.mkdir(parents=True, exist_ok=True)
+    path = stage_dir / f"{subject_id}_{frame}_{name}.json"
+    path.write_text(json.dumps(summary, indent=2))
+    return str(path.resolve())
+
+
+def save_step1_loaded_surfaces(
+    stage_dir: Path,
+    subject_id: str,
+    frame: str,
+    surfaces: Dict[str, pv.PolyData],
+    input_paths: Dict[str, Path],
+) -> Tuple[Dict[str, str], Dict[str, object]]:
+    items = [
+        ("LVendo", "lv_endo", int(1)),
+        ("LVepi", "lv_epi", int(1)),
+        ("RV", "rv_endo", int(0)),
+        ("RVepi", "rv_epi", int(0)),
+    ]
+    paths: Dict[str, str] = {}
+    records: Dict[str, object] = {}
+    for output_name, surface_name, tag in items:
+        path = stage_dir / f"{subject_id}_{frame}_{output_name}.vtk"
+        records[output_name] = save_triangle_surface_vtk(path, surfaces[surface_name], elem_tag=tag)
+        records[output_name]["input_path"] = str(input_paths[surface_name].resolve())
+        paths[output_name] = str(path.resolve())
+    summary = {
+        "description": "Original four input surfaces loaded for this subject and frame.",
+        "subject": subject_id,
+        "frame": frame,
+        "output_dir": str(stage_dir.resolve()),
+        "paths": paths,
+        "surfaces": records,
+    }
+    paths["summary"] = save_pipeline_summary(stage_dir, subject_id, frame, "step01_load_surf_summary", summary)
+    return paths, summary
+
+
+def save_step2_base_detection(
+    stage_dir: Path,
+    subject_id: str,
+    frame: str,
+    subject_base_detection: Dict[str, object],
+    lv_profile,
+    rv_profile,
+    lv_base_side: str,
+    rv_base_side: str,
+) -> Tuple[Dict[str, str], Dict[str, object]]:
+    paths = {
+        "LV_z_area_profile": str((stage_dir / f"{subject_id}_{frame}_LV_z_area_profile.csv").resolve()),
+        "RV_z_area_profile": str((stage_dir / f"{subject_id}_{frame}_RV_z_area_profile.csv").resolve()),
+    }
+    base.write_area_profile(Path(paths["LV_z_area_profile"]), lv_profile)
+    base.write_area_profile(Path(paths["RV_z_area_profile"]), rv_profile)
+    summary = {
+        "description": "Subject-level base-side detection and LV/RV Z-area profiles.",
+        "subject": subject_id,
+        "frame": frame,
+        "output_dir": str(stage_dir.resolve()),
+        "paths": paths,
+        "base_side": {"subject": subject_base_detection, "LV": lv_base_side, "RV": rv_base_side},
+        "profiles": {"LV": base.profile_to_dict(lv_profile), "RV": base.profile_to_dict(rv_profile)},
+    }
+    paths["summary"] = save_pipeline_summary(stage_dir, subject_id, frame, "step02_base_detection_summary", summary)
+    return paths, summary
+
+
+def save_openbase_surface_stage(
+    stage_dir: Path,
+    subject_id: str,
+    frame: str,
+    chamber: str,
+    build,
+) -> Tuple[Dict[str, str], Dict[str, object]]:
+    chamber = chamber.upper()
+    tag = 1 if chamber == "LV" else 0
+    surfaces = {
+        f"{chamber}_openbase_epi": build.epi_open,
+        f"{chamber}_openbase_endo": build.endo_open,
+        f"{chamber}_openbase_annulus": build.annulus,
+    }
+    paths: Dict[str, str] = {}
+    records: Dict[str, object] = {}
+    for output_key, mesh in surfaces.items():
+        path = stage_dir / f"{subject_id}_{frame}_{output_key}.vtk"
+        records[output_key] = save_triangle_surface_vtk(path, mesh, elem_tag=tag)
+        paths[output_key] = str(path.resolve())
+    summary = {
+        "description": f"Step {3 if chamber == 'LV' else 4} {chamber} open-base surfaces saved immediately after shell construction.",
+        "subject": subject_id,
+        "frame": frame,
+        "chamber": chamber,
+        "output_dir": str(stage_dir.resolve()),
+        "paths": paths,
+        "surfaces": records,
+        "open_base": openbase.ventricle_summary(build),
+    }
+    paths["summary"] = save_pipeline_summary(
+        stage_dir,
+        subject_id,
+        frame,
+        f"step{3 if chamber == 'LV' else 4:02d}_{chamber}_openbase_summary",
+        summary,
+    )
+    return paths, summary
+
+
+def save_step5_moved_rvendo(
+    stage_dir: Path,
+    subject_id: str,
+    frame: str,
+    rv_endo_moved: pv.PolyData,
+    rv_epi_fixed: pv.PolyData,
+    moved_mask: np.ndarray,
+    opening_mask: np.ndarray,
+    transition_band_mask: np.ndarray,
+    protected_mask: np.ndarray,
+    distance_info: Dict[str, object],
+    args: argparse.Namespace,
+) -> Tuple[Dict[str, str], Dict[str, object]]:
+    moved = rv_endo_moved.extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance)
+    rv_epi = rv_epi_fixed.extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance)
+    distances = cKDTree(np.asarray(rv_epi.points, dtype=float)).query(np.asarray(moved.points, dtype=float), k=1)[0]
+
+    def fit_mask(mask: np.ndarray) -> np.ndarray:
+        values = np.asarray(mask, dtype=bool).reshape(-1)
+        if len(values) == moved.n_points:
+            return values
+        return np.zeros(moved.n_points, dtype=bool)
+
+    point_data = {
+        "movedByStep5": fit_mask(moved_mask).astype(np.int32),
+        "adaptiveOpeningBoundary": fit_mask(opening_mask).astype(np.int32),
+        "openingTransitionBand": fit_mask(transition_band_mask).astype(np.int32),
+        "protectedLVepiIntersection": fit_mask(protected_mask).astype(np.int32),
+        "distanceToRVepi": np.asarray(distances, dtype=np.float32),
+        "belowRequested3mm": (distances < float(args.rv_min_distance_to_rvepi)).astype(np.int32),
+    }
+    path = stage_dir / f"{subject_id}_{frame}_RV_openbase_endo_moved.vtk"
+    record = save_triangle_surface_vtk(path, moved, point_data=point_data, elem_tag=int(args.rv_tag))
+    paths = {"RV_openbase_endo_moved": str(path.resolve())}
+    protected_output = fit_mask(protected_mask)
+    below_requested = distances < float(args.rv_min_distance_to_rvepi)
+    record["distance_summary"] = {
+        "minimum_distance_mm": float(np.min(distances)) if len(distances) else None,
+        "p05_distance_mm": float(np.percentile(distances, 5)) if len(distances) else None,
+        "vertices_below_3mm": int(np.count_nonzero(below_requested)),
+        "protected_vertices_below_3mm": int(np.count_nonzero(below_requested & protected_output)),
+        "movable_vertices_below_3mm": int(np.count_nonzero(below_requested & (~protected_output))),
+    }
+    summary = {
+        "description": "RVendo moved away from fixed RVepi with an adaptive, smoothed open-base ring.",
+        "subject": subject_id,
+        "frame": frame,
+        "output_dir": str(stage_dir.resolve()),
+        "paths": paths,
+        "surface": record,
+        "distance_fix": distance_info,
+        "rv_epi_fixed": True,
+        "protected_intersection_vertices_output": int(np.count_nonzero(protected_output)),
+        "minimum_requested_distance_mm": float(args.rv_min_distance_to_rvepi),
+        "opening_ring_output": "Opening-ring points are included in the moved RVendo surface and marked by adaptiveOpeningBoundary.",
+    }
+    paths["summary"] = save_pipeline_summary(stage_dir, subject_id, frame, "step05_move_RVendo_summary", summary)
+    return paths, summary
+
+
+def save_step5_moved_rvepi(
+    stage_dir: Path,
+    subject_id: str,
+    frame: str,
+    rv_epi_moved: pv.PolyData,
+    rv_endo_fixed: pv.PolyData,
+    moved_mask: np.ndarray,
+    opening_mask: np.ndarray,
+    transition_band_mask: np.ndarray,
+    distance_info: Dict[str, object],
+    args: argparse.Namespace,
+) -> Tuple[Dict[str, str], Dict[str, object]]:
+    moved = rv_epi_moved.extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance)
+    fixed = rv_endo_fixed.extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance)
+    distances = cKDTree(np.asarray(fixed.points, dtype=float)).query(np.asarray(moved.points, dtype=float), k=1)[0]
+
+    def fit_mask(mask: np.ndarray) -> np.ndarray:
+        values = np.asarray(mask, dtype=bool).reshape(-1)
+        if len(values) == moved.n_points:
+            return values
+        return np.zeros(moved.n_points, dtype=bool)
+
+    point_data = {
+        "movedByStep5": fit_mask(moved_mask).astype(np.int32),
+        "adaptiveOpeningBoundary": fit_mask(opening_mask).astype(np.int32),
+        "openingTransitionBand": fit_mask(transition_band_mask).astype(np.int32),
+        "distanceToRVendo": np.asarray(distances, dtype=np.float32),
+        "belowRequested3mm": (distances < float(args.rv_min_distance_to_rvepi)).astype(np.int32),
+    }
+    path = stage_dir / f"{subject_id}_{frame}_RV_openbase_epi_moved.vtk"
+    record = save_triangle_surface_vtk(path, moved, point_data=point_data, elem_tag=int(args.rv_tag))
+    below_requested = distances < float(args.rv_min_distance_to_rvepi)
+    record["distance_summary"] = {
+        "minimum_distance_mm": float(np.min(distances)) if len(distances) else None,
+        "p05_distance_mm": float(np.percentile(distances, 5)) if len(distances) else None,
+        "vertices_below_3mm": int(np.count_nonzero(below_requested)),
+    }
+    paths = {"RV_openbase_epi_moved": str(path.resolve())}
+    summary = {
+        "description": "RVepi moved away from fixed RVendo with an adaptive, smoothed open-base ring.",
+        "subject": subject_id,
+        "frame": frame,
+        "output_dir": str(stage_dir.resolve()),
+        "paths": paths,
+        "surface": record,
+        "distance_fix": distance_info,
+        "rv_endo_fixed": True,
+        "lv_epi_intersection_handling": "not applied",
+        "minimum_requested_distance_mm": float(args.rv_min_distance_to_rvepi),
+    }
+    paths["summary"] = save_pipeline_summary(stage_dir, subject_id, frame, "step05_move_RVepi_summary", summary)
+    return paths, summary
+
+
+def save_step6_reconstructed_annuli(
+    stage_dir: Path,
+    subject_id: str,
+    frame: str,
+    lv_epi: pv.PolyData,
+    lv_endo: pv.PolyData,
+    lv_annulus: pv.PolyData,
+    rv_epi: pv.PolyData,
+    rv_endo: pv.PolyData,
+    rv_annulus: pv.PolyData,
+    lv_info: Dict[str, object],
+    rv_info: Dict[str, object],
+    args: argparse.Namespace,
+) -> Tuple[Dict[str, str], Dict[str, object]]:
+    items = [
+        ("LV_openbase_epi", lv_epi, int(args.lv_tag)),
+        ("LV_openbase_endo", lv_endo, int(args.lv_tag)),
+        ("RV_openbase_epi_moved", rv_epi, int(args.rv_tag)),
+        ("RV_openbase_endo", rv_endo, int(args.rv_tag)),
+        ("LV_openbase_annulus_recon", lv_annulus, int(args.lv_tag)),
+        ("RV_openbase_annulus_recon", rv_annulus, int(args.rv_tag)),
+    ]
+    paths: Dict[str, str] = {}
+    records: Dict[str, object] = {}
+    for output_key, mesh, tag in items:
+        path = stage_dir / f"{subject_id}_{frame}_{output_key}.vtk"
+        records[output_key] = save_triangle_surface_vtk(path, mesh, elem_tag=tag)
+        paths[output_key] = str(path.resolve())
+    summary = {
+        "description": "LV/RV open-base annuli reconstructed by directly connecting the current epi and endo boundary loops.",
+        "subject": subject_id,
+        "frame": frame,
+        "output_dir": str(stage_dir.resolve()),
+        "paths": paths,
+        "surfaces": records,
+        "LV_annulus_reconstruction": lv_info,
+        "RV_annulus_reconstruction": rv_info,
+        "direct_boundary_connection": True,
+        "tetgen_or_downstream_processing": False,
+    }
+    paths["summary"] = save_pipeline_summary(stage_dir, subject_id, frame, "step06_reconstruct_annulus_summary", summary)
+    return paths, summary
+
+
+def load_step6_point_surface(
+    stage_dir: Path,
+    subject_id: str,
+    frame: str,
+    surface_name: str,
+    fallback_names: Sequence[str] = (),
+) -> Tuple[pv.PolyData, Path]:
+    candidate_names = [surface_name, *fallback_names]
+    candidates = [stage_dir / f"{subject_id}_{frame}_{name}.vtk" for name in candidate_names]
+    for path in candidates:
+        if path.exists():
+            return base.load_surface(path), path
+    raise FileNotFoundError(
+        f"Missing Step 6 surface {surface_name!r}; checked: "
+        + ", ".join(str(path) for path in candidates)
+    )
+
+
+def save_step7_whole_points_surface(
+    stage_dir: Path,
+    step6_dir: Path,
+    subject_id: str,
+    frame: str,
+    args: argparse.Namespace,
+) -> Tuple[Dict[str, str], Dict[str, object]]:
+    """Remove RV points near LVepi and save all Step 7 outputs as point clouds."""
+    stage_dir.mkdir(parents=True, exist_ok=True)
+
+    input_specs = [
+        ("LV_openbase_epi", "LV_openbase_epi", (), 1),
+        ("LV_openbase_endo", "LV_openbase_endo", (), 1),
+        ("LV_openbase_annulus_recon", "LV_openbase_annulus_recon", (), 1),
+        ("RV_openbase_epi", "RV_openbase_epi", ("RV_openbase_epi_moved",), 0),
+        ("RV_openbase_endo", "RV_openbase_endo", (), 0),
+        ("RV_openbase_annulus_recon", "RV_openbase_annulus_recon", (), 0),
+    ]
+    inputs: Dict[str, pv.PolyData] = {}
+    input_paths: Dict[str, Path] = {}
+    for logical_name, primary_name, fallback_names, _ in input_specs:
+        mesh, path = load_step6_point_surface(
+            step6_dir,
+            subject_id,
+            frame,
+            primary_name,
+            fallback_names,
+        )
+        inputs[logical_name] = mesh
+        input_paths[logical_name] = path
+
+    lv_epi_reference = inputs["LV_openbase_epi"].extract_surface().triangulate().clean(
+        tolerance=float(args.surface_clean_tolerance)
+    )
+    point_tolerance = max(
+        float(args.step7_lvepi_point_tolerance),
+        float(args.surface_lvepi_clearance),
+        float(args.surface_clean_tolerance) * 100.0,
+        1e-5,
+    )
+
+    def clean_rv_points(name: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        points = np.asarray(inputs[name].points, dtype=float).copy()
+        _, distances = closest_points_on_surface(lv_epi_reference, points)
+        intersecting = distances <= point_tolerance
+        kept_ids = np.flatnonzero(~intersecting).astype(np.int64)
+        return points[kept_ids], kept_ids, distances[kept_ids], intersecting
+
+    rv_epi_points, rv_epi_source_ids, rv_epi_distances, rv_epi_removed = clean_rv_points("RV_openbase_epi")
+    rv_endo_points, rv_endo_source_ids, rv_endo_distances, rv_endo_removed = clean_rv_points("RV_openbase_endo")
+    rv_annulus_points, rv_annulus_source_ids, rv_annulus_distances, rv_annulus_removed = clean_rv_points(
+        "RV_openbase_annulus_recon"
+    )
+
+    rv_epi_path = stage_dir / f"{subject_id}_{frame}_RVepi_clean_surf.vtk"
+    rv_endo_path = stage_dir / f"{subject_id}_{frame}_RVendo_clean_surf.vtk"
+    write_custom_point_cloud_vtk(
+        rv_epi_path,
+        rv_epi_points,
+        np.full(len(rv_epi_points), int(args.rv_tag), dtype=np.int32),
+        point_data={
+            "sourcePointId": rv_epi_source_ids,
+            "distanceToLVepi": rv_epi_distances.astype(np.float32),
+        },
+    )
+    write_custom_point_cloud_vtk(
+        rv_endo_path,
+        rv_endo_points,
+        np.full(len(rv_endo_points), int(args.rv_tag), dtype=np.int32),
+        point_data={
+            "sourcePointId": rv_endo_source_ids,
+            "distanceToLVepi": rv_endo_distances.astype(np.float32),
+        },
+    )
+
+    point_blocks: List[np.ndarray] = []
+    tag_blocks: List[np.ndarray] = []
+    source_surface_blocks: List[np.ndarray] = []
+    source_point_blocks: List[np.ndarray] = []
+    merged_source_names: List[str] = []
+    merged_point_counts: Dict[str, int] = {}
+    merged_removed_counts: Dict[str, int] = {}
+    merged_distance_minima: Dict[str, Optional[float]] = {}
+    cleaned_rv = {
+        "RV_openbase_epi": (rv_epi_points, rv_epi_source_ids, rv_epi_removed, rv_epi_distances),
+        "RV_openbase_endo": (rv_endo_points, rv_endo_source_ids, rv_endo_removed, rv_endo_distances),
+        "RV_openbase_annulus_recon": (
+            rv_annulus_points,
+            rv_annulus_source_ids,
+            rv_annulus_removed,
+            rv_annulus_distances,
+        ),
+    }
+    for source_index, (logical_name, _, _, tag) in enumerate(input_specs):
+        if logical_name in cleaned_rv:
+            points, source_ids, removed_mask, distances = cleaned_rv[logical_name]
+            merged_removed_counts[logical_name] = int(np.count_nonzero(removed_mask))
+            merged_distance_minima[logical_name] = float(np.min(distances)) if len(distances) else None
+        else:
+            points = np.asarray(inputs[logical_name].points, dtype=float).copy()
+            source_ids = np.arange(len(points), dtype=np.int64)
+            merged_removed_counts[logical_name] = 0
+            merged_distance_minima[logical_name] = None
+        point_blocks.append(points)
+        tag_blocks.append(np.full(len(points), int(tag), dtype=np.int32))
+        source_surface_blocks.append(np.full(len(points), int(source_index), dtype=np.int32))
+        source_point_blocks.append(source_ids)
+        merged_source_names.append(logical_name)
+        merged_point_counts[logical_name] = int(len(points))
+
+    merged_points = np.vstack(point_blocks) if point_blocks else np.empty((0, 3), dtype=float)
+    merged_tags = np.concatenate(tag_blocks) if tag_blocks else np.empty((0,), dtype=np.int32)
+    merged_source_surface = (
+        np.concatenate(source_surface_blocks) if source_surface_blocks else np.empty((0,), dtype=np.int32)
+    )
+    merged_source_point = (
+        np.concatenate(source_point_blocks) if source_point_blocks else np.empty((0,), dtype=np.int64)
+    )
+    merged_rv_mask = np.isin(merged_source_surface, np.asarray([3, 4, 5], dtype=np.int32))
+    merged_rv_distances = (
+        closest_points_on_surface(lv_epi_reference, merged_points[merged_rv_mask])[1]
+        if np.any(merged_rv_mask)
+        else np.empty((0,), dtype=float)
+    )
+    merged_rv_intersections = merged_rv_distances <= point_tolerance
+    if np.any(merged_rv_intersections):
+        raise RuntimeError(
+            "Step 7 merged point cloud still contains RV points intersecting LVepi: "
+            f"{int(np.count_nonzero(merged_rv_intersections))} points."
+        )
+    merged_path = stage_dir / f"{subject_id}_{frame}_LVRV_surf.vtk"
+    write_custom_point_cloud_vtk(
+        merged_path,
+        merged_points,
+        merged_tags,
+        point_data={
+            "sourceSurface": merged_source_surface,
+            "sourcePointId": merged_source_point,
+        },
+    )
+
+    paths = {
+        "RVendo_clean_surf": str(rv_endo_path.resolve()),
+        "RVepi_clean_surf": str(rv_epi_path.resolve()),
+        "LVRV_surf": str(merged_path.resolve()),
+    }
+    records = {
+        "RVendo_clean_surf": {
+            "points": int(len(rv_endo_points)),
+            "removed_intersection_points": int(np.count_nonzero(rv_endo_removed)),
+            "point_cloud_only": True,
+            "cell_type": 1,
+        },
+        "RVepi_clean_surf": {
+            "points": int(len(rv_epi_points)),
+            "removed_intersection_points": int(np.count_nonzero(rv_epi_removed)),
+            "point_cloud_only": True,
+            "cell_type": 1,
+        },
+        "LVRV_surf": {
+            "points": int(len(merged_points)),
+            "point_cloud_only": True,
+            "cell_type": 1,
+            "elemTag_counts": {
+                "1": int(np.count_nonzero(merged_tags == int(args.lv_tag))),
+                "0": int(np.count_nonzero(merged_tags == int(args.rv_tag))),
+            },
+            "source_surfaces": merged_source_names,
+        },
+    }
+    summary = {
+        "description": "Step 7 point-only LV/RV surface cloud after removing RV points intersecting the Step 6 LVepi surface.",
+        "subject": subject_id,
+        "frame": frame,
+        "output_dir": str(stage_dir.resolve()),
+        "input_step6_dir": str(step6_dir.resolve()),
+        "input_paths": {name: str(path.resolve()) for name, path in input_paths.items()},
+        "paths": paths,
+        "records": records,
+        "reference_surface": "LV_openbase_epi",
+        "intersection_rule": "remove_RV_points_with_point_to_LVepi_surface_distance_at_or_below_tolerance",
+        "point_intersection_tolerance_mm": float(point_tolerance),
+        "removed_intersection_points": merged_removed_counts,
+        "minimum_kept_distance_to_LVepi_mm": merged_distance_minima,
+        "merged_RV_point_count_checked_against_LVepi": int(np.count_nonzero(merged_rv_mask)),
+        "merged_RV_points_intersecting_LVepi_after_cleaning": int(np.count_nonzero(merged_rv_intersections)),
+        "merged_point_counts": merged_point_counts,
+        "triangle_faces_written": False,
+        "vtk_cell_type": "VTK_VERTEX",
+    }
+    paths["summary"] = save_pipeline_summary(stage_dir, subject_id, frame, "step07_whole_points_surf_summary", summary)
+    return paths, summary
+
+
+def save_step6_merged_point_cloud(
+    stage_dir: Path,
+    subject_id: str,
+    frame: str,
+    args: argparse.Namespace,
+) -> Tuple[str, Dict[str, object]]:
+    """Merge all six Step 6 surfaces as a raw point-only VTK cloud."""
+    input_specs = [
+        ("LV_openbase_epi", "LV_openbase_epi", (), int(args.lv_tag)),
+        ("LV_openbase_endo", "LV_openbase_endo", (), int(args.lv_tag)),
+        ("LV_openbase_annulus_recon", "LV_openbase_annulus_recon", (), int(args.lv_tag)),
+        ("RV_openbase_epi", "RV_openbase_epi", ("RV_openbase_epi_moved",), int(args.rv_tag)),
+        ("RV_openbase_endo", "RV_openbase_endo", (), int(args.rv_tag)),
+        ("RV_openbase_annulus_recon", "RV_openbase_annulus_recon", (), int(args.rv_tag)),
+    ]
+    point_blocks: List[np.ndarray] = []
+    tag_blocks: List[np.ndarray] = []
+    source_surface_blocks: List[np.ndarray] = []
+    source_point_blocks: List[np.ndarray] = []
+    source_names: List[str] = []
+    input_paths: Dict[str, str] = {}
+    point_counts: Dict[str, int] = {}
+    for source_index, (logical_name, primary_name, fallback_names, tag) in enumerate(input_specs):
+        mesh, path = load_step6_point_surface(
+            stage_dir,
+            subject_id,
+            frame,
+            primary_name,
+            fallback_names,
+        )
+        points = np.asarray(mesh.points, dtype=float).copy()
+        point_blocks.append(points)
+        tag_blocks.append(np.full(len(points), int(tag), dtype=np.int32))
+        source_surface_blocks.append(np.full(len(points), int(source_index), dtype=np.int32))
+        source_point_blocks.append(np.arange(len(points), dtype=np.int64))
+        source_names.append(logical_name)
+        input_paths[logical_name] = str(path.resolve())
+        point_counts[logical_name] = int(len(points))
+
+    merged_points = np.vstack(point_blocks) if point_blocks else np.empty((0, 3), dtype=float)
+    merged_tags = np.concatenate(tag_blocks) if tag_blocks else np.empty((0,), dtype=np.int32)
+    merged_source_surface = (
+        np.concatenate(source_surface_blocks) if source_surface_blocks else np.empty((0,), dtype=np.int32)
+    )
+    merged_source_point = (
+        np.concatenate(source_point_blocks) if source_point_blocks else np.empty((0,), dtype=np.int64)
+    )
+    output_path = stage_dir / f"{subject_id}_{frame}_LVRV.vtk"
+    write_custom_point_cloud_vtk(
+        output_path,
+        merged_points,
+        merged_tags,
+        point_data={
+            "sourceSurface": merged_source_surface,
+            "sourcePointId": merged_source_point,
+        },
+    )
+    summary = {
+        "description": "Raw point-only merge of all six Step 6 LV/RV surfaces; no intersection removal is applied.",
+        "subject": subject_id,
+        "frame": frame,
+        "output_dir": str(stage_dir.resolve()),
+        "input_paths": input_paths,
+        "output_path": str(output_path.resolve()),
+        "source_surfaces": source_names,
+        "point_counts": point_counts,
+        "total_points": int(len(merged_points)),
+        "point_cloud_only": True,
+        "vtk_cell_type": "VTK_VERTEX",
+        "triangle_faces_written": False,
+        "elemTag_counts": {
+            "1": int(np.count_nonzero(merged_tags == int(args.lv_tag))),
+            "0": int(np.count_nonzero(merged_tags == int(args.rv_tag))),
+        },
+    }
+    summary_path = stage_dir / f"{subject_id}_{frame}_LVRV_point_cloud_summary.json"
+    summary_path.write_text(json.dumps(summary, indent=2))
+    summary["summary_path"] = str(summary_path.resolve())
+    return str(output_path.resolve()), summary
+
+
+def save_step6_open3d_ball_pivoting_reconstruction(
+    stage_dir: Path,
+    point_cloud_path: str,
+    subject_id: str,
+    frame: str,
+    args: argparse.Namespace,
+) -> Tuple[str, Dict[str, object]]:
+    """Reconstruct source point groups with Open3D Ball Pivoting."""
+    point_cloud = pv.read(point_cloud_path)
+    source_points = np.asarray(point_cloud.points, dtype=float)
+    source_tags = np.asarray(
+        point_cloud.cell_data.get("elemTag", np.zeros(len(source_points), dtype=np.int32)),
+        dtype=np.int32,
+    ).reshape(-1)
+    if len(source_tags) != len(source_points):
+        source_tags = np.zeros(len(source_points), dtype=np.int32)
+
+    source_surface_ids = np.asarray(
+        point_cloud.point_data.get("sourceSurface", np.full(len(source_points), -1, dtype=np.int32)),
+        dtype=np.int32,
+    ).reshape(-1)
+    if len(source_surface_ids) != len(source_points):
+        source_surface_ids = np.full(len(source_points), -1, dtype=np.int32)
+    source_names = [
+        "LV_openbase_epi",
+        "LV_openbase_endo",
+        "LV_openbase_annulus_recon",
+        "RV_openbase_epi",
+        "RV_openbase_endo",
+        "RV_openbase_annulus_recon",
+    ]
+    source_tags_by_id = np.asarray([
+        int(args.lv_tag),
+        int(args.lv_tag),
+        int(args.lv_tag),
+        int(args.rv_tag),
+        int(args.rv_tag),
+        int(args.rv_tag),
+    ], dtype=np.int32)
+    radii_multipliers = [
+        float(value)
+        for value in parse_csv_values(args.step6_ball_pivot_radii_multipliers)
+    ]
+    if not radii_multipliers or any(value <= 0.0 for value in radii_multipliers):
+        raise ValueError("--step6-ball-pivot-radii-multipliers must contain positive values.")
+
+    reconstructed_point_blocks: List[np.ndarray] = []
+    reconstructed_triangle_blocks: List[np.ndarray] = []
+    reconstructed_tag_blocks: List[np.ndarray] = []
+    source_records: List[Dict[str, object]] = []
+    point_offset = 0
+    for source_id, source_name in enumerate(source_names):
+        source_mask = source_surface_ids == int(source_id)
+        points = source_points[source_mask]
+        source_record: Dict[str, object] = {
+            "source_surface": source_name,
+            "source_id": int(source_id),
+            "input_points": int(len(points)),
+            "input_tag": int(source_tags_by_id[source_id]),
+        }
+        if len(points) < 3:
+            source_record.update({
+                "output_points": 0,
+                "output_triangles": 0,
+                "status": "skipped_fewer_than_three_points",
+            })
+            source_records.append(source_record)
+            continue
+
+        nearest_distances = cKDTree(points).query(points, k=2)[0][:, 1]
+        median_spacing = float(np.median(nearest_distances[nearest_distances > 1e-8])) if np.any(nearest_distances > 1e-8) else 0.0
+        if median_spacing <= 0.0:
+            source_record.update({
+                "output_points": 0,
+                "output_triangles": 0,
+                "status": "skipped_duplicate_points_only",
+            })
+            source_records.append(source_record)
+            continue
+
+        pcd = o3d.geometry.PointCloud()
+        pcd.points = o3d.utility.Vector3dVector(points)
+        normal_k = min(max(int(args.step6_ball_pivot_normal_k), 3), len(points) - 1)
+        pcd.estimate_normals(
+            search_param=o3d.geometry.KDTreeSearchParamKNN(knn=normal_k),
+            fast_normal_computation=False,
+        )
+        orientation_k = min(max(normal_k, 3), len(points) - 1)
+        pcd.orient_normals_consistent_tangent_plane(orientation_k)
+        radii = [median_spacing * multiplier for multiplier in radii_multipliers]
+        ball_mesh = o3d.geometry.TriangleMesh.create_from_point_cloud_ball_pivoting(
+            pcd,
+            o3d.utility.DoubleVector(radii),
+        )
+        ball_points = np.asarray(ball_mesh.vertices, dtype=float)
+        ball_triangles = np.asarray(ball_mesh.triangles, dtype=np.int64)
+        source_record.update({
+            "median_neighbor_spacing_mm": median_spacing,
+            "normal_k": int(normal_k),
+            "ball_pivot_radii_mm": radii,
+            "output_points": int(len(ball_points)),
+            "output_triangles": int(len(ball_triangles)),
+            "status": "reconstructed" if len(ball_triangles) else "no_triangles",
+        })
+        source_records.append(source_record)
+        if len(ball_points) == 0 or len(ball_triangles) == 0:
+            continue
+        reconstructed_point_blocks.append(ball_points)
+        reconstructed_triangle_blocks.append(ball_triangles + int(point_offset))
+        reconstructed_tag_blocks.append(
+            np.full(len(ball_triangles), int(source_tags_by_id[source_id]), dtype=np.int32)
+        )
+        point_offset += len(ball_points)
+
+    if not reconstructed_point_blocks or not reconstructed_triangle_blocks:
+        raise RuntimeError("Open3D Ball Pivoting produced no triangles from the Step 6 point cloud.")
+    reconstructed_points = np.vstack(reconstructed_point_blocks)
+    triangles = np.vstack(reconstructed_triangle_blocks)
+    reconstructed_tags = np.concatenate(reconstructed_tag_blocks)
+    reconstructed_surface = pv.PolyData(reconstructed_points, base.faces_from_triangles(triangles))
+    reconstructed_surface.cell_data["elemTag"] = reconstructed_tags
+
+    output_path = stage_dir / f"{subject_id}_{frame}_LVRV_surf.vtk"
+    record = save_triangle_surface_vtk(output_path, reconstructed_surface, elem_tag=None)
+    summary = {
+        "description": "Triangle surface reconstructed from the six Step 6 point groups with Open3D Ball Pivoting.",
+        "subject": subject_id,
+        "frame": frame,
+        "input_point_cloud": str(Path(point_cloud_path).resolve()),
+        "output_path": str(output_path.resolve()),
+        "method": "open3d_ball_pivoting_per_source_surface_group",
+        "normal_k": int(args.step6_ball_pivot_normal_k),
+        "radii_multipliers": radii_multipliers,
+        "source_points": int(len(source_points)),
+        "source_surface_records": source_records,
+        "reconstructed_surface": record,
+        "tag_assignment": "source-surface tag assigned to each reconstructed patch",
+    }
+    summary_path = stage_dir / f"{subject_id}_{frame}_LVRV_surface_ball_pivoting_summary.json"
+    summary_path.write_text(json.dumps(summary, indent=2))
+    summary["summary_path"] = str(summary_path.resolve())
+    return str(output_path.resolve()), summary
+
+
+def process_frame_new_pipeline(args: argparse.Namespace, frame: str) -> Dict[str, object]:
+    """Run the active seven-stage surface point-cloud pipeline for one subject/frame."""
+    subject_dir = args.subject_dir
+    subject_id = subject_dir.name
+    vtk_dir = resolve_vtk_dir(subject_dir, args.vtk_dir)
+    pipeline_root = args.pipeline_output_root or subject_dir / "volmesh_pipline"
+    if pipeline_root.name.startswith("step"):
+        pipeline_root = pipeline_root.parent
+    pipeline_root.mkdir(parents=True, exist_ok=True)
+
+    step1_dir = resolve_pipeline_stage_dir(subject_dir, pipeline_root, "step_01_load_surf")
+    step2_dir = resolve_pipeline_stage_dir(subject_dir, pipeline_root, "step_02_base_detection")
+    step3_dir = resolve_pipeline_stage_dir(subject_dir, pipeline_root, "step_03_LV_openbase")
+    step4_dir = resolve_pipeline_stage_dir(subject_dir, pipeline_root, "step_04_RV_openbase")
+    step5_dir = resolve_pipeline_stage_dir(subject_dir, pipeline_root, "step_05_move_RVepi")
+    step6_dir = resolve_pipeline_stage_dir(subject_dir, pipeline_root, "step_06_reconstruct_annulus")
+    step7_dir = resolve_pipeline_stage_dir(subject_dir, pipeline_root, "step_07_whole_points_surf")
+
+    input_paths = input_paths_for_frame(vtk_dir, frame)
+    log_stage(f"{subject_id} {frame}: Step 1 load four surfaces")
+    surfaces = load_surfaces(vtk_dir, frame)
+    step1_paths, _ = save_step1_loaded_surfaces(step1_dir, subject_id, frame, surfaces, input_paths)
+
+    frame_args = openbase.namespace_with_overrides(args, {"frame": frame})
+    log_stage(f"{subject_id} {frame}: Step 2 detect subject-level base side")
+    subject_base_side, subject_base_detection = openbase.detect_subject_base_side(vtk_dir, frame_args)
+    lv_base_side = args.lv_base_side or subject_base_side
+    rv_base_side = args.rv_base_side or subject_base_side
+    subject_base_detection["applied_base_side"] = {"lv": lv_base_side, "rv": rv_base_side}
+
+    lv_profile = base.compute_area_profile(
+        surfaces["lv_endo"],
+        samples=args.samples,
+        slab_fraction=args.slab_fraction,
+        end_band_fraction=args.end_band_fraction,
+        stable_fraction=args.stable_fraction,
+        override_base_side=lv_base_side,
+    )
+    rv_profile = base.compute_area_profile(
+        surfaces["rv_endo"],
+        samples=args.samples,
+        slab_fraction=args.slab_fraction,
+        end_band_fraction=args.end_band_fraction,
+        stable_fraction=args.stable_fraction,
+        override_base_side=rv_base_side,
+    )
+    step2_paths, _ = save_step2_base_detection(
+        step2_dir,
+        subject_id,
+        frame,
+        subject_base_detection,
+        lv_profile,
+        rv_profile,
+        lv_base_side,
+        rv_base_side,
+    )
+
+    log_stage(f"{subject_id} {frame}: Step 3 build LV open-base myocardial shell")
+    lv_build = build_ventricle_shell_for_pre_step5(
+        "LV", surfaces["lv_endo"], surfaces["lv_epi"], lv_profile, frame_args
+    )
+    step3_paths, _ = save_openbase_surface_stage(step3_dir, subject_id, frame, "LV", lv_build)
+
+    log_stage(f"{subject_id} {frame}: Step 4 build initial RV open-base myocardial shell")
+    rv_build = build_ventricle_shell_for_pre_step5(
+        "RV", surfaces["rv_endo"], surfaces["rv_epi"], rv_profile, frame_args
+    )
+    step4_paths, _ = save_openbase_surface_stage(step4_dir, subject_id, frame, "RV", rv_build)
+
+    if args.stop_after_open_shells:
+        return {
+            "subject": subject_id,
+            "frame": frame,
+            "stopped_after": "step04_RV_openbase",
+            "stage_outputs": {
+                "step_01_load_surf": step1_paths,
+                "step_02_base_detection": step2_paths,
+                "step_03_LV_openbase": step3_paths,
+                "step_04_RV_openbase": step4_paths,
+            },
+        }
+
+    rv_endo_step5_surface = rv_build.endo_open.extract_surface().triangulate().clean(tolerance=frame_args.surface_clean_tolerance)
+    rv_epi_step5_surface = rv_build.epi_open.extract_surface().triangulate().clean(tolerance=frame_args.surface_clean_tolerance)
+    log_stage(f"{subject_id} {frame}: Step 5 move RVepi away from fixed RVendo by at least 3 mm")
+    rv_epi_moved, moved_mask, opening_mask, transition_band_mask, moved_opening_loop, distance_info = enforce_rvepi_distance_adaptive_opening_ring(
+        rv_epi_step5_surface,
+        rv_endo_step5_surface,
+        rv_build.epi_opening_loop,
+        frame_args,
+    )
+    distance_info["step"] = "step05_move_RVepi"
+    distance_info["opening_loop_after_step5"] = loop_record(moved_opening_loop)
+    step5_paths, _ = save_step5_moved_rvepi(
+        step5_dir,
+        subject_id,
+        frame,
+        rv_epi_moved,
+        rv_endo_step5_surface,
+        moved_mask,
+        opening_mask,
+        transition_band_mask,
+        distance_info,
+        frame_args,
+    )
+
+    log_stage(f"{subject_id} {frame}: Step 6 reconstruct LV/RV annuli from current epi/endo boundaries")
+    lv_epi_loop, lv_endo_loop, lv_annulus, lv_annulus_info = rebuild_openbase_annulus_from_current_surfaces(
+        "LV",
+        lv_build.epi_open,
+        lv_build.endo_open,
+        lv_profile,
+        frame_args,
+    )
+    rv_epi_loop, rv_endo_loop, rv_annulus, rv_annulus_info = rebuild_openbase_annulus_from_current_surfaces(
+        "RV",
+        rv_epi_moved,
+        rv_endo_step5_surface,
+        rv_profile,
+        frame_args,
+    )
+    step6_paths, _ = save_step6_reconstructed_annuli(
+        step6_dir,
+        subject_id,
+        frame,
+        lv_build.epi_open,
+        lv_build.endo_open,
+        lv_annulus,
+        rv_epi_moved,
+        rv_endo_step5_surface,
+        rv_annulus,
+        {
+            **lv_annulus_info,
+            "selected_epi_boundary_loop": loop_record(lv_epi_loop),
+            "selected_endo_boundary_loop": loop_record(lv_endo_loop),
+        },
+        {
+            **rv_annulus_info,
+            "selected_epi_boundary_loop": loop_record(rv_epi_loop),
+            "selected_endo_boundary_loop": loop_record(rv_endo_loop),
+        },
+        frame_args,
+    )
+    log_stage(f"{subject_id} {frame}: merge the six Step 6 surfaces into a raw point cloud")
+    step6_lvrv_point_cloud_path, step6_lvrv_point_cloud_summary = save_step6_merged_point_cloud(
+        step6_dir,
+        subject_id,
+        frame,
+        frame_args,
+    )
+    step6_paths["LVRV_point_cloud"] = step6_lvrv_point_cloud_path
+    step6_paths["LVRV_point_cloud_summary"] = step6_lvrv_point_cloud_summary["summary_path"]
+    log_stage(f"{subject_id} {frame}: reconstruct a triangle surface from the Step 6 point cloud with Open3D Ball Pivoting")
+    step6_lvrv_surface_path, step6_lvrv_surface_summary = save_step6_open3d_ball_pivoting_reconstruction(
+        step6_dir,
+        step6_lvrv_point_cloud_path,
+        subject_id,
+        frame,
+        frame_args,
+    )
+    step6_paths["LVRV_surface_ball_pivoting"] = step6_lvrv_surface_path
+    step6_paths["LVRV_surface_ball_pivoting_summary"] = step6_lvrv_surface_summary["summary_path"]
+
+    log_stage(f"{subject_id} {frame}: Step 7 remove RV points intersecting LVepi and save merged point cloud")
+    step7_paths, _ = save_step7_whole_points_surface(
+        step7_dir,
+        step6_dir,
+        subject_id,
+        frame,
+        frame_args,
+    )
+
+    return {
+        "subject": subject_id,
+        "frame": frame,
+        "stopped_after": "step07_whole_points_surf",
+        "stage_outputs": {
+            "step_01_load_surf": step1_paths,
+            "step_02_base_detection": step2_paths,
+            "step_03_LV_openbase": step3_paths,
+            "step_04_RV_openbase": step4_paths,
+            "step_05_move_RVepi": step5_paths,
+            "step_06_reconstruct_annulus": step6_paths,
+            "step_07_whole_points_surf": step7_paths,
+        },
+        "active_pipeline": [
+            "load_four_surfaces",
+            "subject_level_base_side_detection",
+            "build_LV_openbase_shell",
+            "build_initial_RV_openbase_shell",
+            "move_RVepi_to_minimum_3mm_from_fixed_RVendo_with_adaptive_opening_ring",
+            "directly_reconstruct_LV_and_RV_openbase_annuli",
+            "merge_six_step06_surfaces_to_raw_point_only_LVRV_cloud",
+            "reconstruct_LVRV_surface_with_open3d_ball_pivoting",
+            "remove_RV_points_intersecting_LVepi_and_save_point_only_LVRV_cloud",
+        ],
+        "disabled_downstream_stages": [
+            "intersection_removal",
+            "surface_merge",
+            "TetGen",
+            "volume_tagging",
+        ],
+    }
+
+
 def process_frame(args: argparse.Namespace, frame: str) -> Dict[str, object]:
     subject_dir = args.subject_dir
     subject_id = subject_dir.name
@@ -7946,7 +6071,7 @@ def process_frame(args: argparse.Namespace, frame: str) -> Dict[str, object]:
     open_shell_stage_dir = resolve_pipeline_output_dir(subject_dir, args.pipeline_output_root)
     intersection_stage_dir = resolve_pipeline_stage_dir(subject_dir, args.pipeline_output_root, "step5remove_intersection")
     rvendo_distance_stage_dir = resolve_pipeline_stage_dir(subject_dir, args.pipeline_output_root, "step7moveRVendo")
-    step8_stage_dir = resolve_pipeline_stage_dir(subject_dir, args.pipeline_output_root, "step8fix_intersection_new_surf")
+    fix_new_surface_stage_dir = resolve_pipeline_stage_dir(subject_dir, args.pipeline_output_root, "step8fix_intersection_new_surf")
     merge_surface_stage_dir = resolve_pipeline_stage_dir(subject_dir, args.pipeline_output_root, "step9merge_surface")
     tetgen_stage_dir = resolve_pipeline_stage_dir(subject_dir, args.pipeline_output_root, "step10tetgen")
     step11_stage_dir = resolve_pipeline_stage_dir(subject_dir, args.pipeline_output_root, "step11volmesh_LVRV")
@@ -8015,88 +6140,24 @@ def process_frame(args: argparse.Namespace, frame: str) -> Dict[str, object]:
     lv_epi_open = lv_build.epi_open.extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance)
     lv_epi_intersection_reference = surfaces["lv_epi"].extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance)
 
-    log_stage(f"{subject_id} {frame}: step 5 remove open-base RVepi overlap vertices once, trace one fixed-LVepi edge seam, and validate rebuilt RVepi")
-    rv_epi_step5 = rebuild_step5_open_rvepi(
+    log_stage(f"{subject_id} {frame}: step 5 delete intersecting RVepi vertices and rebuild sparse-guided smooth LVepi-edge transition strip")
+    rv_epi_step5 = substitute_intersecting_vertices_with_lvepi_existing_vertices(
+        "RVepi_open",
         rv_build.epi_open,
-        lv_epi_open,
+        lv_epi_intersection_reference,
         rv_build.epi_opening_loop,
         int(args.rv_tag),
         args,
     )
-    step5_requested_paths = save_step5_requested_outputs(
-        intersection_stage_dir, subject_id, frame, rv_epi_step5, int(args.rv_tag),
-        lv_epi_open, args,
-    )
-    if args.stop_after_step5:
-        return {
-            "frame": frame,
-            "stopped_after": "step05_rebuilt_open_RVepi",
-            "stage_outputs": step5_requested_paths,
-            "step5_validation": {
-                "RVepi_rebuilt_LVepi_contact": rv_epi_step5["info"]["RVepi_rebuilt_LVepi_contact"],
-                "self_intersection_repair": rv_epi_step5["info"]["self_intersection_repair"],
-                "selected_seam": rv_epi_step5["info"]["selected_seam"],
-                "collar": rv_epi_step5["info"]["collar"],
-            },
-        }
-    log_stage(f"{subject_id} {frame}: step 6 delete open-base RVendo overlap vertices against unchanged open-base LVepi")
-    rv_endo_clean, _, rv_endo_clean_info = step5_remove_1_from_open_rvepi(
+    log_stage(f"{subject_id} {frame}: step 6 delete intersecting RVendo vertices and rebuild sparse-guided smooth LVepi-edge transition strip")
+    rv_endo_step6 = substitute_intersecting_vertices_with_lvepi_existing_vertices(
+        "RV_open",
         rv_build.endo_open,
-        lv_epi_open,
+        lv_epi_intersection_reference,
         rv_build.endo_opening_loop,
         int(args.rv_tag),
         args,
-        surface_name="RVendo",
-        stage_name="Step 6",
     )
-    rv_endo_clean_path = intersection_stage_dir / f"{subject_id}_{frame}_RVendo_clean_surf.vtk"
-    save_triangle_surface_vtk(
-        rv_endo_clean_path, rv_endo_clean, elem_tag=int(args.rv_tag),
-        point_type="double", point_format="%.17g",
-    )
-    saved_rv_endo_clean = pv.read(rv_endo_clean_path).extract_surface().triangulate()
-    saved_crossings = step5_intersection_curve(saved_rv_endo_clean, lv_epi_open, args.surface_clean_tolerance)
-    if saved_crossings.n_points:
-        raise RuntimeError(
-            f"Step 6 saved RVendo_remove_1 regained {saved_crossings.n_points} RVendo/LVepi intersection points."
-        )
-    if args.stop_after_step6:
-        return {
-            "frame": frame,
-            "stopped_after": "step06_RVendo_remove_1",
-            "stage_outputs": {"RVendo_remove_1": str(rv_endo_clean_path.resolve())},
-            "step6_deletion": rv_endo_clean_info,
-        }
-    rv_endo_cut_loops, rv_endo_cut_info = select_lvepi_cut_boundary_loops(
-        "Step6_RVendo_remove_1", rv_endo_clean, rv_build.endo_opening_loop, args,
-    )
-    if len(base.boundary_loops(rv_endo_clean)) != 2 or len(rv_endo_cut_loops) != 1:
-        raise RuntimeError("Step 6 RVendo_remove_1 must have one intersection cut distinct from its basal opening.")
-    # Step 7 still expects an LVepi guide loop; Step 6 itself adds no collar faces.
-    _, rv_endo_guide_loop, rv_endo_guide_info = trace_existing_lvepi_edge_loop_from_cut_loop(
-        "Step6_RVendo_remove_1_LVepi_guide", rv_endo_cut_loops[0], lv_epi_open, args,
-    )
-    rv_endo_cut_points = clean_loop_points(loop_points(rv_endo_cut_loops[0]))
-    rv_endo_cut_mask = map_source_points_to_target_mask(
-        rv_endo_cut_points, np.asarray(rv_endo_clean.points, dtype=float),
-        max(float(args.boundary_match_tolerance), 1e-5),
-    )
-    rv_endo_step6 = {
-        "surface": rv_endo_clean,
-        "trimmed_surface": rv_endo_clean,
-        "stitch_surface": empty_tagged_triangle_surface(int(args.rv_tag)),
-        "cut_mask": rv_endo_cut_mask,
-        "trimmed_cut_mask": rv_endo_cut_mask,
-        "rv_cut_loops": rv_endo_cut_loops,
-        "lv_seam_loops": [rv_endo_guide_loop],
-        "info": {
-            "method": "Step6_open_base_RVendo_remove_1_vertex_deletion_only",
-            "deletion": rv_endo_clean_info,
-            "intersection_cut": rv_endo_cut_info,
-            "Step7_LVepi_guide_only": rv_endo_guide_info,
-            "clean_surface_path": str(rv_endo_clean_path.resolve()),
-        },
-    }
 
     rv_epi_trimmed = rv_epi_step5["surface"]
     rv_epi_trimmed_core = rv_epi_step5["trimmed_surface"]
@@ -8141,120 +6202,31 @@ def process_frame(args: argparse.Namespace, frame: str) -> Dict[str, object]:
             "intersection_removal_stage_outputs": intersection_stage_paths,
         }
 
-    log_stage(f"{subject_id} {frame}: read Step 6 RVendo clean VTK and move it against fixed RVepi")
-    rv_endo_step7_input = pv.read(rv_endo_clean_path).extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance)
+    log_stage(f"{subject_id} {frame}: keep RVepi fixed, move RVendo core to >=3 mm, then rebuild RVendo LVepi-interface ring from original LVepi vertices")
+    rv_endo_step7_lvepi_vertex_id_loops, rv_endo_step7_lvepi_loops, rv_endo_step7_lvepi_ring_info = select_step7_lvepi_interface_loops_away_from_rvepi_boundary(
+        rv_endo_step6["lv_seam_loops"],
+        rv_epi_step5["lv_seam_loops"],
+        rv_epi_trimmed,
+        lv_epi_intersection_reference,
+        args,
+    )
     rv_endo_fixed_core, rv_endo_moved_mask_core, rv_endo_opening_mask_core, rv_endo_transition_band_mask_core, rv_endo_step7_opening_loop, rv_distance_fix = enforce_rvendo_distance_adaptive_opening_ring(
-        rv_endo_step7_input,
+        rv_endo_trimmed_core,
         rv_epi_trimmed,
         rv_build.endo_opening_loop,
         args,
     )
-    stabilization_failures = []
-    stabilized_core = None
-    stabilization_record = None
-    for smooth_iterations in (5, 10, 20, 40):
-        smoothed = rv_endo_fixed_core.smooth(
-            n_iter=smooth_iterations, relaxation_factor=0.15, boundary_smoothing=True,
-        )
-        if len(step5_self_intersection_pairs(smoothed)):
-            stabilization_failures.append({"smooth_iterations": smooth_iterations, "reason": "self_intersection_after_smoothing"})
-            continue
-        candidate_core, _, correction_info = enforce_surface_distance_to_rvepi_preserving_lvepi_boundary(
-            "RVendo_step7_moved_core", smoothed, rv_epi_trimmed, args,
-        )
-        candidate_pairs = len(step5_self_intersection_pairs(candidate_core))
-        candidate_crossings = step5_intersection_curve(candidate_core, lv_epi_open, args.surface_clean_tolerance).n_points
-        candidate_loops = base.boundary_loops(candidate_core)
-        if candidate_pairs or candidate_crossings or len(candidate_loops) != 2 or correction_info["final_vertices_below_requested_distance"]:
-            stabilization_failures.append({
-                "smooth_iterations": smooth_iterations,
-                "self_intersection_pairs": int(candidate_pairs),
-                "LVepi_crossing_points": int(candidate_crossings),
-                "boundary_loops": int(len(candidate_loops)),
-                "vertices_below_3mm": int(correction_info["final_vertices_below_requested_distance"]),
-            })
-            continue
-        new_opening_loop, opening_match = select_boundary_loop_by_reference(
-            "RVendo_step7_stabilized_basal_opening", candidate_core, rv_endo_step7_opening_loop,
-        )
-        stabilized_core = candidate_core
-        stabilization_record = {
-            "method": "adaptive_openbase_displacement_then_controlled_surface_smoothing_and_true_RVepi_triangle_clearance",
-            "smooth_iterations": int(smooth_iterations),
-            "triangle_surface_distance_correction": correction_info,
-            "basal_opening_after_stabilization": opening_match,
-            "candidate_failures": stabilization_failures,
-        }
-        rv_endo_step7_opening_loop = new_opening_loop
-        break
-    if stabilized_core is None:
-        raise RuntimeError("Step 7 cannot stabilize moved RVendo without self-intersection or LVepi crossing: " + json.dumps(stabilization_failures))
-    rv_endo_fixed_core = stabilized_core
-    rv_distance_fix["moved_core_stabilization"] = stabilization_record
-    original_step6_points = np.asarray(rv_endo_step7_input.points, dtype=float)
-    stabilized_points = np.asarray(rv_endo_fixed_core.points, dtype=float)
-    nearest_source_ids = cKDTree(original_step6_points).query(stabilized_points, k=1)[1]
-    rv_endo_moved_mask_core = np.linalg.norm(stabilized_points - original_step6_points[nearest_source_ids], axis=1) > max(float(args.boundary_match_tolerance), 1e-6)
-    rv_endo_opening_mask_core = map_source_points_to_target_mask(
-        clean_loop_points(loop_points(rv_endo_step7_opening_loop)), stabilized_points,
-        max(float(args.boundary_match_tolerance), 1e-5),
+    rv_endo_step7_interface = rebuild_rvendo_lvepi_interface_after_step7(
+        "RVendo_step7",
+        rv_endo_fixed_core,
+        rv_endo_step6["rv_cut_loops"],
+        rv_endo_step7_lvepi_vertex_id_loops,
+        rv_endo_step7_lvepi_loops,
+        lv_epi_intersection_reference,
+        rv_epi_trimmed,
+        int(args.rv_tag),
+        args,
     )
-    rv_endo_transition_band_mask_core = rv_endo_opening_mask_core.copy()
-    moved_intersection_cut, _ = select_boundary_loop_by_reference(
-        "RVendo_step7_moved_nonbasal_intersection_cut", rv_endo_fixed_core,
-        rv_endo_step6["rv_cut_loops"][0],
-    )
-    log_stage(f"{subject_id} {frame}: trace the moved intersection cut on original open-base LVepi edges")
-    rv_endo_step7_lvepi_vertex_id_loops, rv_endo_step7_lvepi_loops, rv_endo_step7_lvepi_ring_info = select_step7_lvepi_interface_loops_away_from_rvepi_boundary(
-        [moved_intersection_cut], rv_epi_step5["lv_seam_loops"], rv_epi_trimmed,
-        lv_epi_open, args, lv_epi_intersection_reference,
-    )
-    candidate_records = sorted(
-        (record for record in rv_endo_step7_lvepi_ring_info["loops"][0]["candidate_records"] if record.get("valid")),
-        key=lambda record: (len(record["lv_epi_vertex_ids"]), float(record["score"])),
-    )
-    candidate_failures = []
-    rv_endo_step7_interface = None
-    seen_candidate_ids = set()
-    for record in candidate_records:
-        ids = np.asarray(record["lv_epi_vertex_ids"], dtype=np.int64)
-        key = tuple(int(value) for value in ids)
-        if key in seen_candidate_ids:
-            continue
-        seen_candidate_ids.add(key)
-        loop = base.make_polyline(np.asarray(lv_epi_open.points, dtype=float)[ids])
-        for reverse_seam in (False,):
-            for phase_fraction in (0.0, 0.02, -0.02):
-                log_stage(
-                    f"{subject_id} {frame}: test Step 7 seam {len(ids)} vertices, "
-                    f"reverse={reverse_seam}, phase={phase_fraction:g}"
-                )
-                try:
-                    option = rebuild_rvendo_lvepi_interface_after_step7(
-                        "RVendo_step7", rv_endo_fixed_core, rv_endo_step6["rv_cut_loops"],
-                        [ids], [loop], lv_epi_open, rv_epi_trimmed, int(args.rv_tag), args,
-                        reverse_seam=reverse_seam, seam_phase_fraction=phase_fraction,
-                    )
-                    rv_endo_step7_interface = option
-                    rv_endo_step7_lvepi_vertex_id_loops = [ids]
-                    rv_endo_step7_lvepi_loops = [loop]
-                    rv_endo_step7_lvepi_ring_info["accepted_candidate"] = record
-                    rv_endo_step7_lvepi_ring_info["accepted_collar_alignment"] = {
-                        "reverse_seam": bool(reverse_seam), "phase_fraction": float(phase_fraction),
-                    }
-                    break
-                except RuntimeError as error:
-                    candidate_failures.append({
-                        "seam_points": int(len(ids)), "reverse_seam": bool(reverse_seam),
-                        "phase_fraction": float(phase_fraction), "reason": str(error),
-                    })
-            if rv_endo_step7_interface is not None:
-                break
-        if rv_endo_step7_interface is not None:
-            break
-    if rv_endo_step7_interface is None:
-        raise RuntimeError("Step 7 rejected every collision-checked LVepi-edge seam: " + json.dumps(candidate_failures))
-    rv_endo_step7_lvepi_ring_info["rejected_candidate_rebuilds"] = candidate_failures
     rv_endo_fixed = rv_endo_step7_interface["surface"]
     mask_map_tol = max(float(args.boundary_match_tolerance), float(args.surface_clean_tolerance) * 10.0)
     rv_endo_moved_mask_from_core = map_source_points_to_target_mask(
@@ -8289,14 +6261,29 @@ def process_frame(args: argparse.Namespace, frame: str) -> Dict[str, object]:
     rvendo_distance_stage_paths: Dict[str, str] = {}
     rvendo_distance_stage_summary: Dict[str, object] = {}
     if args.save_rvendo_distance_stage:
-        log_stage(f"{subject_id} {frame}: validate and save the Step 7 seam, moved clean RVendo, and rebuilt RVendo")
-        rvendo_distance_stage_paths = save_step7_requested_outputs(
-            rvendo_distance_stage_dir, subject_id, frame,
-            rv_endo_step7_lvepi_loops[0], rv_endo_fixed_core, rv_endo_fixed,
-            lv_epi_open, rv_epi_trimmed, rv_epi_step5["lv_seam_loops"][0],
-            rv_endo_step7_opening_loop, args, lv_epi_intersection_reference,
+        log_stage(f"{subject_id} {frame}: save step 7 RVepi/RVendo/rebuilt-annulus triangle-surface outputs")
+        rvendo_distance_stage_paths, rvendo_distance_stage_summary = save_rvendo_distance_stage_outputs(
+            rvendo_distance_stage_dir,
+            subject_id,
+            frame,
+            rv_epi_trimmed,
+            rv_endo_fixed,
+            rv_endo_moved_mask,
+            rv_distance_fix,
+            args,
+            rv_endo_opening_mask,
+            rv_endo_transition_band_mask,
+            rv_step7_annulus,
+            rv_step7_annulus_info,
+            extra_surfaces=[
+                ("stage07_RVendo_moved_core_before_LVepi_interface_rebuild_surface", rv_endo_fixed_core, rv_endo_moved_mask_core, int(args.rv_tag)),
+                ("stage07_RVendo_new_LVepi_interface_ring_rebuilt_surface", rv_endo_fixed, rv_endo_lvepi_cut_mask, int(args.rv_tag)),
+            ],
+            extra_line_loops=[
+                ("stage07_RVepi_fixed_LVepi_interface_boundary_ring", rv_epi_step5["lv_seam_loops"], int(args.rv_tag)),
+                ("stage07_RVendo_new_LVepi_interface_boundary_ring", rv_endo_step7_lvepi_loops, int(args.rv_tag)),
+            ],
         )
-        rvendo_distance_stage_summary = {"paths": rvendo_distance_stage_paths, "rv_distance_fix": rv_distance_fix}
 
     if args.stop_after_rvendo_distance:
         return {
@@ -8307,17 +6294,17 @@ def process_frame(args: argparse.Namespace, frame: str) -> Dict[str, object]:
             "rvendo_distance_stage_outputs": rvendo_distance_stage_paths,
         }
 
-    log_stage(f"{subject_id} {frame}: step 8 rebuild LV/RV open-base annuli from the current surfaces")
-    try:
-        step8_surfaces, step8_annulus_info = rebuild_step8_openbase_surfaces(
-            lv_epi_open, lv_build.endo_open, rv_epi_trimmed, rv_endo_fixed,
-            lv_profile, rv_profile, args,
-        )
-    except Step8AnnulusRepairError as error:
-        step8_stage_dir.mkdir(parents=True, exist_ok=True)
-        failure_path = step8_stage_dir / f"{subject_id}_{frame}_stage08_annulus_repair_failure.json"
-        failure_path.write_text(json.dumps({"subject": subject_id, "frame": frame, "message": str(error), **error.diagnostics}, indent=2))
-        raise RuntimeError(f"{error} Diagnostics: {failure_path}") from error
+    log_stage(f"{subject_id} {frame}: step 8 re-fix RV/LVepi intersections and rebuild LV/RV open-base annuli")
+    step8_surfaces, step8_masks, step8_fix_info = fix_intersections_and_rebuild_new_surfaces(
+        lv_epi_open,
+        lv_build.endo_open,
+        rv_epi_trimmed,
+        rv_endo_fixed,
+        lv_epi_intersection_reference,
+        lv_profile,
+        rv_profile,
+        args,
+    )
     lv_endo_step8 = step8_surfaces["LVendo"]
     lv_epi_step8 = step8_surfaces["LVepi"]
     rv_endo_step8 = step8_surfaces["RVendo"]
@@ -8326,26 +6313,27 @@ def process_frame(args: argparse.Namespace, frame: str) -> Dict[str, object]:
     rv_step8_annulus = step8_surfaces["RV_openbase_annulus"]
     lv_shell = merge_surfaces([tagged_surface(lv_epi_step8, 1), tagged_surface(lv_endo_step8, 1), tagged_surface(lv_step8_annulus, 1)], args.combined_surface_merge_tolerance)
 
-    step8_stage_paths: Dict[str, str] = {}
-    step8_stage_summary: Dict[str, object] = {}
-    if args.save_openbase_annuli_stage:
-        log_stage(f"{subject_id} {frame}: save step 8 open-base surfaces and rebuilt annuli")
-        step8_stage_paths, step8_stage_summary = save_step8_openbase_surface_outputs(
-            step8_stage_dir,
+    fix_new_surface_stage_paths: Dict[str, str] = {}
+    fix_new_surface_stage_summary: Dict[str, object] = {}
+    if args.save_fix_intersection_new_surf_stage:
+        log_stage(f"{subject_id} {frame}: save step 8 fixed surface and rebuilt-annulus outputs")
+        fix_new_surface_stage_paths, fix_new_surface_stage_summary = save_fix_intersection_new_surface_stage_outputs(
+            fix_new_surface_stage_dir,
             subject_id,
             frame,
             step8_surfaces,
-            step8_annulus_info,
+            step8_masks,
+            step8_fix_info,
         )
 
-    if args.stop_after_openbase_annuli:
+    if args.stop_after_fix_intersection_new_surf:
         return {
             "frame": frame,
-            "stopped_after": "step08_openbase_annuli",
+            "stopped_after": "step08_fix_intersection_new_surface",
             "open_shell_stage_outputs": open_shell_stage_paths,
             "intersection_removal_stage_outputs": intersection_stage_paths,
             "rvendo_distance_stage_outputs": rvendo_distance_stage_paths,
-            "step8_openbase_surface_stage_outputs": step8_stage_paths,
+            "fix_intersection_new_surface_stage_outputs": fix_new_surface_stage_paths,
         }
 
     log_stage(f"{subject_id} {frame}: step 9 split LVepi septum/noseptum and merge final whole surface")
@@ -8384,7 +6372,7 @@ def process_frame(args: argparse.Namespace, frame: str) -> Dict[str, object]:
             "open_shell_stage_outputs": open_shell_stage_paths,
             "intersection_removal_stage_outputs": intersection_stage_paths,
             "rvendo_distance_stage_outputs": rvendo_distance_stage_paths,
-            "step8_openbase_surface_stage_outputs": step8_stage_paths,
+            "fix_intersection_new_surface_stage_outputs": fix_new_surface_stage_paths,
             "merge_surface_stage_outputs": merge_surface_stage_paths,
         }
 
@@ -8488,7 +6476,7 @@ def process_frame(args: argparse.Namespace, frame: str) -> Dict[str, object]:
             "open_shell_stage_outputs": open_shell_stage_paths,
             "intersection_removal_stage_outputs": intersection_stage_paths,
             "rvendo_distance_stage_outputs": rvendo_distance_stage_paths,
-            "step8_openbase_surface_stage_outputs": step8_stage_paths,
+            "fix_intersection_new_surface_stage_outputs": fix_new_surface_stage_paths,
             "merge_surface_stage_outputs": merge_surface_stage_paths,
             "tetgen_stage_outputs": tetgen_stage_paths,
         }
@@ -8547,7 +6535,7 @@ def process_frame(args: argparse.Namespace, frame: str) -> Dict[str, object]:
             "open_shell_stage_outputs": open_shell_stage_paths,
             "intersection_removal_stage_outputs": intersection_stage_paths,
             "rvendo_distance_stage_outputs": rvendo_distance_stage_paths,
-            "step8_openbase_surface_stage_outputs": step8_stage_paths,
+            "fix_intersection_new_surface_stage_outputs": fix_new_surface_stage_paths,
             "merge_surface_stage_outputs": merge_surface_stage_paths,
             "tetgen_stage_outputs": tetgen_stage_paths,
             "debug": debug_paths,
@@ -8560,6 +6548,7 @@ def process_frame(args: argparse.Namespace, frame: str) -> Dict[str, object]:
             "remove_RVepi_open_points_intersecting_LVepi",
             "remove_RV_open_points_intersecting_LVepi",
             "fix_RVepi_and_move_RVendo_to_min_3mm_RVepi_distance_with_adaptive_basal_opening_ring",
+            "step8_refix_RVepi_and_RVendo_against_fixed_LVepi",
             "step8_rebuild_LV_and_RV_openbase_annuli_from_final_fixed_surface_loops",
             "step9_split_LVepi_into_septum_and_LVepi_noseptum_by_RVepi_step5_and_RVendo_step7_boundary_rings",
             "step9_merge_LVepi_noseptum_plus_RVepi_as_LVRV_epi_surface",
@@ -8580,11 +6569,10 @@ def process_frame(args: argparse.Namespace, frame: str) -> Dict[str, object]:
         "open_shell_stage_summary": open_shell_stage_summary,
         "intersection_removal_stage_summary": intersection_stage_summary,
         "rvendo_distance_stage_summary": rvendo_distance_stage_summary,
-        "step8_openbase_surface_stage_summary": step8_stage_summary,
+        "fix_intersection_new_surface_stage_summary": fix_new_surface_stage_summary,
         "merge_surface_stage_summary": merge_surface_stage_summary,
         "tetgen_stage_summary": tetgen_stage_summary,
-        "surface_intersection_removal": {"step05_RVepi": rv_epi_removal, "step06_RV": rv_endo_removal},
-        "step8_openbase_annulus_rebuild": step8_annulus_info,
+        "surface_intersection_removal": {"step05_RVepi": rv_epi_removal, "step06_RV": rv_endo_removal, "step08": step8_fix_info},
         "rv_distance_fix": rv_distance_fix,
         "rv_closure_surfaces": rv_cut_info,
         "surface_summaries": {
@@ -8632,7 +6620,7 @@ def process_frame(args: argparse.Namespace, frame: str) -> Dict[str, object]:
 def main() -> None:
     args = parse_args()
     frames = parse_csv_values(args.frames) or [args.frame]
-    results = [process_frame(args, frame) for frame in frames]
+    results = [process_frame_new_pipeline(args, frame) for frame in frames]
     print(json.dumps({"results": results}, indent=2))
 
 

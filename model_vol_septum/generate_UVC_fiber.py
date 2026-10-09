@@ -535,6 +535,7 @@ def run_frame_pho(subject_id, frame, data_dir, force=False):
         "RVannulus": surface_dir / f"{subject_id}_{frame}_RV_openbase_annulus_surface.vtk",
         "RVepi": surface_dir / f"{subject_id}_{frame}_RVepi_openbase_surface.vtk",
         "RVseptum": surface_dir / f"{subject_id}_{frame}_RV_septum.vtk",
+        "LVepi": surface_dir / f"{subject_id}_{frame}_LVepi_openbase_surface.vtk",
         "epi": surface_dir / f"{subject_id}_{frame}_whole_epi_surface.vtk",
     }
     missing = [str(path) for path in (source_volume, *surface_paths.values()) if not path.is_file()]

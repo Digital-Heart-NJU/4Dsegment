@@ -311,6 +311,51 @@ def _expand_coincident_node_ids(full_points, node_ids, tolerance_mm=1e-6):
     return expanded
 
 
+def _project_surface_points_to_full_mesh(source_vtk, full_points, output_surface):
+    """Project a source surface onto all full-mesh nodes, including internal interfaces.
+
+    The usual PHO surface extraction operates on ``extract_surface()`` and therefore
+    cannot represent an LVepi patch that is internal to a combined LV/RV volume.
+    This path uses the source vertices and triangle centroids directly, then expands
+    coincident full-mesh nodes so an interface is represented on both sides.
+    """
+    source = pv.read(str(source_vtk))
+    if isinstance(source, pv.UnstructuredGrid):
+        source = source.extract_surface()
+    source = source.triangulate().clean(tolerance=0.0)
+    source_points = np.asarray(source.points, dtype=float)
+    if source.n_points == 0 or source.n_cells == 0:
+        raise RuntimeError(f"LVepi projection source is empty: {source_vtk}")
+
+    samples = [source_points]
+    centers = np.asarray(source.cell_centers().points, dtype=float)
+    if len(centers):
+        samples.append(centers)
+    samples = np.vstack(samples)
+    distances, node_ids = cKDTree(np.asarray(full_points, dtype=float)).query(samples, k=1)
+    if not np.all(np.isfinite(distances)):
+        raise RuntimeError(f"Non-finite LVepi-to-volume projection distance: {source_vtk}")
+
+    mapped_ids = _expand_coincident_node_ids(
+        full_points, np.unique(np.asarray(node_ids, dtype=np.int64)), tolerance_mm=1e-6
+    )
+    if len(mapped_ids) < 3:
+        raise RuntimeError(f"LVepi projection mapped fewer than three full-mesh nodes: {source_vtk}")
+
+    _write_carp_node_surface(str(output_surface), mapped_ids)
+    return {
+        "source": str(Path(source_vtk).resolve()),
+        "output": str(output_surface),
+        "source_point_count": int(source.n_points),
+        "source_triangle_count": int(source.n_cells),
+        "projection_sample_count": int(len(samples)),
+        "node_count": int(len(mapped_ids)),
+        "max_mapping_distance_mm": float(np.max(distances)),
+        "p95_mapping_distance_mm": float(np.percentile(distances, 95)),
+        "mapping": "source_vertices_and_triangle_centroids_to_full_mesh_with_coincident_node_expansion",
+    }
+
+
 def coord_z_openbase_annuli(
     folder: str,
     meshtoolloc: str,
@@ -605,6 +650,15 @@ def transmural_openbase(
         )
         boundary_files[name] = full_surface
 
+    # LVepi may be an internal LV/RV interface after the two chambers are merged.
+    # Do not pass it through external-surface extraction: project its original
+    # open-base surface directly onto the full volume mesh instead.
+    lv_epi_surface = str(surface_root / "LV_epi")
+    boundary_details["LV_epi"] = _project_surface_points_to_full_mesh(
+        surface_paths["LVepi"], full_points, lv_epi_surface
+    )
+    boundary_files["LV_epi"] = lv_epi_surface
+
     boundary_node_ids = {
         name: np.unique(
             np.atleast_1d(meshIO.read_vtx_File(path + ".surf.vtx")).astype(np.int64)
@@ -614,14 +668,16 @@ def transmural_openbase(
     septum_nodes = _expand_coincident_node_ids(
         full_points, boundary_node_ids["RV_septum"], tolerance_mm=1e-6
     )
+    lv_epi_nodes = boundary_node_ids["LV_epi"]
     epi_nodes = boundary_node_ids["epi"]
-    outer_nodes = np.unique(np.concatenate((septum_nodes, epi_nodes)))
+    outer_nodes = np.unique(np.concatenate((septum_nodes, lv_epi_nodes, epi_nodes)))
     outer_boundary = str(surface_root / "epi_and_septum")
     _write_carp_node_surface(outer_boundary, outer_nodes)
 
     sim_id = str(work_root / "transmural_results")
     # openCARP resolves legacy vtx_file paths relative to the mesh working directory.
-    # Use one unified PHO=1 boundary for the epicardium and the complete septum.
+    # Use one unified PHO=1 boundary for the epicardium, LV epicardium,
+    # and the complete septum/interface.
     def solver_surface_path(name):
         return os.path.relpath(name + ".surf", folder_path)
 
@@ -670,9 +726,10 @@ def transmural_openbase(
     if missing:
         raise RuntimeError(f"PHO generation did not create valid outputs: {missing}")
     return pho_path, {
-        "method": "openbase_unified_epi_septum_hard_boundary_laplace",
+        "method": "openbase_unified_epi_lv_epi_septum_full_mesh_projection_hard_boundary_laplace",
         "mesh_point_count": int(len(full_points)),
         "septum_node_count": int(len(septum_nodes)),
+        "lv_epi_node_count": int(len(lv_epi_nodes)),
         "epicardium_node_count": int(len(epi_nodes)),
         "unified_outer_boundary_node_count": int(len(outer_nodes)),
         "unified_outer_boundary_max_abs_error": surface_error,
