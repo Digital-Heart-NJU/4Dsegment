@@ -13,9 +13,9 @@ Active pipeline:
   7. Remove RVepi/RVendo points intersecting the Step 6 LVepi reference and
      save the LV/RV surfaces as point-only VTK files.
 
-The previous intersection-repair, surface-merge, TetGen, and volume-tagging
-stages remain in this file for reference but are not called by the active
-pipeline.
+The active Step 6 whole-surface output is made with a topology-preserving
+Manifold3D Boolean union of the closed LV and RV shells. The previous
+point-cloud surface reconstruction is not used.
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
-import open3d as o3d
+import manifold3d
 import pyvista as pv
 from scipy.spatial import cKDTree
 import tetgen
@@ -132,8 +132,6 @@ def parse_args() -> argparse.Namespace:
         default=0.05,
         help="Maximum point-to-LVepi distance treated as an intersecting Step 7 RV point.",
     )
-    parser.add_argument("--step6-ball-pivot-normal-k", type=int, default=30)
-    parser.add_argument("--step6-ball-pivot-radii-multipliers", default="0.75,1.5,3.0")
     parser.add_argument("--surface-removal-rings", type=int, default=0)
     parser.add_argument("--surface-component-min-fraction", type=float, default=0.01)
     parser.add_argument("--step56-component-min-area-fraction", type=float, default=0.0)
@@ -3609,6 +3607,7 @@ def write_custom_surface_vtk(
     triangles: np.ndarray,
     elem_tags: np.ndarray,
     point_data: Optional[Dict[str, np.ndarray]] = None,
+    point_precision: int = 5,
 ) -> None:
     """Write triangle surfaces in the same ASCII legacy style as write_custom_vtk."""
     points = np.asarray(points, dtype=float)
@@ -3624,7 +3623,7 @@ def write_custom_surface_vtk(
         handle.write("DATASET UNSTRUCTURED_GRID\n\n")
 
         handle.write(f"POINTS {len(points)} float\n")
-        np.savetxt(handle, points, fmt="%.5f", delimiter=" ")
+        np.savetxt(handle, points, fmt=f"%.{int(point_precision)}f", delimiter=" ")
         handle.write("\n")
 
         handle.write(f"CELL_TYPES {len(triangles)}\n")
@@ -5714,145 +5713,155 @@ def save_step6_merged_point_cloud(
     return str(output_path.resolve()), summary
 
 
-def save_step6_open3d_ball_pivoting_reconstruction(
+def _prepare_manifold_shell(
+    name: str,
+    parts: Sequence[pv.PolyData],
+    face_id_offset: int,
+    args: argparse.Namespace,
+) -> Tuple[pv.PolyData, manifold3d.Manifold, int]:
+    """Create an oriented, closed Manifold3D shell from three Step 6 surfaces."""
+    shell = pv.merge(
+        [part.extract_surface().triangulate() for part in parts],
+        merge_points=True,
+    ).extract_surface().triangulate().clean(tolerance=float(args.surface_clean_tolerance))
+    if shell.n_cells == 0:
+        raise RuntimeError(f"{name} shell has no triangles.")
+    if int(shell.n_open_edges) != 0 or not bool(shell.is_manifold):
+        raise RuntimeError(
+            f"{name} shell is not closed/manifold before Boolean union: "
+            f"open_edges={int(shell.n_open_edges)}, manifold={bool(shell.is_manifold)}."
+        )
+
+    # Manifold3D requires consistently oriented triangles. The shell is closed,
+    # so VTK can orient the connected component without changing its geometry.
+    shell = shell.compute_normals(
+        cell_normals=True,
+        point_normals=False,
+        consistent_normals=True,
+        auto_orient_normals=True,
+        split_vertices=False,
+    ).extract_surface().triangulate().clean(tolerance=float(args.surface_clean_tolerance))
+    triangles = base.triangle_faces(shell)
+    if len(triangles) == 0:
+        raise RuntimeError(f"{name} shell has no triangle faces after normal orientation.")
+
+    face_ids = np.arange(len(triangles), dtype=np.uint32) + np.uint32(face_id_offset)
+    manifold_mesh = manifold3d.Mesh(
+        np.asarray(shell.points, dtype=np.float32),
+        np.asarray(triangles, dtype=np.uint32),
+        face_id=face_ids,
+        tolerance=max(float(args.combined_surface_merge_tolerance), 1e-6),
+    )
+    manifold_mesh.merge()
+    manifold = manifold3d.Manifold(manifold_mesh)
+    if manifold.status() != manifold3d.Error.NoError:
+        raise RuntimeError(f"{name} could not be converted to a Manifold3D solid: {manifold.status()}")
+    return shell, manifold, len(triangles)
+
+
+def save_step6_manifold_union_reconstruction(
     stage_dir: Path,
-    point_cloud_path: str,
     subject_id: str,
     frame: str,
     args: argparse.Namespace,
 ) -> Tuple[str, Dict[str, object]]:
-    """Reconstruct source point groups with Open3D Ball Pivoting."""
-    point_cloud = pv.read(point_cloud_path)
-    source_points = np.asarray(point_cloud.points, dtype=float)
-    source_tags = np.asarray(
-        point_cloud.cell_data.get("elemTag", np.zeros(len(source_points), dtype=np.int32)),
-        dtype=np.int32,
-    ).reshape(-1)
-    if len(source_tags) != len(source_points):
-        source_tags = np.zeros(len(source_points), dtype=np.int32)
-
-    source_surface_ids = np.asarray(
-        point_cloud.point_data.get("sourceSurface", np.full(len(source_points), -1, dtype=np.int32)),
-        dtype=np.int32,
-    ).reshape(-1)
-    if len(source_surface_ids) != len(source_points):
-        source_surface_ids = np.full(len(source_points), -1, dtype=np.int32)
-    source_names = [
-        "LV_openbase_epi",
-        "LV_openbase_endo",
-        "LV_openbase_annulus_recon",
-        "RV_openbase_epi",
-        "RV_openbase_endo",
-        "RV_openbase_annulus_recon",
+    """Union the closed LV/RV Step 6 shells without point-cloud remeshing."""
+    input_specs = [
+        ("LV_openbase_epi", "LV_openbase_epi", ()),
+        ("LV_openbase_endo", "LV_openbase_endo", ()),
+        ("LV_openbase_annulus_recon", "LV_openbase_annulus_recon", ()),
+        ("RV_openbase_epi", "RV_openbase_epi", ("RV_openbase_epi_moved",)),
+        ("RV_openbase_endo", "RV_openbase_endo", ()),
+        ("RV_openbase_annulus_recon", "RV_openbase_annulus_recon", ()),
     ]
-    source_tags_by_id = np.asarray([
-        int(args.lv_tag),
-        int(args.lv_tag),
-        int(args.lv_tag),
-        int(args.rv_tag),
-        int(args.rv_tag),
-        int(args.rv_tag),
-    ], dtype=np.int32)
-    radii_multipliers = [
-        float(value)
-        for value in parse_csv_values(args.step6_ball_pivot_radii_multipliers)
-    ]
-    if not radii_multipliers or any(value <= 0.0 for value in radii_multipliers):
-        raise ValueError("--step6-ball-pivot-radii-multipliers must contain positive values.")
-
-    reconstructed_point_blocks: List[np.ndarray] = []
-    reconstructed_triangle_blocks: List[np.ndarray] = []
-    reconstructed_tag_blocks: List[np.ndarray] = []
-    source_records: List[Dict[str, object]] = []
-    point_offset = 0
-    for source_id, source_name in enumerate(source_names):
-        source_mask = source_surface_ids == int(source_id)
-        points = source_points[source_mask]
-        source_record: Dict[str, object] = {
-            "source_surface": source_name,
-            "source_id": int(source_id),
-            "input_points": int(len(points)),
-            "input_tag": int(source_tags_by_id[source_id]),
-        }
-        if len(points) < 3:
-            source_record.update({
-                "output_points": 0,
-                "output_triangles": 0,
-                "status": "skipped_fewer_than_three_points",
-            })
-            source_records.append(source_record)
-            continue
-
-        nearest_distances = cKDTree(points).query(points, k=2)[0][:, 1]
-        median_spacing = float(np.median(nearest_distances[nearest_distances > 1e-8])) if np.any(nearest_distances > 1e-8) else 0.0
-        if median_spacing <= 0.0:
-            source_record.update({
-                "output_points": 0,
-                "output_triangles": 0,
-                "status": "skipped_duplicate_points_only",
-            })
-            source_records.append(source_record)
-            continue
-
-        pcd = o3d.geometry.PointCloud()
-        pcd.points = o3d.utility.Vector3dVector(points)
-        normal_k = min(max(int(args.step6_ball_pivot_normal_k), 3), len(points) - 1)
-        pcd.estimate_normals(
-            search_param=o3d.geometry.KDTreeSearchParamKNN(knn=normal_k),
-            fast_normal_computation=False,
+    inputs: Dict[str, pv.PolyData] = {}
+    input_paths: Dict[str, str] = {}
+    for logical_name, primary_name, fallback_names in input_specs:
+        mesh, path = load_step6_point_surface(
+            stage_dir,
+            subject_id,
+            frame,
+            primary_name,
+            fallback_names,
         )
-        orientation_k = min(max(normal_k, 3), len(points) - 1)
-        pcd.orient_normals_consistent_tangent_plane(orientation_k)
-        radii = [median_spacing * multiplier for multiplier in radii_multipliers]
-        ball_mesh = o3d.geometry.TriangleMesh.create_from_point_cloud_ball_pivoting(
-            pcd,
-            o3d.utility.DoubleVector(radii),
+        inputs[logical_name] = mesh.extract_surface().triangulate().clean(
+            tolerance=float(args.surface_clean_tolerance)
         )
-        ball_points = np.asarray(ball_mesh.vertices, dtype=float)
-        ball_triangles = np.asarray(ball_mesh.triangles, dtype=np.int64)
-        source_record.update({
-            "median_neighbor_spacing_mm": median_spacing,
-            "normal_k": int(normal_k),
-            "ball_pivot_radii_mm": radii,
-            "output_points": int(len(ball_points)),
-            "output_triangles": int(len(ball_triangles)),
-            "status": "reconstructed" if len(ball_triangles) else "no_triangles",
-        })
-        source_records.append(source_record)
-        if len(ball_points) == 0 or len(ball_triangles) == 0:
-            continue
-        reconstructed_point_blocks.append(ball_points)
-        reconstructed_triangle_blocks.append(ball_triangles + int(point_offset))
-        reconstructed_tag_blocks.append(
-            np.full(len(ball_triangles), int(source_tags_by_id[source_id]), dtype=np.int32)
-        )
-        point_offset += len(ball_points)
+        input_paths[logical_name] = str(path.resolve())
 
-    if not reconstructed_point_blocks or not reconstructed_triangle_blocks:
-        raise RuntimeError("Open3D Ball Pivoting produced no triangles from the Step 6 point cloud.")
-    reconstructed_points = np.vstack(reconstructed_point_blocks)
-    triangles = np.vstack(reconstructed_triangle_blocks)
-    reconstructed_tags = np.concatenate(reconstructed_tag_blocks)
-    reconstructed_surface = pv.PolyData(reconstructed_points, base.faces_from_triangles(triangles))
-    reconstructed_surface.cell_data["elemTag"] = reconstructed_tags
+    lv_shell, lv_manifold, lv_face_count = _prepare_manifold_shell(
+        "LV",
+        [inputs["LV_openbase_epi"], inputs["LV_openbase_endo"], inputs["LV_openbase_annulus_recon"]],
+        0,
+        args,
+    )
+    rv_shell, rv_manifold, rv_face_count = _prepare_manifold_shell(
+        "RV",
+        [inputs["RV_openbase_epi"], inputs["RV_openbase_endo"], inputs["RV_openbase_annulus_recon"]],
+        lv_face_count,
+        args,
+    )
+
+    union = lv_manifold + rv_manifold
+    if union.status() != manifold3d.Error.NoError:
+        raise RuntimeError(f"LV/RV Manifold3D union failed: {union.status()}")
+    union_mesh = union.to_mesh()
+    points = np.asarray(union_mesh.vert_properties, dtype=float)[:, :3]
+    triangles = np.asarray(union_mesh.tri_verts, dtype=np.int64)
+    face_ids = np.asarray(union_mesh.face_id, dtype=np.int64).reshape(-1)
+    if len(points) == 0 or len(triangles) == 0 or len(face_ids) != len(triangles):
+        raise RuntimeError("Manifold3D union returned an empty or inconsistent surface mesh.")
+
+    lv_mask = face_ids < int(lv_face_count)
+    elem_tags = np.where(lv_mask, int(args.lv_tag), int(args.rv_tag)).astype(np.int32)
+    source_shell = np.where(lv_mask, 1, 0).astype(np.int32)
+    surface = pv.PolyData(points, base.faces_from_triangles(triangles))
+    surface.cell_data["elemTag"] = elem_tags
+    surface.cell_data["sourceShell"] = source_shell
 
     output_path = stage_dir / f"{subject_id}_{frame}_LVRV_surf.vtk"
-    record = save_triangle_surface_vtk(output_path, reconstructed_surface, elem_tag=None)
+    # Manifold3D already returns a valid triangle manifold. Do not run the
+    # generic cleanup writer here: it can remove degenerate float32 triangles
+    # after tags have been assigned and leave the cell-data length mismatched.
+    write_custom_surface_vtk(output_path, points, triangles, elem_tags, point_precision=9)
+    tag_counts = Counter(map(int, elem_tags))
+    record = {
+        "points": int(len(points)),
+        "triangles": int(len(triangles)),
+        "free_edges": int(len(base.extract_boundary_edges(surface))),
+        "bounds": [float(v) for v in surface.bounds],
+        "surface_area": float(surface.area),
+        "path": str(output_path.resolve()),
+        "writer": "custom_ascii_unstructured_grid_triangle_surface",
+        "cell_type": 5,
+        "cell_data": ["elemTag"],
+        "elemTag_counts": {str(k): int(v) for k, v in sorted(tag_counts.items())},
+        "point_data": [],
+    }
     summary = {
-        "description": "Triangle surface reconstructed from the six Step 6 point groups with Open3D Ball Pivoting.",
+        "description": "Whole LV/RV surface from the six Step 6 triangle surfaces using a topology-preserving Boolean union.",
         "subject": subject_id,
         "frame": frame,
-        "input_point_cloud": str(Path(point_cloud_path).resolve()),
+        "input_paths": input_paths,
         "output_path": str(output_path.resolve()),
-        "method": "open3d_ball_pivoting_per_source_surface_group",
-        "normal_k": int(args.step6_ball_pivot_normal_k),
-        "radii_multipliers": radii_multipliers,
-        "source_points": int(len(source_points)),
-        "source_surface_records": source_records,
+        "method": "manifold3d_boolean_union_of_closed_LV_RV_shells",
+        "point_cloud_reconstruction_used": False,
+        "exact_intersection_vertices_created_by_boolean": True,
+        "lv_shell": surface_summary(lv_shell),
+        "rv_shell": surface_summary(rv_shell),
+        "lv_input_face_count_for_source_ids": int(lv_face_count),
+        "rv_input_face_count_for_source_ids": int(rv_face_count),
+        "boolean_status": str(union.status()),
+        "union_surface_before_vtk_write": {
+            "points": int(len(points)),
+            "triangles": int(len(triangles)),
+            "lv_triangles": int(np.count_nonzero(lv_mask)),
+            "rv_triangles": int(np.count_nonzero(~lv_mask)),
+        },
         "reconstructed_surface": record,
-        "tag_assignment": "source-surface tag assigned to each reconstructed patch",
+        "tag_assignment": "triangles inheriting LV shell source faces receive lv_tag; remaining triangles receive rv_tag",
     }
-    summary_path = stage_dir / f"{subject_id}_{frame}_LVRV_surface_ball_pivoting_summary.json"
+    summary_path = stage_dir / f"{subject_id}_{frame}_LVRV_surface_manifold_union_summary.json"
     summary_path.write_text(json.dumps(summary, indent=2))
     summary["summary_path"] = str(summary_path.resolve())
     return str(output_path.resolve()), summary
@@ -6010,16 +6019,15 @@ def process_frame_new_pipeline(args: argparse.Namespace, frame: str) -> Dict[str
     )
     step6_paths["LVRV_point_cloud"] = step6_lvrv_point_cloud_path
     step6_paths["LVRV_point_cloud_summary"] = step6_lvrv_point_cloud_summary["summary_path"]
-    log_stage(f"{subject_id} {frame}: reconstruct a triangle surface from the Step 6 point cloud with Open3D Ball Pivoting")
-    step6_lvrv_surface_path, step6_lvrv_surface_summary = save_step6_open3d_ball_pivoting_reconstruction(
+    log_stage(f"{subject_id} {frame}: build the whole LV/RV surface with a Manifold3D Boolean union")
+    step6_lvrv_surface_path, step6_lvrv_surface_summary = save_step6_manifold_union_reconstruction(
         step6_dir,
-        step6_lvrv_point_cloud_path,
         subject_id,
         frame,
         frame_args,
     )
-    step6_paths["LVRV_surface_ball_pivoting"] = step6_lvrv_surface_path
-    step6_paths["LVRV_surface_ball_pivoting_summary"] = step6_lvrv_surface_summary["summary_path"]
+    step6_paths["LVRV_surface_manifold_union"] = step6_lvrv_surface_path
+    step6_paths["LVRV_surface_manifold_union_summary"] = step6_lvrv_surface_summary["summary_path"]
 
     log_stage(f"{subject_id} {frame}: Step 7 remove RV points intersecting LVepi and save merged point cloud")
     step7_paths, _ = save_step7_whole_points_surface(
@@ -6051,7 +6059,7 @@ def process_frame_new_pipeline(args: argparse.Namespace, frame: str) -> Dict[str
             "move_RVepi_to_minimum_3mm_from_fixed_RVendo_with_adaptive_opening_ring",
             "directly_reconstruct_LV_and_RV_openbase_annuli",
             "merge_six_step06_surfaces_to_raw_point_only_LVRV_cloud",
-            "reconstruct_LVRV_surface_with_open3d_ball_pivoting",
+            "reconstruct_LVRV_surface_with_manifold3d_boolean_union",
             "remove_RV_points_intersecting_LVepi_and_save_point_only_LVRV_cloud",
         ],
         "disabled_downstream_stages": [
