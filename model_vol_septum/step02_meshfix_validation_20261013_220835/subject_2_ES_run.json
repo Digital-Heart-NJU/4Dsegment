@@ -1,0 +1,17 @@
+{
+  "subject": "subject_2",
+  "frame": "ES",
+  "command": [
+    "/home/mengao/anaconda3/envs/morphinet/bin/python",
+    "-B",
+    "/home/mengao/Code/4Dsegment/model_vol_septum/generate_open_volmesh_stable.py",
+    "--subject-dir",
+    "/home/mengao/Code/4Dsegment/data/subject_2",
+    "--frame",
+    "ES"
+  ],
+  "exit_code": 1,
+  "elapsed_seconds": 9.66,
+  "log": "/home/mengao/Code/4Dsegment/model_vol_septum/step02_meshfix_validation_20261013_220835/subject_2_ES.log",
+  "error_tail": "Traceback (most recent call last):\n  File \"/home/mengao/Code/4Dsegment/model_vol_septum/generate_open_volmesh_stable.py\", line 5333, in save_step2_cleaned_surfaces\n    repaired, record = clean_surface_meshfix(source, tag)\n  File \"/home/mengao/Code/4Dsegment/model_vol_septum/clean_step02_surfaces.py\", line 51, in clean_surface_meshfix\n    after = validate_clean_surface(repaired)\n  File \"/home/mengao/Code/4Dsegment/model_vol_septum/clean_step02_surfaces.py\", line 36, in validate_clean_surface\n    raise RuntimeError(f\"Step 02 MeshFix validation failed: {failures}\")\nRuntimeError: Step 02 MeshFix validation failed: {'self_intersection_pairs': 2}\n\nThe above exception was the direct cause of the following exception:\n\nTraceback (most recent call last):\n  File \"/home/mengao/Code/4Dsegment/model_vol_septum/generate_open_volmesh_stable.py\", line 6896, in <module>\n    main()\n  File \"/home/mengao/Code/4Dsegment/model_vol_septum/generate_open_volmesh_stable.py\", line 6891, in main\n    results = [process_frame_new_pipeline(args, frame, prepared_frames) for frame in frames]\n  File \"/home/mengao/Code/4Dsegment/model_vol_septum/generate_open_volmesh_stable.py\", line 6891, in <listcomp>\n    results = [process_frame_new_pipeline(args, frame, prepared_frames) for frame in frames]\n  File \"/home/mengao/Code/4Dsegment/model_vol_septum/generate_open_volmesh_stable.py\", line 6121, in process_frame_new_pipeline\n    prepared = prepare_input_frame(frame)\n  File \"/home/mengao/Code/4Dsegment/model_vol_septum/generate_open_volmesh_stable.py\", line 6113, in prepare_input_frame\n    cleaned, cleaned_paths, _ = save_step2_cleaned_surfaces(\n  File \"/home/mengao/Code/4Dsegment/model_vol_septum/generate_open_volmesh_stable.py\", line 5346, in save_step2_cleaned_surfaces\n    raise RuntimeError(f\"Step 02 {source_path.name}: {exc}\") from exc\nRuntimeError: Step 02 subject_2_ES_RV.vtk: Step 02 MeshFix validation failed: {'self_intersection_pairs': 2}"
+}

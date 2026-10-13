@@ -1,0 +1,139 @@
+{
+  "method": "triangle",
+  "existing_inputs_and_step05_outputs_unchanged": true,
+  "changed_files": [],
+  "results": [
+    {
+      "subject": "subject_1",
+      "frame": "ED",
+      "command": [
+        "/home/mengao/anaconda3/envs/morphinet/bin/python",
+        "-B",
+        "/home/mengao/Code/4Dsegment/model_vol_septum/generate_open_volmesh_stable.py",
+        "--subject-dir",
+        "/home/mengao/Code/4Dsegment/data/subject_1",
+        "--frame",
+        "ED",
+        "--step5-clearance-method",
+        "triangle",
+        "--pipeline-output-root",
+        "/home/mengao/Code/4Dsegment/data/subject_1/volmesh_pipline_triangle_trial"
+      ],
+      "exit_code": 1,
+      "elapsed_seconds": 9.13,
+      "log": "/home/mengao/Code/4Dsegment/model_vol_septum/step05_triangle_trial_20261013_215206/subject_1_ED.log",
+      "output_root": "/home/mengao/Code/4Dsegment/data/subject_1/volmesh_pipline_triangle_trial",
+      "last_message": "RuntimeError: Step 04 RVepi contains 4 self-intersections; repair Step 04 first. Triangle pairs: [[11252, 11989], [27004, 27026], [27023, 27026], [27023, 27828]]."
+    },
+    {
+      "subject": "subject_1",
+      "frame": "ES",
+      "command": [
+        "/home/mengao/anaconda3/envs/morphinet/bin/python",
+        "-B",
+        "/home/mengao/Code/4Dsegment/model_vol_septum/generate_open_volmesh_stable.py",
+        "--subject-dir",
+        "/home/mengao/Code/4Dsegment/data/subject_1",
+        "--frame",
+        "ES",
+        "--step5-clearance-method",
+        "triangle",
+        "--pipeline-output-root",
+        "/home/mengao/Code/4Dsegment/data/subject_1/volmesh_pipline_triangle_trial"
+      ],
+      "exit_code": 1,
+      "elapsed_seconds": 10.59,
+      "log": "/home/mengao/Code/4Dsegment/model_vol_septum/step05_triangle_trial_20261013_215206/subject_1_ES.log",
+      "output_root": "/home/mengao/Code/4Dsegment/data/subject_1/volmesh_pipline_triangle_trial",
+      "last_message": "RuntimeError: Diagnostic basal closure contains 4 self-intersections; repair Step 04 first. Triangle pairs: [[25401, 26584], [25401, 26585], [25401, 26814], [25402, 26584]]."
+    },
+    {
+      "subject": "subject_2",
+      "frame": "ED",
+      "command": [
+        "/home/mengao/anaconda3/envs/morphinet/bin/python",
+        "-B",
+        "/home/mengao/Code/4Dsegment/model_vol_septum/generate_open_volmesh_stable.py",
+        "--subject-dir",
+        "/home/mengao/Code/4Dsegment/data/subject_2",
+        "--frame",
+        "ED",
+        "--step5-clearance-method",
+        "triangle",
+        "--pipeline-output-root",
+        "/home/mengao/Code/4Dsegment/data/subject_2/volmesh_pipline_triangle_trial"
+      ],
+      "exit_code": 1,
+      "elapsed_seconds": 11.5,
+      "log": "/home/mengao/Code/4Dsegment/model_vol_septum/step05_triangle_trial_20261013_215206/subject_2_ED.log",
+      "output_root": "/home/mengao/Code/4Dsegment/data/subject_2/volmesh_pipline_triangle_trial",
+      "last_message": "RuntimeError: Step 04 RVepi contains 1 self-intersections; repair Step 04 first. Triangle pairs: [[23216, 23224]]."
+    },
+    {
+      "subject": "subject_2",
+      "frame": "ES",
+      "command": [
+        "/home/mengao/anaconda3/envs/morphinet/bin/python",
+        "-B",
+        "/home/mengao/Code/4Dsegment/model_vol_septum/generate_open_volmesh_stable.py",
+        "--subject-dir",
+        "/home/mengao/Code/4Dsegment/data/subject_2",
+        "--frame",
+        "ES",
+        "--step5-clearance-method",
+        "triangle",
+        "--pipeline-output-root",
+        "/home/mengao/Code/4Dsegment/data/subject_2/volmesh_pipline_triangle_trial"
+      ],
+      "exit_code": 1,
+      "elapsed_seconds": 15.08,
+      "log": "/home/mengao/Code/4Dsegment/model_vol_septum/step05_triangle_trial_20261013_215206/subject_2_ES.log",
+      "output_root": "/home/mengao/Code/4Dsegment/data/subject_2/volmesh_pipline_triangle_trial",
+      "last_message": "RuntimeError: Step 04 RVepi contains 11 self-intersections; repair Step 04 first. Triangle pairs: [[25603, 25612], [25611, 25978], [25611, 25979], [25612, 25978], [25612, 25979], [25612, 25982], [26115, 26118], [26840, 26850], [26840, 27069], [27062, 27064], [27062, 27069]]."
+    },
+    {
+      "subject": "subject_3",
+      "frame": "ED",
+      "command": [
+        "/home/mengao/anaconda3/envs/morphinet/bin/python",
+        "-B",
+        "/home/mengao/Code/4Dsegment/model_vol_septum/generate_open_volmesh_stable.py",
+        "--subject-dir",
+        "/home/mengao/Code/4Dsegment/data/subject_3",
+        "--frame",
+        "ED",
+        "--step5-clearance-method",
+        "triangle",
+        "--pipeline-output-root",
+        "/home/mengao/Code/4Dsegment/data/subject_3/volmesh_pipline_triangle_trial"
+      ],
+      "exit_code": 1,
+      "elapsed_seconds": 23.47,
+      "log": "/home/mengao/Code/4Dsegment/model_vol_septum/step05_triangle_trial_20261013_215206/subject_3_ED.log",
+      "output_root": "/home/mengao/Code/4Dsegment/data/subject_3/volmesh_pipline_triangle_trial",
+      "last_message": "RuntimeError: Step 04 RVendo contains 2 self-intersections; repair Step 04 first. Triangle pairs: [[15186, 15221], [15911, 16486]]."
+    },
+    {
+      "subject": "subject_3",
+      "frame": "ES",
+      "command": [
+        "/home/mengao/anaconda3/envs/morphinet/bin/python",
+        "-B",
+        "/home/mengao/Code/4Dsegment/model_vol_septum/generate_open_volmesh_stable.py",
+        "--subject-dir",
+        "/home/mengao/Code/4Dsegment/data/subject_3",
+        "--frame",
+        "ES",
+        "--step5-clearance-method",
+        "triangle",
+        "--pipeline-output-root",
+        "/home/mengao/Code/4Dsegment/data/subject_3/volmesh_pipline_triangle_trial"
+      ],
+      "exit_code": 1,
+      "elapsed_seconds": 14.59,
+      "log": "/home/mengao/Code/4Dsegment/model_vol_septum/step05_triangle_trial_20261013_215206/subject_3_ES.log",
+      "output_root": "/home/mengao/Code/4Dsegment/data/subject_3/volmesh_pipline_triangle_trial",
+      "last_message": "RuntimeError: Step 04 RVepi contains 5 self-intersections; repair Step 04 first. Triangle pairs: [[8631, 9203], [20641, 20652], [21825, 22483], [21831, 22483], [23808, 23823]]."
+    }
+  ]
+}

@@ -111,7 +111,7 @@ class Step1HoleFillingTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "RV_ED.vtk: input hole filling failed.*nonmanifold"):
             pipeline.check_and_fill_loaded_surface(invalid, Path("RV_ED.vtk"), 0)
 
-    def test_active_pipeline_uses_repaired_inputs_for_steps_1_2_and_3(self):
+    def test_active_pipeline_uses_cleaned_inputs_for_base_detection_and_opening(self):
         with tempfile.TemporaryDirectory() as directory:
             subject_dir = Path(directory) / "subject_test"
             vtk_dir = subject_dir / "vtks"
@@ -131,7 +131,7 @@ class Step1HoleFillingTests(unittest.TestCase):
                 checked_profiles.append(surface)
                 return SimpleNamespace(low_end_area=1.0, high_end_area=3.0)
 
-            class ReachedStep3(Exception):
+            class ReachedStep4(Exception):
                 pass
 
             def build_shell(name, endo, epi, *args):
@@ -139,22 +139,23 @@ class Step1HoleFillingTests(unittest.TestCase):
                 self.assertEqual(pipeline.topology(endo)["free_edges"], 0)
                 self.assertEqual(pipeline.topology(epi)["free_edges"], 0)
                 self.assertIs(endo, checked_profiles[0])
-                raise ReachedStep3
+                raise ReachedStep4
 
             with patch.object(pipeline.base, "compute_area_profile", side_effect=profile), \
                     patch.object(pipeline.base, "load_surface", wraps=pipeline.base.load_surface) as loader, \
-                    patch.object(pipeline, "save_step2_base_detection", return_value=({}, {})) as save_step2, \
-                    patch.object(pipeline, "build_ventricle_shell_for_pre_step5", side_effect=build_shell):
-                with self.assertRaises(ReachedStep3):
+                    patch.object(pipeline, "save_step3_base_detection", return_value=({}, {})) as save_step3, \
+                    patch.object(pipeline, "build_ventricle_shell_for_pre_step6", side_effect=build_shell):
+                with self.assertRaises(ReachedStep4):
                     pipeline.process_frame_new_pipeline(args, "ED")
-            # Four ED meshes loaded once, plus two ES endocardial meshes for base detection.
-            self.assertEqual(loader.call_count, 6)
+            # Both frames pass through Step 01 and MeshFix once before base detection.
+            self.assertEqual(loader.call_count, 8)
             self.assertEqual(len(checked_profiles), 6)
-            detection = save_step2.call_args.args[3]
-            self.assertEqual(len(detection["additional_frame_input_hole_checks"]), 2)
-            for info in detection["additional_frame_input_hole_checks"].values():
-                self.assertEqual(info["status"], "filled")
-                self.assertEqual(info["after"]["free_edges"], 0)
+            detection = save_step3.call_args.args[3]
+            self.assertEqual(detection["input_surface_stage"], "step_02_surf_clean")
+            self.assertEqual(len(detection["cleaned_input_paths"]), 4)
+            for path in detection["cleaned_input_paths"].values():
+                self.assertEqual(Path(path).parent.name, "step_02_surf_clean")
+                self.assertTrue(Path(path).is_file())
             step1 = subject_dir / "volmesh_pipline" / "step_01_load_surf"
             summary = json.loads((step1 / "subject_test_ED_step01_load_surf_summary.json").read_text())
             for record in summary["surfaces"].values():

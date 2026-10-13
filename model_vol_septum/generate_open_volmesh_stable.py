@@ -4,17 +4,18 @@
 Active pipeline:
   1. Check the four input surfaces, fill any holes in memory, and save copies
      per subject and frame without modifying the original vtks files.
-  2. Detect the subject-level base side and save the Z-area profiles.
-  3. Build and save the LV open-base epi, endo, and annulus surfaces.
-  4. Build and save the initial RV open-base epi, endo, and annulus surfaces.
-  5. Keep RVendo fixed and move RVepi to at least 3 mm from RVendo, while
+  2. Repair the saved input surfaces with MeshFix and validate the cleaned copies.
+  3. Detect the subject-level base side using cleaned surfaces and save the Z-area profiles.
+  4. Build and save the LV open-base epi, endo, and annulus surfaces.
+  5. Build and save the initial RV open-base epi, endo, and annulus surfaces.
+  6. Keep RVendo fixed and move RVepi to at least 3 mm from RVendo, while
      adaptively displacing and smoothing the RVepi opening ring.
-  6. Rebuild the LV and RV annuli by directly connecting each open-base epi
+  7. Rebuild the LV and RV annuli by directly connecting each open-base epi
      boundary to its corresponding open-base endo boundary.
-  7. Remove RVepi/RVendo points intersecting the Step 6 LVepi reference and
+  8. Remove RVepi/RVendo points intersecting the Step 7 LVepi reference and
      save the LV/RV surfaces as point-only VTK files.
 
-The active Step 6 whole-surface output is made with a topology-preserving
+The active Step 7 whole-surface output is made with a topology-preserving
 Manifold3D Boolean union of the closed LV and RV shells. The previous
 point-cloud surface reconstruction is not used.
 """
@@ -27,6 +28,7 @@ import sys
 from collections import Counter, defaultdict, deque
 from heapq import heappop, heappush
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -72,14 +74,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--vtk-dir", type=Path, default=None, help="Defaults to SUBJECT_DIR/vtks.")
     parser.add_argument("--output-root", type=Path, default=None, help="Defaults to SUBJECT_DIR/volmesh_tetgen.")
     parser.add_argument("--pipeline-output-root", type=Path, default=None, help="Defaults to SUBJECT_DIR/volmesh_pipline.")
-    parser.add_argument("--repair-open-shells-before-step5", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--stop-after-surface-clean", action="store_true", help="Save validated Step 02 MeshFix surfaces and stop.")
+    parser.add_argument("--repair-open-shells-before-step6", "--repair-open-shells-before-step5", dest="repair_open_shells_before_step6", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--save-open-shell-stages", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--save-intersection-removal-stages", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--save-rvendo-distance-stage", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--save-fix-intersection-new-surf-stage", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--save-merge-surface-stage", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--save-tetgen-stage", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--stop-after-open-shells", action="store_true", help="Save LV/RV open-base shell stage outputs and stop before later RV trimming/TetGen stages.")
+    parser.add_argument("--stop-after-open-shells", action="store_true", help="Save through Step 05 RV open-base construction and stop before Step 06 movement.")
     parser.add_argument("--stop-after-intersection-removal", action="store_true", help="Save step 5/6 triangle-surface outputs and stop before RV distance fixing/TetGen stages.")
     parser.add_argument("--stop-after-rvendo-distance", action="store_true", help="Save step 7 RVepi/RVendo triangle surfaces and stop before whole-surface merging/TetGen stages.")
     parser.add_argument("--stop-after-fix-intersection-new-surf", action="store_true", help="Save step 8 fixed LV/RV surfaces and rebuilt annuli, then stop before whole-surface merging/TetGen stages.")
@@ -129,10 +132,10 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument("--surface-lvepi-clearance", type=float, default=0.0)
     parser.add_argument(
-        "--step7-lvepi-point-tolerance",
+        "--step8-lvepi-point-tolerance", "--step7-lvepi-point-tolerance", dest="step8_lvepi_point_tolerance",
         type=float,
         default=0.05,
-        help="Maximum point-to-LVepi distance treated as an intersecting Step 7 RV point.",
+        help="Maximum point-to-LVepi distance treated as an intersecting Step 8 RV point.",
     )
     parser.add_argument("--surface-removal-rings", type=int, default=0)
     parser.add_argument("--surface-component-min-fraction", type=float, default=0.01)
@@ -169,6 +172,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rv-min-distance-to-rvepi", type=float, default=3.0)
     parser.add_argument("--rv-distance-padding", type=float, default=0.05)
     parser.add_argument("--rv-distance-iterations", type=int, default=8)
+    parser.add_argument("--step6-clearance-method", "--step5-clearance-method", dest="step6_clearance_method", choices=["vertex", "triangle"], default="vertex",
+                        help="Use triangle for experimental signed triangle clearance with strict geometry validation in Step 06; vertex retains the existing solver.")
+    parser.add_argument("--rv-triangle-distance-iterations", type=int, default=600,
+                        help="Maximum validated outward deformation steps with --step6-clearance-method triangle.")
     parser.add_argument("--rv-distance-max-step", type=float, default=2.0)
     parser.add_argument("--rv-opening-adaptive-rings", type=int, default=3)
     parser.add_argument("--rv-opening-adaptive-k-neighbors", type=int, default=12)
@@ -2604,29 +2611,61 @@ def enforce_rvepi_distance_adaptive_opening_ring(
     opening_loop: pv.PolyData,
     args: argparse.Namespace,
 ) -> Tuple[pv.PolyData, np.ndarray, np.ndarray, np.ndarray, pv.PolyData, Dict[str, object]]:
-    """Move RVepi away from fixed RVendo using the existing adaptive-ring solver."""
-    moved, moved_mask, opening_mask, transition_band_mask, final_opening_loop, info = (
-        enforce_rvendo_distance_adaptive_opening_ring(
-            rv_epi,
-            rv_endo,
-            opening_loop,
-            args,
-            protected_vertex_mask=np.zeros(
-                rv_epi.extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance).n_points,
-                dtype=bool,
-            ),
-            force_outward_from_fixed_surface=True,
+    """Deform connected RVepi vertices and certify triangle-to-triangle clearance."""
+    if args.step6_clearance_method == "vertex":
+        moved, moved_mask, opening_mask, transition_band_mask, final_opening_loop, info = (
+            enforce_rvendo_distance_adaptive_opening_ring(
+                rv_epi, rv_endo, opening_loop, args,
+                protected_vertex_mask=np.zeros(
+                    rv_epi.extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance).n_points,
+                    dtype=bool,
+                ),
+                force_outward_from_fixed_surface=True,
+            )
         )
+        info.update({
+            "method": "move_RVepi_to_minimum_distance_from_fixed_RVendo_with_adaptive_openbase_ring",
+            "moving_surface": "RVepi", "fixed_surface": "RVendo",
+            "rv_endo_fixed": True, "rv_epi_fixed": False,
+            "movement_side_constraint": "outward_from_fixed_RVendo_surface",
+            "LVepi_intersection_handling": "disabled_for_active_step6",
+            "vertex_distance_method": "unsigned_nearest_vertex",
+        })
+        info["opening_loop_before_step6"] = info.pop("opening_loop_before_step7")
+        return moved, moved_mask, opening_mask, transition_band_mask, final_opening_loop, info
+
+    from model_vol_septum.rvepi_outward_clearance import move_rvepi
+
+    epi = rv_epi.extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance)
+    endo = rv_endo.extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance)
+    _, ring_ids, _, opening_match = match_openbase_loop_on_surface(
+        "RVepi_openbase_ring_before_step6", epi, opening_loop, args,
     )
+    moved, info = move_rvepi(
+        epi, endo, ring_ids,
+        minimum=float(args.rv_min_distance_to_rvepi),
+        padding=float(args.rv_distance_padding),
+        max_step=float(args.rv_distance_max_step),
+        ring_smooth_iterations=int(args.rv_opening_ring_smooth_iterations),
+        ring_relaxation=float(args.rv_opening_ring_smooth_relaxation),
+        max_iterations=int(args.rv_triangle_distance_iterations),
+        band_layers=int(args.rv_opening_adaptive_rings),
+    )
+    final_ring_ids = np.asarray(info.pop("_opening_ring_ids"), dtype=np.int64)
+    moved_mask = np.linalg.norm(moved.point_data["step6Displacement"], axis=1) > 1e-9
+    opening_mask = np.asarray(moved.point_data["adaptiveOpeningBoundary"], dtype=bool)
+    transition_band_mask = np.asarray(moved.point_data["openingTransitionBand"], dtype=bool)
+    final_opening_loop = base.make_polyline(np.asarray(moved.points)[final_ring_ids])
     info = dict(info)
     info.update({
-        "method": "move_RVepi_to_minimum_distance_from_fixed_RVendo_with_adaptive_openbase_ring",
         "moving_surface": "RVepi",
         "fixed_surface": "RVendo",
         "rv_endo_fixed": True,
         "rv_epi_fixed": False,
         "movement_side_constraint": "outward_from_fixed_RVendo_surface",
-        "LVepi_intersection_handling": "disabled_for_active_step5",
+        "LVepi_intersection_handling": "disabled_for_active_step6",
+        "opening_loop_match": opening_match,
+        "vertex_distance_method": "signed_distance_to_RVendo_triangles_with_diagnostic_basal_closure_for_side",
     })
     return moved, moved_mask, opening_mask, transition_band_mask, final_opening_loop, info
 
@@ -3612,14 +3651,14 @@ def write_elem_tag_legend(path: Path, lv_tag: int, rv_tag: int) -> None:
     path.write_text("elemTag,region\n" f"{int(lv_tag)},LV myocardium\n" f"{int(rv_tag)},RV myocardium\n")
 
 
-def build_ventricle_shell_for_pre_step5(
+def build_ventricle_shell_for_pre_step6(
     name: str,
     endo: pv.PolyData,
     epi: pv.PolyData,
     profile,
     args: argparse.Namespace,
 ):
-    if args.repair_open_shells_before_step5:
+    if args.repair_open_shells_before_step6:
         return openbase.build_ventricle_shell(name, endo, epi, profile, args)
 
     original_repair = base.repair_closed_surface
@@ -3678,6 +3717,7 @@ def write_custom_surface_vtk(
     elem_tags: np.ndarray,
     point_data: Optional[Dict[str, np.ndarray]] = None,
     point_precision: int = 5,
+    point_type: str = "float",
 ) -> None:
     """Write triangle surfaces in the same ASCII legacy style as write_custom_vtk."""
     points = np.asarray(points, dtype=float)
@@ -3685,6 +3725,8 @@ def write_custom_surface_vtk(
     elem_tags = np.asarray(elem_tags, dtype=np.int32).reshape(-1)
     if len(triangles) != len(elem_tags):
         raise ValueError(f"Triangle count {len(triangles)} does not match elemTag count {len(elem_tags)}.")
+    if point_type not in {"float", "double"}:
+        raise ValueError("point_type must be float or double.")
 
     with Path(filename).open("w") as handle:
         handle.write("# vtk DataFile Version 3.0\n")
@@ -3692,7 +3734,7 @@ def write_custom_surface_vtk(
         handle.write("ASCII\n")
         handle.write("DATASET UNSTRUCTURED_GRID\n\n")
 
-        handle.write(f"POINTS {len(points)} float\n")
+        handle.write(f"POINTS {len(points)} {point_type}\n")
         np.savetxt(handle, points, fmt=f"%.{int(point_precision)}f", delimiter=" ")
         handle.write("\n")
 
@@ -5266,7 +5308,63 @@ def save_step1_loaded_surfaces(
     return paths, summary
 
 
-def save_step2_base_detection(
+def save_step2_cleaned_surfaces(
+    stage_dir: Path,
+    subject_id: str,
+    frame: str,
+    step1_paths: Dict[str, str],
+) -> Tuple[Dict[str, pv.PolyData], Dict[str, str], Dict[str, object]]:
+    """Read Step 01 files, repair with MeshFix, and publish validated copies."""
+    from model_vol_septum.clean_step02_surfaces import clean_surface_meshfix, validate_clean_surface
+
+    stage_dir.mkdir(parents=True, exist_ok=True)
+    specs = [("LVendo", "lv_endo", 1), ("LVepi", "lv_epi", 1),
+             ("RV", "rv_endo", 0), ("RVepi", "rv_epi", 0)]
+    surfaces, paths, records = {}, {}, {}
+    with TemporaryDirectory(prefix=".step02_clean_", dir=stage_dir) as directory:
+        staged_outputs = []
+        for output_name, surface_name, tag in specs:
+            source_path = Path(step1_paths[output_name])
+            destination = stage_dir / source_path.name
+            if source_path.resolve() == destination.resolve():
+                raise ValueError("Step 02 output directory must differ from Step 01.")
+            source = pv.read(source_path).extract_surface().triangulate()
+            log_stage(f"{subject_id} {frame}: Step 2 MeshFix clean {source_path.name}")
+            try:
+                repaired, record = clean_surface_meshfix(source, tag)
+                staged = Path(directory) / destination.name
+                write_custom_surface_vtk(
+                    staged, repaired.points, base.triangle_faces(repaired),
+                    repaired.cell_data["elemTag"], point_precision=17, point_type="double",
+                )
+                saved_grid = pv.read(staged)
+                saved = pv.PolyData(saved_grid.points, saved_grid.cells)
+                saved.cell_data["elemTag"] = np.asarray(saved_grid.cell_data["elemTag"])
+                record["saved_surface_validation"] = validate_clean_surface(saved)
+                if not np.all(saved.cell_data["elemTag"] == tag):
+                    raise RuntimeError("Saved surface has incorrect LV/RV tags.")
+            except RuntimeError as exc:
+                raise RuntimeError(f"Step 02 {source_path.name}: {exc}") from exc
+            record.update({"input_path": str(source_path.resolve()), "path": str(destination.resolve())})
+            surfaces[surface_name] = saved
+            paths[output_name] = str(destination.resolve())
+            records[output_name] = record
+            staged_outputs.append((staged, destination))
+        # Validate every mesh before replacing any existing Step 02 output.
+        for staged, destination in staged_outputs:
+            staged.replace(destination)
+    summary = {
+        "description": "MeshFix-cleaned copies of the four Step 01 surfaces, used by subsequent stages.",
+        "subject": subject_id, "frame": frame,
+        "output_dir": str(stage_dir.resolve()),
+        "input_stage": "step_01_load_surf",
+        "paths": dict(paths), "surfaces": records,
+    }
+    paths["summary"] = save_pipeline_summary(stage_dir, subject_id, frame, "step02_surf_clean_summary", summary)
+    return surfaces, paths, summary
+
+
+def save_step3_base_detection(
     stage_dir: Path,
     subject_id: str,
     frame: str,
@@ -5291,7 +5389,7 @@ def save_step2_base_detection(
         "base_side": {"subject": subject_base_detection, "LV": lv_base_side, "RV": rv_base_side},
         "profiles": {"LV": base.profile_to_dict(lv_profile), "RV": base.profile_to_dict(rv_profile)},
     }
-    paths["summary"] = save_pipeline_summary(stage_dir, subject_id, frame, "step02_base_detection_summary", summary)
+    paths["summary"] = save_pipeline_summary(stage_dir, subject_id, frame, "step03_base_detection_summary", summary)
     return paths, summary
 
 
@@ -5316,7 +5414,7 @@ def save_openbase_surface_stage(
         records[output_key] = save_triangle_surface_vtk(path, mesh, elem_tag=tag)
         paths[output_key] = str(path.resolve())
     summary = {
-        "description": f"Step {3 if chamber == 'LV' else 4} {chamber} open-base surfaces saved immediately after shell construction.",
+        "description": f"Step {4 if chamber == 'LV' else 5} {chamber} open-base surfaces saved immediately after shell construction.",
         "subject": subject_id,
         "frame": frame,
         "chamber": chamber,
@@ -5329,7 +5427,7 @@ def save_openbase_surface_stage(
         stage_dir,
         subject_id,
         frame,
-        f"step{3 if chamber == 'LV' else 4:02d}_{chamber}_openbase_summary",
+        f"step{4 if chamber == 'LV' else 5:02d}_{chamber}_openbase_summary",
         summary,
     )
     return paths, summary
@@ -5395,7 +5493,7 @@ def save_step5_moved_rvendo(
     return paths, summary
 
 
-def save_step5_moved_rvepi(
+def save_step6_moved_rvepi(
     stage_dir: Path,
     subject_id: str,
     frame: str,
@@ -5407,34 +5505,75 @@ def save_step5_moved_rvepi(
     distance_info: Dict[str, object],
     args: argparse.Namespace,
 ) -> Tuple[Dict[str, str], Dict[str, object]]:
-    moved = rv_epi_moved.extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance)
+    triangle_mode = args.step6_clearance_method == "triangle"
+    # Preserve vertex IDs, connectivity and diagnostic arrays from the solver.
+    moved = (rv_epi_moved.copy(deep=True) if triangle_mode else
+             rv_epi_moved.extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance))
     fixed = rv_endo_fixed.extract_surface().triangulate().clean(tolerance=args.surface_clean_tolerance)
-    distances = cKDTree(np.asarray(fixed.points, dtype=float)).query(np.asarray(moved.points, dtype=float), k=1)[0]
+    signed_distances = (np.asarray(moved.point_data["signedDistanceToRVendo"], dtype=float) if triangle_mode else
+                        cKDTree(np.asarray(fixed.points, dtype=float)).query(np.asarray(moved.points, dtype=float), k=1)[0])
+    distances = np.abs(signed_distances)
 
     def fit_mask(mask: np.ndarray) -> np.ndarray:
         values = np.asarray(mask, dtype=bool).reshape(-1)
         if len(values) == moved.n_points:
             return values
+        if triangle_mode:
+            raise ValueError("Step 06 diagnostic mask does not match the final vertex count.")
         return np.zeros(moved.n_points, dtype=bool)
 
     point_data = {
-        "movedByStep5": fit_mask(moved_mask).astype(np.int32),
+        "movedByStep6": fit_mask(moved_mask).astype(np.int32),
         "adaptiveOpeningBoundary": fit_mask(opening_mask).astype(np.int32),
         "openingTransitionBand": fit_mask(transition_band_mask).astype(np.int32),
-        "distanceToRVendo": np.asarray(distances, dtype=np.float32),
-        "belowRequested3mm": (distances < float(args.rv_min_distance_to_rvepi)).astype(np.int32),
+        "distanceToRVendo": distances,
+        "belowRequested3mm": (signed_distances < float(args.rv_min_distance_to_rvepi)).astype(np.int32),
     }
+    for name, values in point_data.items():
+        moved.point_data[name] = values
+    stage_dir.mkdir(parents=True, exist_ok=True)
     path = stage_dir / f"{subject_id}_{frame}_RV_openbase_epi_moved.vtk"
-    record = save_triangle_surface_vtk(path, moved, point_data=point_data, elem_tag=int(args.rv_tag))
-    below_requested = distances < float(args.rv_min_distance_to_rvepi)
+    if triangle_mode:
+        from model_vol_septum.rvepi_outward_clearance import validate_rvepi
+
+        tags = np.full(moved.n_cells, int(args.rv_tag), dtype=np.int32)
+        with TemporaryDirectory(prefix=".step06_validate_", dir=stage_dir) as directory:
+            staged = Path(directory) / path.name
+            write_custom_surface_vtk(
+                staged, moved.points, base.triangle_faces(moved), tags,
+                dict(moved.point_data), point_precision=9,
+            )
+            saved_grid = pv.read(staged)
+            saved = pv.PolyData(saved_grid.points, saved_grid.cells)
+            saved_validation = validate_rvepi(
+                saved, fixed, float(args.rv_min_distance_to_rvepi),
+                axis=np.asarray(distance_info["basal_reference_axis"]),
+                plane=float(distance_info["basal_reference_plane"]),
+            )
+            staged.replace(path)
+        record = surface_summary(saved)
+        record.update({
+            "path": str(path.resolve()), "cell_type": 5,
+            "elemTag_counts": {str(int(args.rv_tag)): int(moved.n_cells)},
+            "point_data": list(moved.point_data.keys()),
+            "saved_surface_validation": saved_validation,
+        })
+    else:
+        record = save_triangle_surface_vtk(path, moved, point_data=point_data, elem_tag=int(args.rv_tag))
+    below_requested = signed_distances < float(args.rv_min_distance_to_rvepi)
     record["distance_summary"] = {
         "minimum_distance_mm": float(np.min(distances)) if len(distances) else None,
         "p05_distance_mm": float(np.percentile(distances, 5)) if len(distances) else None,
         "vertices_below_3mm": int(np.count_nonzero(below_requested)),
+        "distance_method": "point_to_triangle" if triangle_mode else "point_to_vertex",
     }
+    if triangle_mode:
+        record["distance_summary"]["minimum_signed_distance_mm"] = float(np.min(signed_distances))
     paths = {"RV_openbase_epi_moved": str(path.resolve())}
     summary = {
-        "description": "RVepi moved away from fixed RVendo with an adaptive, smoothed open-base ring.",
+        "description": ("RVepi deformed outward with connected displacement smoothing and validated triangle-to-triangle clearance from fixed RVendo."
+                        if triangle_mode else "RVepi moved away from fixed RVendo with an adaptive, smoothed open-base ring."),
+        "clearance_method": args.step6_clearance_method,
         "subject": subject_id,
         "frame": frame,
         "output_dir": str(stage_dir.resolve()),
@@ -5445,11 +5584,11 @@ def save_step5_moved_rvepi(
         "lv_epi_intersection_handling": "not applied",
         "minimum_requested_distance_mm": float(args.rv_min_distance_to_rvepi),
     }
-    paths["summary"] = save_pipeline_summary(stage_dir, subject_id, frame, "step05_move_RVepi_summary", summary)
+    paths["summary"] = save_pipeline_summary(stage_dir, subject_id, frame, "step06_move_RVepi_summary", summary)
     return paths, summary
 
 
-def save_step6_reconstructed_annuli(
+def save_step7_reconstructed_annuli(
     stage_dir: Path,
     subject_id: str,
     frame: str,
@@ -5489,11 +5628,11 @@ def save_step6_reconstructed_annuli(
         "direct_boundary_connection": True,
         "tetgen_or_downstream_processing": False,
     }
-    paths["summary"] = save_pipeline_summary(stage_dir, subject_id, frame, "step06_reconstruct_annulus_summary", summary)
+    paths["summary"] = save_pipeline_summary(stage_dir, subject_id, frame, "step07_reconstruct_annulus_summary", summary)
     return paths, summary
 
 
-def load_step6_point_surface(
+def load_step7_point_surface(
     stage_dir: Path,
     subject_id: str,
     frame: str,
@@ -5506,19 +5645,19 @@ def load_step6_point_surface(
         if path.exists():
             return base.load_surface(path), path
     raise FileNotFoundError(
-        f"Missing Step 6 surface {surface_name!r}; checked: "
+        f"Missing Step 7 surface {surface_name!r}; checked: "
         + ", ".join(str(path) for path in candidates)
     )
 
 
-def save_step7_whole_points_surface(
+def save_step8_whole_points_surface(
     stage_dir: Path,
-    step6_dir: Path,
+    step7_dir: Path,
     subject_id: str,
     frame: str,
     args: argparse.Namespace,
 ) -> Tuple[Dict[str, str], Dict[str, object]]:
-    """Remove RV points near LVepi and save all Step 7 outputs as point clouds."""
+    """Remove RV points near LVepi and save all Step 8 outputs as point clouds."""
     stage_dir.mkdir(parents=True, exist_ok=True)
 
     input_specs = [
@@ -5532,8 +5671,8 @@ def save_step7_whole_points_surface(
     inputs: Dict[str, pv.PolyData] = {}
     input_paths: Dict[str, Path] = {}
     for logical_name, primary_name, fallback_names, _ in input_specs:
-        mesh, path = load_step6_point_surface(
-            step6_dir,
+        mesh, path = load_step7_point_surface(
+            step7_dir,
             subject_id,
             frame,
             primary_name,
@@ -5546,7 +5685,7 @@ def save_step7_whole_points_surface(
         tolerance=float(args.surface_clean_tolerance)
     )
     point_tolerance = max(
-        float(args.step7_lvepi_point_tolerance),
+        float(args.step8_lvepi_point_tolerance),
         float(args.surface_lvepi_clearance),
         float(args.surface_clean_tolerance) * 100.0,
         1e-5,
@@ -5638,7 +5777,7 @@ def save_step7_whole_points_surface(
     merged_rv_intersections = merged_rv_distances <= point_tolerance
     if np.any(merged_rv_intersections):
         raise RuntimeError(
-            "Step 7 merged point cloud still contains RV points intersecting LVepi: "
+            "Step 8 merged point cloud still contains RV points intersecting LVepi: "
             f"{int(np.count_nonzero(merged_rv_intersections))} points."
         )
     merged_path = stage_dir / f"{subject_id}_{frame}_LVRV_surf.vtk"
@@ -5682,11 +5821,11 @@ def save_step7_whole_points_surface(
         },
     }
     summary = {
-        "description": "Step 7 point-only LV/RV surface cloud after removing RV points intersecting the Step 6 LVepi surface.",
+        "description": "Step 8 point-only LV/RV surface cloud after removing RV points intersecting the Step 7 LVepi surface.",
         "subject": subject_id,
         "frame": frame,
         "output_dir": str(stage_dir.resolve()),
-        "input_step6_dir": str(step6_dir.resolve()),
+        "input_step7_dir": str(step7_dir.resolve()),
         "input_paths": {name: str(path.resolve()) for name, path in input_paths.items()},
         "paths": paths,
         "records": records,
@@ -5701,17 +5840,17 @@ def save_step7_whole_points_surface(
         "triangle_faces_written": False,
         "vtk_cell_type": "VTK_VERTEX",
     }
-    paths["summary"] = save_pipeline_summary(stage_dir, subject_id, frame, "step07_whole_points_surf_summary", summary)
+    paths["summary"] = save_pipeline_summary(stage_dir, subject_id, frame, "step08_whole_points_surf_summary", summary)
     return paths, summary
 
 
-def save_step6_merged_point_cloud(
+def save_step7_merged_point_cloud(
     stage_dir: Path,
     subject_id: str,
     frame: str,
     args: argparse.Namespace,
 ) -> Tuple[str, Dict[str, object]]:
-    """Merge all six Step 6 surfaces as a raw point-only VTK cloud."""
+    """Merge all six Step 7 surfaces as a raw point-only VTK cloud."""
     input_specs = [
         ("LV_openbase_epi", "LV_openbase_epi", (), int(args.lv_tag)),
         ("LV_openbase_endo", "LV_openbase_endo", (), int(args.lv_tag)),
@@ -5728,7 +5867,7 @@ def save_step6_merged_point_cloud(
     input_paths: Dict[str, str] = {}
     point_counts: Dict[str, int] = {}
     for source_index, (logical_name, primary_name, fallback_names, tag) in enumerate(input_specs):
-        mesh, path = load_step6_point_surface(
+        mesh, path = load_step7_point_surface(
             stage_dir,
             subject_id,
             frame,
@@ -5763,7 +5902,7 @@ def save_step6_merged_point_cloud(
         },
     )
     summary = {
-        "description": "Raw point-only merge of all six Step 6 LV/RV surfaces; no intersection removal is applied.",
+        "description": "Raw point-only merge of all six Step 7 LV/RV surfaces; no intersection removal is applied.",
         "subject": subject_id,
         "frame": frame,
         "output_dir": str(stage_dir.resolve()),
@@ -5792,7 +5931,7 @@ def _prepare_manifold_shell(
     face_id_offset: int,
     args: argparse.Namespace,
 ) -> Tuple[pv.PolyData, manifold3d.Manifold, int]:
-    """Create an oriented, closed Manifold3D shell from three Step 6 surfaces."""
+    """Create an oriented, closed Manifold3D shell from three Step 7 surfaces."""
     shell = pv.merge(
         [part.extract_surface().triangulate() for part in parts],
         merge_points=True,
@@ -5832,13 +5971,13 @@ def _prepare_manifold_shell(
     return shell, manifold, len(triangles)
 
 
-def save_step6_manifold_union_reconstruction(
+def save_step7_manifold_union_reconstruction(
     stage_dir: Path,
     subject_id: str,
     frame: str,
     args: argparse.Namespace,
 ) -> Tuple[str, Dict[str, object]]:
-    """Union the closed LV/RV Step 6 shells without point-cloud remeshing."""
+    """Union the closed LV/RV Step 7 shells without point-cloud remeshing."""
     input_specs = [
         ("LV_openbase_epi", "LV_openbase_epi", ()),
         ("LV_openbase_endo", "LV_openbase_endo", ()),
@@ -5850,7 +5989,7 @@ def save_step6_manifold_union_reconstruction(
     inputs: Dict[str, pv.PolyData] = {}
     input_paths: Dict[str, str] = {}
     for logical_name, primary_name, fallback_names in input_specs:
-        mesh, path = load_step6_point_surface(
+        mesh, path = load_step7_point_surface(
             stage_dir,
             subject_id,
             frame,
@@ -5912,7 +6051,7 @@ def save_step6_manifold_union_reconstruction(
         "point_data": [],
     }
     summary = {
-        "description": "Whole LV/RV surface from the six Step 6 triangle surfaces using a topology-preserving Boolean union.",
+        "description": "Whole LV/RV surface from the six Step 7 triangle surfaces using a topology-preserving Boolean union.",
         "subject": subject_id,
         "frame": frame,
         "input_paths": input_paths,
@@ -5940,8 +6079,10 @@ def save_step6_manifold_union_reconstruction(
     return str(output_path.resolve()), summary
 
 
-def process_frame_new_pipeline(args: argparse.Namespace, frame: str) -> Dict[str, object]:
-    """Run the active seven-stage surface point-cloud pipeline for one subject/frame."""
+def process_frame_new_pipeline(
+    args: argparse.Namespace, frame: str, prepared_frames: Optional[dict] = None,
+) -> Dict[str, object]:
+    """Run the active eight-stage surface point-cloud pipeline for one subject/frame."""
     subject_dir = args.subject_dir
     subject_id = subject_dir.name
     vtk_dir = resolve_vtk_dir(subject_dir, args.vtk_dir)
@@ -5951,26 +6092,64 @@ def process_frame_new_pipeline(args: argparse.Namespace, frame: str) -> Dict[str
     pipeline_root.mkdir(parents=True, exist_ok=True)
 
     step1_dir = resolve_pipeline_stage_dir(subject_dir, pipeline_root, "step_01_load_surf")
-    step2_dir = resolve_pipeline_stage_dir(subject_dir, pipeline_root, "step_02_base_detection")
-    step3_dir = resolve_pipeline_stage_dir(subject_dir, pipeline_root, "step_03_LV_openbase")
-    step4_dir = resolve_pipeline_stage_dir(subject_dir, pipeline_root, "step_04_RV_openbase")
-    step5_dir = resolve_pipeline_stage_dir(subject_dir, pipeline_root, "step_05_move_RVepi")
-    step6_dir = resolve_pipeline_stage_dir(subject_dir, pipeline_root, "step_06_reconstruct_annulus")
-    step7_dir = resolve_pipeline_stage_dir(subject_dir, pipeline_root, "step_07_whole_points_surf")
+    step2_dir = resolve_pipeline_stage_dir(subject_dir, pipeline_root, "step_02_surf_clean")
+    step3_dir = resolve_pipeline_stage_dir(subject_dir, pipeline_root, "step_03_base_detection")
+    step4_dir = resolve_pipeline_stage_dir(subject_dir, pipeline_root, "step_04_LV_openbase")
+    step5_dir = resolve_pipeline_stage_dir(subject_dir, pipeline_root, "step_05_RV_openbase")
+    step6_dir = resolve_pipeline_stage_dir(subject_dir, pipeline_root, "step_06_move_RVepi")
+    step7_dir = resolve_pipeline_stage_dir(subject_dir, pipeline_root, "step_07_reconstruct_annulus")
+    step8_dir = resolve_pipeline_stage_dir(subject_dir, pipeline_root, "step_08_whole_points_surf")
 
-    input_paths = input_paths_for_frame(vtk_dir, frame)
-    log_stage(f"{subject_id} {frame}: check and fill input surface holes before Step 1")
-    surfaces, input_hole_checks = load_checked_surfaces(vtk_dir, frame)
-    log_stage(f"{subject_id} {frame}: Step 1 save four checked surfaces")
-    step1_paths, _ = save_step1_loaded_surfaces(
-        step1_dir, subject_id, frame, surfaces, input_paths, input_hole_checks,
+    prepared_frames = {} if prepared_frames is None else prepared_frames
+
+    def prepare_input_frame(scan_frame: str) -> dict:
+        if scan_frame not in prepared_frames:
+            input_paths = input_paths_for_frame(vtk_dir, scan_frame)
+            log_stage(f"{subject_id} {scan_frame}: check and fill input surface holes before Step 1")
+            loaded, checks = load_checked_surfaces(vtk_dir, scan_frame)
+            log_stage(f"{subject_id} {scan_frame}: Step 1 save four checked surfaces")
+            loaded_paths, _ = save_step1_loaded_surfaces(
+                step1_dir, subject_id, scan_frame, loaded, input_paths, checks,
+            )
+            cleaned, cleaned_paths, _ = save_step2_cleaned_surfaces(
+                step2_dir, subject_id, scan_frame, loaded_paths,
+            )
+            prepared_frames[scan_frame] = {
+                "surfaces": cleaned, "step1_paths": loaded_paths, "step2_paths": cleaned_paths,
+            }
+        return prepared_frames[scan_frame]
+
+    prepared = prepare_input_frame(frame)
+    surfaces, step1_paths, step2_paths = (
+        prepared["surfaces"], prepared["step1_paths"], prepared["step2_paths"],
     )
+    if args.stop_after_surface_clean:
+        return {
+            "subject": subject_id, "frame": frame, "stopped_after": "step02_surf_clean",
+            "stage_outputs": {"step_01_load_surf": step1_paths, "step_02_surf_clean": step2_paths},
+        }
+
+    cleaned_input_paths = {}
+
+    def cleaned_surface_loader(path: Path) -> pv.PolyData:
+        prefix, scan_frame = path.stem.rsplit("_", 1)
+        entry = prepare_input_frame(scan_frame)
+        surface_name = {"LVendo": "lv_endo", "LVepi": "lv_epi", "RV": "rv_endo", "RVepi": "rv_epi"}[prefix]
+        cleaned_input_paths[str(path.resolve())] = entry["step2_paths"][prefix]
+        return entry["surfaces"][surface_name]
 
     frame_args = openbase.namespace_with_overrides(args, {"frame": frame})
-    log_stage(f"{subject_id} {frame}: Step 2 detect subject-level base side")
-    subject_base_side, subject_base_detection = detect_subject_base_side_checked(
-        vtk_dir, frame_args, surfaces, input_paths,
+    log_stage(f"{subject_id} {frame}: Step 3 detect subject-level base side")
+    subject_base_side, subject_base_detection = openbase.detect_subject_base_side(
+        vtk_dir, frame_args, surface_loader=cleaned_surface_loader,
     )
+    subject_base_detection["input_surface_stage"] = "step_02_surf_clean"
+    subject_base_detection["cleaned_input_paths"] = cleaned_input_paths
+    for record in subject_base_detection.get("records", []):
+        if record.get("available"):
+            source = str(Path(record["path"]).resolve())
+            record["source_vtk_path"] = source
+            record["path"] = cleaned_input_paths[source]
     lv_base_side = args.lv_base_side or subject_base_side
     rv_base_side = args.rv_base_side or subject_base_side
     subject_base_detection["applied_base_side"] = {"lv": lv_base_side, "rv": rv_base_side}
@@ -5991,8 +6170,8 @@ def process_frame_new_pipeline(args: argparse.Namespace, frame: str) -> Dict[str
         stable_fraction=args.stable_fraction,
         override_base_side=rv_base_side,
     )
-    step2_paths, _ = save_step2_base_detection(
-        step2_dir,
+    step3_paths, _ = save_step3_base_detection(
+        step3_dir,
         subject_id,
         frame,
         subject_base_detection,
@@ -6002,48 +6181,49 @@ def process_frame_new_pipeline(args: argparse.Namespace, frame: str) -> Dict[str
         rv_base_side,
     )
 
-    log_stage(f"{subject_id} {frame}: Step 3 build LV open-base myocardial shell")
-    lv_build = build_ventricle_shell_for_pre_step5(
+    log_stage(f"{subject_id} {frame}: Step 4 build LV open-base myocardial shell")
+    lv_build = build_ventricle_shell_for_pre_step6(
         "LV", surfaces["lv_endo"], surfaces["lv_epi"], lv_profile, frame_args
     )
-    step3_paths, _ = save_openbase_surface_stage(step3_dir, subject_id, frame, "LV", lv_build)
+    step4_paths, _ = save_openbase_surface_stage(step4_dir, subject_id, frame, "LV", lv_build)
 
-    log_stage(f"{subject_id} {frame}: Step 4 build initial RV open-base myocardial shell")
-    rv_build = build_ventricle_shell_for_pre_step5(
+    log_stage(f"{subject_id} {frame}: Step 5 build initial RV open-base myocardial shell")
+    rv_build = build_ventricle_shell_for_pre_step6(
         "RV", surfaces["rv_endo"], surfaces["rv_epi"], rv_profile, frame_args
     )
-    step4_paths, _ = save_openbase_surface_stage(step4_dir, subject_id, frame, "RV", rv_build)
+    step5_paths, _ = save_openbase_surface_stage(step5_dir, subject_id, frame, "RV", rv_build)
 
     if args.stop_after_open_shells:
         return {
             "subject": subject_id,
             "frame": frame,
-            "stopped_after": "step04_RV_openbase",
+            "stopped_after": "step05_RV_openbase",
             "stage_outputs": {
                 "step_01_load_surf": step1_paths,
-                "step_02_base_detection": step2_paths,
-                "step_03_LV_openbase": step3_paths,
-                "step_04_RV_openbase": step4_paths,
+                "step_02_surf_clean": step2_paths,
+                "step_03_base_detection": step3_paths,
+                "step_04_LV_openbase": step4_paths,
+                "step_05_RV_openbase": step5_paths,
             },
         }
 
-    rv_endo_step5_surface = rv_build.endo_open.extract_surface().triangulate().clean(tolerance=frame_args.surface_clean_tolerance)
-    rv_epi_step5_surface = rv_build.epi_open.extract_surface().triangulate().clean(tolerance=frame_args.surface_clean_tolerance)
-    log_stage(f"{subject_id} {frame}: Step 5 move RVepi away from fixed RVendo by at least 3 mm")
+    rv_endo_step6_surface = rv_build.endo_open.extract_surface().triangulate().clean(tolerance=frame_args.surface_clean_tolerance)
+    rv_epi_step6_surface = rv_build.epi_open.extract_surface().triangulate().clean(tolerance=frame_args.surface_clean_tolerance)
+    log_stage(f"{subject_id} {frame}: Step 6 move RVepi away from fixed RVendo by at least 3 mm")
     rv_epi_moved, moved_mask, opening_mask, transition_band_mask, moved_opening_loop, distance_info = enforce_rvepi_distance_adaptive_opening_ring(
-        rv_epi_step5_surface,
-        rv_endo_step5_surface,
+        rv_epi_step6_surface,
+        rv_endo_step6_surface,
         rv_build.epi_opening_loop,
         frame_args,
     )
-    distance_info["step"] = "step05_move_RVepi"
-    distance_info["opening_loop_after_step5"] = loop_record(moved_opening_loop)
-    step5_paths, _ = save_step5_moved_rvepi(
-        step5_dir,
+    distance_info["step"] = "step06_move_RVepi"
+    distance_info["opening_loop_after_step6"] = loop_record(moved_opening_loop)
+    step6_paths, _ = save_step6_moved_rvepi(
+        step6_dir,
         subject_id,
         frame,
         rv_epi_moved,
-        rv_endo_step5_surface,
+        rv_endo_step6_surface,
         moved_mask,
         opening_mask,
         transition_band_mask,
@@ -6051,7 +6231,7 @@ def process_frame_new_pipeline(args: argparse.Namespace, frame: str) -> Dict[str
         frame_args,
     )
 
-    log_stage(f"{subject_id} {frame}: Step 6 reconstruct LV/RV annuli from current epi/endo boundaries")
+    log_stage(f"{subject_id} {frame}: Step 7 reconstruct LV/RV annuli from current epi/endo boundaries")
     lv_epi_loop, lv_endo_loop, lv_annulus, lv_annulus_info = rebuild_openbase_annulus_from_current_surfaces(
         "LV",
         lv_build.epi_open,
@@ -6062,19 +6242,19 @@ def process_frame_new_pipeline(args: argparse.Namespace, frame: str) -> Dict[str
     rv_epi_loop, rv_endo_loop, rv_annulus, rv_annulus_info = rebuild_openbase_annulus_from_current_surfaces(
         "RV",
         rv_epi_moved,
-        rv_endo_step5_surface,
+        rv_endo_step6_surface,
         rv_profile,
         frame_args,
     )
-    step6_paths, _ = save_step6_reconstructed_annuli(
-        step6_dir,
+    step7_paths, _ = save_step7_reconstructed_annuli(
+        step7_dir,
         subject_id,
         frame,
         lv_build.epi_open,
         lv_build.endo_open,
         lv_annulus,
         rv_epi_moved,
-        rv_endo_step5_surface,
+        rv_endo_step6_surface,
         rv_annulus,
         {
             **lv_annulus_info,
@@ -6088,29 +6268,29 @@ def process_frame_new_pipeline(args: argparse.Namespace, frame: str) -> Dict[str
         },
         frame_args,
     )
-    log_stage(f"{subject_id} {frame}: merge the six Step 6 surfaces into a raw point cloud")
-    step6_lvrv_point_cloud_path, step6_lvrv_point_cloud_summary = save_step6_merged_point_cloud(
-        step6_dir,
-        subject_id,
-        frame,
-        frame_args,
-    )
-    step6_paths["LVRV_point_cloud"] = step6_lvrv_point_cloud_path
-    step6_paths["LVRV_point_cloud_summary"] = step6_lvrv_point_cloud_summary["summary_path"]
-    log_stage(f"{subject_id} {frame}: build the whole LV/RV surface with a Manifold3D Boolean union")
-    step6_lvrv_surface_path, step6_lvrv_surface_summary = save_step6_manifold_union_reconstruction(
-        step6_dir,
-        subject_id,
-        frame,
-        frame_args,
-    )
-    step6_paths["LVRV_surface_manifold_union"] = step6_lvrv_surface_path
-    step6_paths["LVRV_surface_manifold_union_summary"] = step6_lvrv_surface_summary["summary_path"]
-
-    log_stage(f"{subject_id} {frame}: Step 7 remove RV points intersecting LVepi and save merged point cloud")
-    step7_paths, _ = save_step7_whole_points_surface(
+    log_stage(f"{subject_id} {frame}: merge the six Step 7 surfaces into a raw point cloud")
+    step7_lvrv_point_cloud_path, step7_lvrv_point_cloud_summary = save_step7_merged_point_cloud(
         step7_dir,
-        step6_dir,
+        subject_id,
+        frame,
+        frame_args,
+    )
+    step7_paths["LVRV_point_cloud"] = step7_lvrv_point_cloud_path
+    step7_paths["LVRV_point_cloud_summary"] = step7_lvrv_point_cloud_summary["summary_path"]
+    log_stage(f"{subject_id} {frame}: build the whole LV/RV surface with a Manifold3D Boolean union")
+    step7_lvrv_surface_path, step7_lvrv_surface_summary = save_step7_manifold_union_reconstruction(
+        step7_dir,
+        subject_id,
+        frame,
+        frame_args,
+    )
+    step7_paths["LVRV_surface_manifold_union"] = step7_lvrv_surface_path
+    step7_paths["LVRV_surface_manifold_union_summary"] = step7_lvrv_surface_summary["summary_path"]
+
+    log_stage(f"{subject_id} {frame}: Step 8 remove RV points intersecting LVepi and save merged point cloud")
+    step8_paths, _ = save_step8_whole_points_surface(
+        step8_dir,
+        step7_dir,
         subject_id,
         frame,
         frame_args,
@@ -6119,24 +6299,26 @@ def process_frame_new_pipeline(args: argparse.Namespace, frame: str) -> Dict[str
     return {
         "subject": subject_id,
         "frame": frame,
-        "stopped_after": "step07_whole_points_surf",
+        "stopped_after": "step08_whole_points_surf",
         "stage_outputs": {
             "step_01_load_surf": step1_paths,
-            "step_02_base_detection": step2_paths,
-            "step_03_LV_openbase": step3_paths,
-            "step_04_RV_openbase": step4_paths,
-            "step_05_move_RVepi": step5_paths,
-            "step_06_reconstruct_annulus": step6_paths,
-            "step_07_whole_points_surf": step7_paths,
+            "step_02_surf_clean": step2_paths,
+            "step_03_base_detection": step3_paths,
+            "step_04_LV_openbase": step4_paths,
+            "step_05_RV_openbase": step5_paths,
+            "step_06_move_RVepi": step6_paths,
+            "step_07_reconstruct_annulus": step7_paths,
+            "step_08_whole_points_surf": step8_paths,
         },
         "active_pipeline": [
             "load_four_surfaces",
+            "meshfix_clean_step01_surfaces_and_validate_saved_copies",
             "subject_level_base_side_detection",
             "build_LV_openbase_shell",
             "build_initial_RV_openbase_shell",
             "move_RVepi_to_minimum_3mm_from_fixed_RVendo_with_adaptive_opening_ring",
             "directly_reconstruct_LV_and_RV_openbase_annuli",
-            "merge_six_step06_surfaces_to_raw_point_only_LVRV_cloud",
+            "merge_six_step07_surfaces_to_raw_point_only_LVRV_cloud",
             "reconstruct_LVRV_surface_with_manifold3d_boolean_union",
             "remove_RV_points_intersecting_LVepi_and_save_point_only_LVRV_cloud",
         ],
@@ -6194,9 +6376,9 @@ def process_frame(args: argparse.Namespace, frame: str) -> Dict[str, object]:
     base.write_area_profile(output_dir / f"{subject_id}_{frame}_RV_z_area_profile.csv", rv_profile)
 
     log_stage(f"{subject_id} {frame}: build open-base LV shell")
-    lv_build = build_ventricle_shell_for_pre_step5("LV", surfaces["lv_endo"], surfaces["lv_epi"], lv_profile, frame_args)
+    lv_build = build_ventricle_shell_for_pre_step6("LV", surfaces["lv_endo"], surfaces["lv_epi"], lv_profile, frame_args)
     log_stage(f"{subject_id} {frame}: build initial open-base RV shell")
-    rv_build = build_ventricle_shell_for_pre_step5("RV", surfaces["rv_endo"], surfaces["rv_epi"], rv_profile, frame_args)
+    rv_build = build_ventricle_shell_for_pre_step6("RV", surfaces["rv_endo"], surfaces["rv_epi"], rv_profile, frame_args)
 
     open_shell_stage_paths: Dict[str, str] = {}
     open_shell_stage_summary: Dict[str, object] = {}
@@ -6212,7 +6394,7 @@ def process_frame(args: argparse.Namespace, frame: str) -> Dict[str, object]:
             rv_profile,
             lv_base_side,
             rv_base_side,
-            bool(args.repair_open_shells_before_step5),
+            bool(args.repair_open_shells_before_step6),
         )
 
     if args.stop_after_open_shells:
@@ -6706,7 +6888,8 @@ def process_frame(args: argparse.Namespace, frame: str) -> Dict[str, object]:
 def main() -> None:
     args = parse_args()
     frames = parse_csv_values(args.frames) or [args.frame]
-    results = [process_frame_new_pipeline(args, frame) for frame in frames]
+    prepared_frames = {}
+    results = [process_frame_new_pipeline(args, frame, prepared_frames) for frame in frames]
     print(json.dumps({"results": results}, indent=2))
 
 

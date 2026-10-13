@@ -15,11 +15,12 @@ from scipy.sparse import coo_matrix, eye
 from scipy.sparse.csgraph import connected_components
 from scipy.sparse.linalg import factorized
 from shapely.geometry import Polygon
+from model_vol_septum.mesh_intersections import confirmed_self_intersections
 
 
 def triangles(mesh):
     if not mesh.is_all_triangles or mesh.n_cells == 0:
-        raise RuntimeError("Step 05 requires a nonempty triangle-only surface.")
+        raise RuntimeError("Step 06 requires a nonempty triangle-only surface.")
     return np.asarray(mesh.faces.reshape(-1, 4)[:, 1:], dtype=np.int64)
 
 
@@ -64,14 +65,12 @@ def _opening_indices(mesh):
         previous = current
         ordered.append(nxt)
     if len(ordered) != len(adjacent):
-        raise RuntimeError("Step 05 expects one basal opening, but found additional boundary loops.")
+        raise RuntimeError("Step 06 expects one basal opening, but found additional boundary loops.")
     return np.asarray(ordered, dtype=np.int64)
 
 
 def _self_intersections(points, faces):
-    mesh = o3d.geometry.TriangleMesh(o3d.utility.Vector3dVector(np.asarray(points, dtype=float)),
-                                    o3d.utility.Vector3iVector(faces.astype(np.int32)))
-    return np.asarray(mesh.get_self_intersecting_triangles(), dtype=np.int64).reshape(-1, 2)
+    return confirmed_self_intersections(points, faces)
 
 
 def _check_geometry(mesh, name, closed=False):
@@ -93,7 +92,7 @@ def _check_geometry(mesh, name, closed=False):
         _opening_indices(mesh)
     pairs = _self_intersections(points, faces)
     if len(pairs):
-        raise RuntimeError(f"{name} contains {len(pairs)} self-intersections; repair Step 04 first. "
+        raise RuntimeError(f"{name} contains {len(pairs)} self-intersections; repair Step 05 first. "
                            f"Triangle pairs: {pairs[:12].tolist()}.")
 
 
@@ -184,13 +183,13 @@ class FixedEndo:
         try:
             self.fcl = importlib.import_module("fcl")
         except ImportError as error:
-            raise RuntimeError("Step 05 requires python-fcl in the active environment.") from error
+            raise RuntimeError("Step 06 requires python-fcl in the active environment.") from error
         self.object = self.collision_object(self.points, self.faces)
         self.closed_object = self.collision_object(self.closed_mesh.points, triangles(self.closed_mesh))
 
     def assert_unchanged(self, mesh):
         if not np.array_equal(self.points, mesh.points) or not np.array_equal(self.faces, triangles(mesh)):
-            raise RuntimeError("Step 05 modified the fixed RVendo geometry.")
+            raise RuntimeError("Step 06 modified the fixed RVendo geometry.")
 
     def collision_object(self, points, faces):
         model = self.fcl.BVHModel()
@@ -362,18 +361,18 @@ def move_rvepi(epi, endo, ring_ids, minimum, padding, max_step,
     if not np.isfinite([minimum, padding, max_step, ring_relaxation]).all() or minimum <= 0 or padding < 0 or max_step <= 0:
         raise ValueError("Clearance/max_step must be positive and padding nonnegative.")
     if max_iterations < 1 or ring_smooth_iterations < 0 or not 0 <= ring_relaxation <= 1:
-        raise ValueError("Invalid Step 05 iteration or ring smoothing settings.")
-    _check_geometry(epi, "Step 04 RVepi")
-    _check_geometry(endo, "Step 04 RVendo")
+        raise ValueError("Invalid Step 06 iteration or ring smoothing settings.")
+    _check_geometry(epi, "Step 05 RVepi")
+    _check_geometry(endo, "Step 05 RVendo")
     original = np.asarray(epi.points, dtype=float).copy()
     original_faces = triangles(epi).copy()
     ring_ids = np.asarray(ring_ids, dtype=np.int64)
     boundary = _opening_indices(epi)
     if len(ring_ids) != len(boundary) or set(ring_ids.tolist()) != set(boundary.tolist()):
-        raise RuntimeError("Step 05 ring IDs must cover exactly the RVepi boundary.")
+        raise RuntimeError("Step 06 ring IDs must cover exactly the RVepi boundary.")
     ring_edges = {tuple(e) for e in _edges(original_faces)}
     if any(tuple(sorted((int(a), int(b)))) not in ring_edges for a, b in zip(ring_ids, np.roll(ring_ids, -1))):
-        raise RuntimeError("Step 05 ring IDs are not in boundary order.")
+        raise RuntimeError("Step 06 ring IDs are not in boundary order.")
     axis, _ = _basal_reference(epi, ring_ids)
     if basal_axis is not None:
         axis = np.asarray(basal_axis, dtype=float)
@@ -471,34 +470,34 @@ def move_rvepi(epi, endo, ring_ids, minimum, padding, max_step,
             accepted = True
             break
         if not accepted:
-            raise RuntimeError(f"Step 05 outward deformation stalled at iteration {iteration}: "
+            raise RuntimeError(f"Step 06 outward deformation stalled at iteration {iteration}: "
                                f"min_signed={signed.min():.6g}, below_target={np.count_nonzero(signed < target)}, "
                                f"failing_faces={failing[:12].tolist()}, rejected={rejected}; no inward repair applied.")
         failing = np.empty(0, dtype=np.int64)
         if iteration % 20 == 0:
-            print(f"[Step05 RVepi] iteration={iteration} below_target={np.count_nonzero(signed < target)} "
+            print(f"[Step06 RVepi] iteration={iteration} below_target={np.count_nonzero(signed < target)} "
                   f"inside={np.count_nonzero(signed < 0)} max_step={np.linalg.norm(step_delta, axis=1).max():.5g}", flush=True)
     else:
         remaining = fixed.values(points)
-        raise RuntimeError(f"Step 05 did not converge after {max_iterations} outward iterations: "
+        raise RuntimeError(f"Step 06 did not converge after {max_iterations} outward iterations: "
                            f"min_signed={remaining.min():.6g}, below_target={np.count_nonzero(remaining < target)}.")
     result = epi.copy(deep=True)
     result.points = points
     displacement = points - original
     outward_displacement = np.einsum("ij,ij->i", displacement, reference)
-    result.point_data["step5SourcePointId"] = np.arange(len(points), dtype=np.int64)
-    result.point_data["step5ReferenceOutwardNormal"] = reference
-    result.point_data["step5Displacement"] = displacement
-    result.point_data["step5OutwardDisplacement"] = outward_displacement
-    result.point_data["step5MinimumStepOutwardDot"] = minimum_step_dot
+    result.point_data["step6SourcePointId"] = np.arange(len(points), dtype=np.int64)
+    result.point_data["step6ReferenceOutwardNormal"] = reference
+    result.point_data["step6Displacement"] = displacement
+    result.point_data["step6OutwardDisplacement"] = outward_displacement
+    result.point_data["step6MinimumStepOutwardDot"] = minimum_step_dot
     final_signed = np.where(fixed.values(points) < 0, -1., 1.) * fixed.exact_distances(points)
     result.point_data["signedDistanceToRVendo"] = final_signed
     result.point_data["adaptiveOpeningBoundary"] = ring_mask.astype(np.int32)
     result.point_data["openingTransitionBand"] = (levels >= 0).astype(np.int32)
     verification = validate_rvepi(result, endo, minimum, axis, plane, fixed)
     fixed.assert_unchanged(endo)
-    if not np.array_equal(triangles(epi), original_faces):
-        raise RuntimeError("Step 05 modified input RVepi connectivity.")
+    if not np.array_equal(triangles(result), original_faces):
+        raise RuntimeError("Step 06 modified RVepi connectivity.")
     return result, {
         "method": "RVepi_nonnegative_normal_displacement_with_outward_basal_ring",
         "deformation": "scalar_M_matrix_smoothing_and_geometry_backtracking",

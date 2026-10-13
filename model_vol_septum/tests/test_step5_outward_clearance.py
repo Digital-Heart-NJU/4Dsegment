@@ -1,14 +1,18 @@
 """Regression checks for exterior-only movement and protected RVepi openings."""
 
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 import pyvista as pv
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from rvepi_outward_clearance import FixedEndo, _edges, face_clearance, move_rvepi, triangles
+import generate_open_volmesh_stable as pipeline
 
 
 def open_cube(radius):
@@ -65,6 +69,32 @@ class Step5OutwardTests(unittest.TestCase):
         self.assertEqual(info["final_RVepi_self_intersection_pairs"], 0)
         np.testing.assert_array_equal(endo.points, original_endo_points)
         np.testing.assert_array_equal(endo.faces, original_endo_faces)
+
+    def test_active_step5_saves_triangle_distances_and_final_displacements(self):
+        epi, endo = open_cube(4), open_cube(5)
+        ring = ring_indices(epi)
+        loop = pipeline.base.make_polyline(epi.points[ring])
+        with patch.object(sys, "argv", ["pipeline", "--step6-clearance-method", "triangle"]):
+            args = pipeline.parse_args()
+        moved, moved_mask, opening, band, final_loop, info = (
+            pipeline.enforce_rvepi_distance_adaptive_opening_ring(epi, endo, loop, args)
+        )
+        self.assertGreaterEqual(info["minimum_certified_surface_distance_mm"], 3.)
+        np.testing.assert_array_equal(triangles(moved), triangles(epi))
+        np.testing.assert_allclose(moved.point_data["step6Displacement"], moved.points - epi.points)
+        self.assertTrue(np.all(moved_mask))
+        self.assertEqual(final_loop.n_points, len(ring))
+        with tempfile.TemporaryDirectory() as directory:
+            paths, summary = pipeline.save_step6_moved_rvepi(
+                Path(directory), "test", "ED", moved, endo, moved_mask, opening, band, info, args,
+            )
+            saved = pv.read(paths["RV_openbase_epi_moved"])
+            self.assertIn("step6Displacement", saved.point_data)
+            np.testing.assert_allclose(saved.point_data["step6Displacement"], saved.points - epi.points, atol=1e-5)
+            exact = FixedEndo(endo).exact_distances(saved.points)
+            np.testing.assert_allclose(saved.point_data["distanceToRVendo"], exact, atol=1e-5)
+            self.assertEqual(np.count_nonzero(saved.point_data["belowRequested3mm"]), 0)
+            self.assertGreaterEqual(summary["surface"]["saved_surface_validation"]["minimum_certified_surface_distance_mm"], 3.)
 
 
 if __name__ == "__main__":

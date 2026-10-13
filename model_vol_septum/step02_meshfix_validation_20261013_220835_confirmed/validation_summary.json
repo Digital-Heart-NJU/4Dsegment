@@ -1,0 +1,591 @@
+{
+  "all_six_completed": true,
+  "original_vtks_and_step01_meshes_unchanged": true,
+  "stage_order": [
+    "step_01_load_surf",
+    "step_02_surf_clean",
+    "step_03_base_detection",
+    "step_04_LV_openbase",
+    "step_05_RV_openbase",
+    "step_06_move_RVepi",
+    "step_07_reconstruct_annulus",
+    "step_08_whole_points_surf"
+  ],
+  "regression_tests_passed": 14,
+  "cleaned_surfaces_validated": 24,
+  "all_stage_files_present": true,
+  "base_detection_uses_step02": true,
+  "clearance_method_tested": "vertex (default); triangle mode remains optional",
+  "results": [
+    {
+      "subject": "subject_1",
+      "frame": "ED",
+      "completed_stage": "step08_whole_points_surf",
+      "surfaces": {
+        "LVendo": {
+          "before": {
+            "points": 6538,
+            "triangles": 13072,
+            "free_edges": 0,
+            "nonmanifold_edges": 0,
+            "inconsistent_orientation_edges": 0,
+            "degenerate_triangles": 0,
+            "self_intersection_pairs": 0
+          },
+          "after": {
+            "points": 6538,
+            "triangles": 13072,
+            "free_edges": 0,
+            "nonmanifold_edges": 0,
+            "inconsistent_orientation_edges": 0,
+            "degenerate_triangles": 0,
+            "self_intersection_pairs": 0
+          },
+          "path": "/home/mengao/Code/4Dsegment/data/subject_1/volmesh_pipline/step_02_surf_clean/subject_1_ED_LVendo.vtk",
+          "elemTag": 1
+        },
+        "LVepi": {
+          "before": {
+            "points": 11316,
+            "triangles": 22628,
+            "free_edges": 0,
+            "nonmanifold_edges": 0,
+            "inconsistent_orientation_edges": 0,
+            "degenerate_triangles": 0,
+            "self_intersection_pairs": 0
+          },
+          "after": {
+            "points": 11316,
+            "triangles": 22628,
+            "free_edges": 0,
+            "nonmanifold_edges": 0,
+            "inconsistent_orientation_edges": 0,
+            "degenerate_triangles": 0,
+            "self_intersection_pairs": 0
+          },
+          "path": "/home/mengao/Code/4Dsegment/data/subject_1/volmesh_pipline/step_02_surf_clean/subject_1_ED_LVepi.vtk",
+          "elemTag": 1
+        },
+        "RV": {
+          "before": {
+            "points": 15064,
+            "triangles": 30124,
+            "free_edges": 0,
+            "nonmanifold_edges": 0,
+            "inconsistent_orientation_edges": 0,
+            "degenerate_triangles": 0,
+            "self_intersection_pairs": 0
+          },
+          "after": {
+            "points": 15064,
+            "triangles": 30124,
+            "free_edges": 0,
+            "nonmanifold_edges": 0,
+            "inconsistent_orientation_edges": 0,
+            "degenerate_triangles": 0,
+            "self_intersection_pairs": 0
+          },
+          "path": "/home/mengao/Code/4Dsegment/data/subject_1/volmesh_pipline/step_02_surf_clean/subject_1_ED_RV.vtk",
+          "elemTag": 0
+        },
+        "RVepi": {
+          "before": {
+            "points": 17412,
+            "triangles": 34820,
+            "free_edges": 0,
+            "nonmanifold_edges": 0,
+            "inconsistent_orientation_edges": 0,
+            "degenerate_triangles": 0,
+            "self_intersection_pairs": 0
+          },
+          "after": {
+            "points": 17412,
+            "triangles": 34820,
+            "free_edges": 0,
+            "nonmanifold_edges": 0,
+            "inconsistent_orientation_edges": 0,
+            "degenerate_triangles": 0,
+            "self_intersection_pairs": 0
+          },
+          "path": "/home/mengao/Code/4Dsegment/data/subject_1/volmesh_pipline/step_02_surf_clean/subject_1_ED_RVepi.vtk",
+          "elemTag": 0
+        }
+      }
+    },
+    {
+      "subject": "subject_1",
+      "frame": "ES",
+      "completed_stage": "step08_whole_points_surf",
+      "surfaces": {
+        "LVendo": {
+          "before": {
+            "points": 3768,
+            "triangles": 7532,
+            "free_edges": 0,
+            "nonmanifold_edges": 0,
+            "inconsistent_orientation_edges": 0,
+            "degenerate_triangles": 0,
+            "self_intersection_pairs": 0
+          },
+          "after": {
+            "points": 3768,
+            "triangles": 7532,
+            "free_edges": 0,
+            "nonmanifold_edges": 0,
+            "inconsistent_orientation_edges": 0,
+            "degenerate_triangles": 0,
+            "self_intersection_pairs": 0
+          },
+          "path": "/home/mengao/Code/4Dsegment/data/subject_1/volmesh_pipline/step_02_surf_clean/subject_1_ES_LVendo.vtk",
+          "elemTag": 1
+        },
+        "LVepi": {
+          "before": {
+            "points": 9240,
+            "triangles": 18476,
+            "free_edges": 0,
+            "nonmanifold_edges": 0,
+            "inconsistent_orientation_edges": 0,
+            "degenerate_triangles": 0,
+            "self_intersection_pairs": 0
+          },
+          "after": {
+            "points": 9240,
+            "triangles": 18476,
+            "free_edges": 0,
+            "nonmanifold_edges": 0,
+            "inconsistent_orientation_edges": 0,
+            "degenerate_triangles": 0,
+            "self_intersection_pairs": 0
+          },
+          "path": "/home/mengao/Code/4Dsegment/data/subject_1/volmesh_pipline/step_02_surf_clean/subject_1_ES_LVepi.vtk",
+          "elemTag": 1
+        },
+        "RV": {
+          "before": {
+            "points": 12812,
+            "triangles": 25620,
+            "free_edges": 0,
+            "nonmanifold_edges": 0,
+            "inconsistent_orientation_edges": 0,
+            "degenerate_triangles": 0,
+            "self_intersection_pairs": 0
+          },
+          "after": {
+            "points": 12812,
+            "triangles": 25620,
+            "free_edges": 0,
+            "nonmanifold_edges": 0,
+            "inconsistent_orientation_edges": 0,
+            "degenerate_triangles": 0,
+            "self_intersection_pairs": 0
+          },
+          "path": "/home/mengao/Code/4Dsegment/data/subject_1/volmesh_pipline/step_02_surf_clean/subject_1_ES_RV.vtk",
+          "elemTag": 0
+        },
+        "RVepi": {
+          "before": {
+            "points": 15390,
+            "triangles": 30776,
+            "free_edges": 0,
+            "nonmanifold_edges": 0,
+            "inconsistent_orientation_edges": 0,
+            "degenerate_triangles": 0,
+            "self_intersection_pairs": 0
+          },
+          "after": {
+            "points": 15390,
+            "triangles": 30776,
+            "free_edges": 0,
+            "nonmanifold_edges": 0,
+            "inconsistent_orientation_edges": 0,
+            "degenerate_triangles": 0,
+            "self_intersection_pairs": 0
+          },
+          "path": "/home/mengao/Code/4Dsegment/data/subject_1/volmesh_pipline/step_02_surf_clean/subject_1_ES_RVepi.vtk",
+          "elemTag": 0
+        }
+      }
+    },
+    {
+      "subject": "subject_2",
+      "frame": "ED",
+      "completed_stage": "step08_whole_points_surf",
+      "surfaces": {
+        "LVendo": {
+          "before": {
+            "points": 7716,
+            "triangles": 15428,
+            "free_edges": 0,
+            "nonmanifold_edges": 0,
+            "inconsistent_orientation_edges": 0,
+            "degenerate_triangles": 0,
+            "self_intersection_pairs": 0
+          },
+          "after": {
+            "points": 7716,
+            "triangles": 15428,
+            "free_edges": 0,
+            "nonmanifold_edges": 0,
+            "inconsistent_orientation_edges": 0,
+            "degenerate_triangles": 0,
+            "self_intersection_pairs": 0
+          },
+          "path": "/home/mengao/Code/4Dsegment/data/subject_2/volmesh_pipline/step_02_surf_clean/subject_2_ED_LVendo.vtk",
+          "elemTag": 1
+        },
+        "LVepi": {
+          "before": {
+            "points": 12648,
+            "triangles": 25292,
+            "free_edges": 0,
+            "nonmanifold_edges": 0,
+            "inconsistent_orientation_edges": 0,
+            "degenerate_triangles": 0,
+            "self_intersection_pairs": 0
+          },
+          "after": {
+            "points": 12648,
+            "triangles": 25292,
+            "free_edges": 0,
+            "nonmanifold_edges": 0,
+            "inconsistent_orientation_edges": 0,
+            "degenerate_triangles": 0,
+            "self_intersection_pairs": 0
+          },
+          "path": "/home/mengao/Code/4Dsegment/data/subject_2/volmesh_pipline/step_02_surf_clean/subject_2_ED_LVepi.vtk",
+          "elemTag": 1
+        },
+        "RV": {
+          "before": {
+            "points": 14872,
+            "triangles": 29740,
+            "free_edges": 0,
+            "nonmanifold_edges": 0,
+            "inconsistent_orientation_edges": 0,
+            "degenerate_triangles": 0,
+            "self_intersection_pairs": 0
+          },
+          "after": {
+            "points": 14872,
+            "triangles": 29740,
+            "free_edges": 0,
+            "nonmanifold_edges": 0,
+            "inconsistent_orientation_edges": 0,
+            "degenerate_triangles": 0,
+            "self_intersection_pairs": 0
+          },
+          "path": "/home/mengao/Code/4Dsegment/data/subject_2/volmesh_pipline/step_02_surf_clean/subject_2_ED_RV.vtk",
+          "elemTag": 0
+        },
+        "RVepi": {
+          "before": {
+            "points": 18022,
+            "triangles": 36040,
+            "free_edges": 0,
+            "nonmanifold_edges": 0,
+            "inconsistent_orientation_edges": 0,
+            "degenerate_triangles": 0,
+            "self_intersection_pairs": 0
+          },
+          "after": {
+            "points": 18022,
+            "triangles": 36040,
+            "free_edges": 0,
+            "nonmanifold_edges": 0,
+            "inconsistent_orientation_edges": 0,
+            "degenerate_triangles": 0,
+            "self_intersection_pairs": 0
+          },
+          "path": "/home/mengao/Code/4Dsegment/data/subject_2/volmesh_pipline/step_02_surf_clean/subject_2_ED_RVepi.vtk",
+          "elemTag": 0
+        }
+      }
+    },
+    {
+      "subject": "subject_2",
+      "frame": "ES",
+      "completed_stage": "step08_whole_points_surf",
+      "surfaces": {
+        "LVendo": {
+          "before": {
+            "points": 5146,
+            "triangles": 10288,
+            "free_edges": 0,
+            "nonmanifold_edges": 0,
+            "inconsistent_orientation_edges": 0,
+            "degenerate_triangles": 0,
+            "self_intersection_pairs": 0
+          },
+          "after": {
+            "points": 5146,
+            "triangles": 10288,
+            "free_edges": 0,
+            "nonmanifold_edges": 0,
+            "inconsistent_orientation_edges": 0,
+            "degenerate_triangles": 0,
+            "self_intersection_pairs": 0
+          },
+          "path": "/home/mengao/Code/4Dsegment/data/subject_2/volmesh_pipline/step_02_surf_clean/subject_2_ES_LVendo.vtk",
+          "elemTag": 1
+        },
+        "LVepi": {
+          "before": {
+            "points": 11696,
+            "triangles": 23388,
+            "free_edges": 0,
+            "nonmanifold_edges": 0,
+            "inconsistent_orientation_edges": 0,
+            "degenerate_triangles": 0,
+            "self_intersection_pairs": 0
+          },
+          "after": {
+            "points": 11696,
+            "triangles": 23388,
+            "free_edges": 0,
+            "nonmanifold_edges": 0,
+            "inconsistent_orientation_edges": 0,
+            "degenerate_triangles": 0,
+            "self_intersection_pairs": 0
+          },
+          "path": "/home/mengao/Code/4Dsegment/data/subject_2/volmesh_pipline/step_02_surf_clean/subject_2_ES_LVepi.vtk",
+          "elemTag": 1
+        },
+        "RV": {
+          "before": {
+            "points": 13060,
+            "triangles": 26116,
+            "free_edges": 0,
+            "nonmanifold_edges": 0,
+            "inconsistent_orientation_edges": 0,
+            "degenerate_triangles": 0,
+            "self_intersection_pairs": 0
+          },
+          "after": {
+            "points": 13060,
+            "triangles": 26116,
+            "free_edges": 0,
+            "nonmanifold_edges": 0,
+            "inconsistent_orientation_edges": 0,
+            "degenerate_triangles": 0,
+            "self_intersection_pairs": 0
+          },
+          "path": "/home/mengao/Code/4Dsegment/data/subject_2/volmesh_pipline/step_02_surf_clean/subject_2_ES_RV.vtk",
+          "elemTag": 0
+        },
+        "RVepi": {
+          "before": {
+            "points": 15708,
+            "triangles": 31412,
+            "free_edges": 0,
+            "nonmanifold_edges": 0,
+            "inconsistent_orientation_edges": 0,
+            "degenerate_triangles": 0,
+            "self_intersection_pairs": 0
+          },
+          "after": {
+            "points": 15708,
+            "triangles": 31412,
+            "free_edges": 0,
+            "nonmanifold_edges": 0,
+            "inconsistent_orientation_edges": 0,
+            "degenerate_triangles": 0,
+            "self_intersection_pairs": 0
+          },
+          "path": "/home/mengao/Code/4Dsegment/data/subject_2/volmesh_pipline/step_02_surf_clean/subject_2_ES_RVepi.vtk",
+          "elemTag": 0
+        }
+      }
+    },
+    {
+      "subject": "subject_3",
+      "frame": "ED",
+      "completed_stage": "step08_whole_points_surf",
+      "surfaces": {
+        "LVendo": {
+          "before": {
+            "points": 10498,
+            "triangles": 20992,
+            "free_edges": 0,
+            "nonmanifold_edges": 0,
+            "inconsistent_orientation_edges": 0,
+            "degenerate_triangles": 0,
+            "self_intersection_pairs": 0
+          },
+          "after": {
+            "points": 10498,
+            "triangles": 20992,
+            "free_edges": 0,
+            "nonmanifold_edges": 0,
+            "inconsistent_orientation_edges": 0,
+            "degenerate_triangles": 0,
+            "self_intersection_pairs": 0
+          },
+          "path": "/home/mengao/Code/4Dsegment/data/subject_3/volmesh_pipline/step_02_surf_clean/subject_3_ED_LVendo.vtk",
+          "elemTag": 1
+        },
+        "LVepi": {
+          "before": {
+            "points": 16313,
+            "triangles": 32622,
+            "free_edges": 0,
+            "nonmanifold_edges": 0,
+            "inconsistent_orientation_edges": 0,
+            "degenerate_triangles": 0,
+            "self_intersection_pairs": 0
+          },
+          "after": {
+            "points": 16313,
+            "triangles": 32622,
+            "free_edges": 0,
+            "nonmanifold_edges": 0,
+            "inconsistent_orientation_edges": 0,
+            "degenerate_triangles": 0,
+            "self_intersection_pairs": 0
+          },
+          "path": "/home/mengao/Code/4Dsegment/data/subject_3/volmesh_pipline/step_02_surf_clean/subject_3_ED_LVepi.vtk",
+          "elemTag": 1
+        },
+        "RV": {
+          "before": {
+            "points": 16647,
+            "triangles": 33290,
+            "free_edges": 0,
+            "nonmanifold_edges": 0,
+            "inconsistent_orientation_edges": 0,
+            "degenerate_triangles": 0,
+            "self_intersection_pairs": 0
+          },
+          "after": {
+            "points": 16647,
+            "triangles": 33290,
+            "free_edges": 0,
+            "nonmanifold_edges": 0,
+            "inconsistent_orientation_edges": 0,
+            "degenerate_triangles": 0,
+            "self_intersection_pairs": 0
+          },
+          "path": "/home/mengao/Code/4Dsegment/data/subject_3/volmesh_pipline/step_02_surf_clean/subject_3_ED_RV.vtk",
+          "elemTag": 0
+        },
+        "RVepi": {
+          "before": {
+            "points": 19698,
+            "triangles": 39392,
+            "free_edges": 0,
+            "nonmanifold_edges": 0,
+            "inconsistent_orientation_edges": 0,
+            "degenerate_triangles": 0,
+            "self_intersection_pairs": 0
+          },
+          "after": {
+            "points": 19698,
+            "triangles": 39392,
+            "free_edges": 0,
+            "nonmanifold_edges": 0,
+            "inconsistent_orientation_edges": 0,
+            "degenerate_triangles": 0,
+            "self_intersection_pairs": 0
+          },
+          "path": "/home/mengao/Code/4Dsegment/data/subject_3/volmesh_pipline/step_02_surf_clean/subject_3_ED_RVepi.vtk",
+          "elemTag": 0
+        }
+      }
+    },
+    {
+      "subject": "subject_3",
+      "frame": "ES",
+      "completed_stage": "step08_whole_points_surf",
+      "surfaces": {
+        "LVendo": {
+          "before": {
+            "points": 5136,
+            "triangles": 10268,
+            "free_edges": 0,
+            "nonmanifold_edges": 0,
+            "inconsistent_orientation_edges": 0,
+            "degenerate_triangles": 0,
+            "self_intersection_pairs": 0
+          },
+          "after": {
+            "points": 5136,
+            "triangles": 10268,
+            "free_edges": 0,
+            "nonmanifold_edges": 0,
+            "inconsistent_orientation_edges": 0,
+            "degenerate_triangles": 0,
+            "self_intersection_pairs": 0
+          },
+          "path": "/home/mengao/Code/4Dsegment/data/subject_3/volmesh_pipline/step_02_surf_clean/subject_3_ES_LVendo.vtk",
+          "elemTag": 1
+        },
+        "LVepi": {
+          "before": {
+            "points": 12570,
+            "triangles": 25136,
+            "free_edges": 0,
+            "nonmanifold_edges": 0,
+            "inconsistent_orientation_edges": 0,
+            "degenerate_triangles": 0,
+            "self_intersection_pairs": 0
+          },
+          "after": {
+            "points": 12570,
+            "triangles": 25136,
+            "free_edges": 0,
+            "nonmanifold_edges": 0,
+            "inconsistent_orientation_edges": 0,
+            "degenerate_triangles": 0,
+            "self_intersection_pairs": 0
+          },
+          "path": "/home/mengao/Code/4Dsegment/data/subject_3/volmesh_pipline/step_02_surf_clean/subject_3_ES_LVepi.vtk",
+          "elemTag": 1
+        },
+        "RV": {
+          "before": {
+            "points": 11586,
+            "triangles": 23168,
+            "free_edges": 0,
+            "nonmanifold_edges": 0,
+            "inconsistent_orientation_edges": 0,
+            "degenerate_triangles": 0,
+            "self_intersection_pairs": 0
+          },
+          "after": {
+            "points": 11586,
+            "triangles": 23168,
+            "free_edges": 0,
+            "nonmanifold_edges": 0,
+            "inconsistent_orientation_edges": 0,
+            "degenerate_triangles": 0,
+            "self_intersection_pairs": 0
+          },
+          "path": "/home/mengao/Code/4Dsegment/data/subject_3/volmesh_pipline/step_02_surf_clean/subject_3_ES_RV.vtk",
+          "elemTag": 0
+        },
+        "RVepi": {
+          "before": {
+            "points": 14534,
+            "triangles": 29064,
+            "free_edges": 0,
+            "nonmanifold_edges": 0,
+            "inconsistent_orientation_edges": 0,
+            "degenerate_triangles": 0,
+            "self_intersection_pairs": 0
+          },
+          "after": {
+            "points": 14534,
+            "triangles": 29064,
+            "free_edges": 0,
+            "nonmanifold_edges": 0,
+            "inconsistent_orientation_edges": 0,
+            "degenerate_triangles": 0,
+            "self_intersection_pairs": 0
+          },
+          "path": "/home/mengao/Code/4Dsegment/data/subject_3/volmesh_pipline/step_02_surf_clean/subject_3_ES_RVepi.vtk",
+          "elemTag": 0
+        }
+      }
+    }
+  ]
+}
