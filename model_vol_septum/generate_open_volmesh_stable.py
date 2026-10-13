@@ -2,7 +2,8 @@
 """Build and save the open-base LV/RV surface stages.
 
 Active pipeline:
-  1. Load the four input surfaces and save copies per subject and frame.
+  1. Check the four input surfaces, fill any holes in memory, and save copies
+     per subject and frame without modifying the original vtks files.
   2. Detect the subject-level base side and save the Z-area profiles.
   3. Build and save the LV open-base epi, endo, and annulus surfaces.
   4. Build and save the initial RV open-base epi, endo, and annulus surfaces.
@@ -46,6 +47,7 @@ for extra_path in (REPO_ROOT, MESH_VOL_DIR, CODE_EXPLAIN_TMPS_DIR):
 
 import generate_subject_open_base_max_interface_smooth_boundary_custom_tag_volmesh as openbase
 from custom_vtk import write_custom_vtk
+from model_vol_septum.fill_step01_surface_holes import fill_surface, topology, validate_result
 
 
 base = openbase.base
@@ -246,6 +248,74 @@ def load_surfaces(vtk_dir: Path, frame: str) -> Dict[str, pv.PolyData]:
     if missing:
         raise FileNotFoundError("Missing required surface files: " + ", ".join(missing))
     return {name: base.load_surface(path) for name, path in paths.items()}
+
+
+def check_and_fill_loaded_surface(
+    surface: pv.PolyData, path: Path, tag: int,
+) -> Tuple[pv.PolyData, Dict[str, object]]:
+    """Keep closed inputs as loaded; cap and validate open inputs in memory."""
+    before = topology(surface)
+    result = surface
+    after = before
+    status = "already_closed_direct_load"
+    if before["free_edges"]:
+        try:
+            result = fill_surface(surface, tag, max_radius=None)
+            after = validate_result(surface, result, tag)
+        except RuntimeError as exc:
+            raise RuntimeError(f"{path}: input hole filling failed: {exc}") from exc
+        status = "filled"
+    info = {
+        "input_path": str(path.resolve()),
+        "status": status,
+        "before": before,
+        "after": after,
+        "added_triangles": int(result.n_cells - surface.n_cells),
+        "original_vertices_and_triangles_preserved": True,
+        "original_file_modified": False,
+    }
+    log_stage(
+        f"{path.name}: {status}; free edges {before['free_edges']} -> "
+        f"{after['free_edges']}; added triangles={info['added_triangles']}"
+    )
+    return result, info
+
+
+def load_checked_surfaces(
+    vtk_dir: Path, frame: str,
+) -> Tuple[Dict[str, pv.PolyData], Dict[str, Dict[str, object]]]:
+    surfaces = load_surfaces(vtk_dir, frame)
+    paths = input_paths_for_frame(vtk_dir, frame)
+    checks = {}
+    for name, surface in surfaces.items():
+        tag = 1 if name.startswith("lv_") else 0
+        surfaces[name], checks[name] = check_and_fill_loaded_surface(surface, paths[name], tag)
+    return surfaces, checks
+
+
+def detect_subject_base_side_checked(
+    vtk_dir: Path,
+    args: argparse.Namespace,
+    surfaces: Dict[str, pv.PolyData],
+    input_paths: Dict[str, Path],
+) -> Tuple[Optional[str], Dict[str, object]]:
+    """Reuse checked inputs and also check additional frames used for base detection."""
+    cache = {path.resolve(): surfaces[name] for name, path in input_paths.items()}
+    additional_checks = {}
+
+    def checked_loader(path: Path) -> pv.PolyData:
+        key = path.resolve()
+        if key not in cache:
+            tag = 1 if path.name.startswith("LV") else 0
+            cache[key], additional_checks[str(key)] = check_and_fill_loaded_surface(
+                base.load_surface(path), path, tag,
+            )
+        return cache[key]
+
+    side, info = openbase.detect_subject_base_side(vtk_dir, args, surface_loader=checked_loader)
+    info["input_hole_filling_enabled"] = True
+    info["additional_frame_input_hole_checks"] = additional_checks
+    return side, info
 
 
 def serializable_args(args: argparse.Namespace) -> Dict[str, object]:
@@ -5167,6 +5237,7 @@ def save_step1_loaded_surfaces(
     frame: str,
     surfaces: Dict[str, pv.PolyData],
     input_paths: Dict[str, Path],
+    input_hole_checks: Dict[str, Dict[str, object]],
 ) -> Tuple[Dict[str, str], Dict[str, object]]:
     items = [
         ("LVendo", "lv_endo", int(1)),
@@ -5180,9 +5251,11 @@ def save_step1_loaded_surfaces(
         path = stage_dir / f"{subject_id}_{frame}_{output_name}.vtk"
         records[output_name] = save_triangle_surface_vtk(path, surfaces[surface_name], elem_tag=tag)
         records[output_name]["input_path"] = str(input_paths[surface_name].resolve())
+        records[output_name]["input_hole_check"] = input_hole_checks[surface_name]
         paths[output_name] = str(path.resolve())
     summary = {
-        "description": "Original four input surfaces loaded for this subject and frame.",
+        "description": "Four input surfaces checked for holes and filled where needed; original vtks files are unchanged.",
+        "input_hole_filling_enabled": True,
         "subject": subject_id,
         "frame": frame,
         "output_dir": str(stage_dir.resolve()),
@@ -5886,13 +5959,18 @@ def process_frame_new_pipeline(args: argparse.Namespace, frame: str) -> Dict[str
     step7_dir = resolve_pipeline_stage_dir(subject_dir, pipeline_root, "step_07_whole_points_surf")
 
     input_paths = input_paths_for_frame(vtk_dir, frame)
-    log_stage(f"{subject_id} {frame}: Step 1 load four surfaces")
-    surfaces = load_surfaces(vtk_dir, frame)
-    step1_paths, _ = save_step1_loaded_surfaces(step1_dir, subject_id, frame, surfaces, input_paths)
+    log_stage(f"{subject_id} {frame}: check and fill input surface holes before Step 1")
+    surfaces, input_hole_checks = load_checked_surfaces(vtk_dir, frame)
+    log_stage(f"{subject_id} {frame}: Step 1 save four checked surfaces")
+    step1_paths, _ = save_step1_loaded_surfaces(
+        step1_dir, subject_id, frame, surfaces, input_paths, input_hole_checks,
+    )
 
     frame_args = openbase.namespace_with_overrides(args, {"frame": frame})
     log_stage(f"{subject_id} {frame}: Step 2 detect subject-level base side")
-    subject_base_side, subject_base_detection = openbase.detect_subject_base_side(vtk_dir, frame_args)
+    subject_base_side, subject_base_detection = detect_subject_base_side_checked(
+        vtk_dir, frame_args, surfaces, input_paths,
+    )
     lv_base_side = args.lv_base_side or subject_base_side
     rv_base_side = args.rv_base_side or subject_base_side
     subject_base_detection["applied_base_side"] = {"lv": lv_base_side, "rv": rv_base_side}

@@ -21,7 +21,7 @@ import json
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pyvista as pv
@@ -96,7 +96,11 @@ def parse_csv_values(value: str) -> List[str]:
     return [item.strip() for item in str(value).split(",") if item.strip()]
 
 
-def detect_subject_base_side(vtk_dir: Path, args: argparse.Namespace) -> Tuple[Optional[str], Dict[str, object]]:
+def detect_subject_base_side(
+    vtk_dir: Path,
+    args: argparse.Namespace,
+    surface_loader: Optional[Callable[[Path], pv.PolyData]] = None,
+) -> Tuple[Optional[str], Dict[str, object]]:
     """Choose one base side for the subject from the selected surface input folder."""
     mode = getattr(args, "subject_base_side", "auto")
     if mode == "off":
@@ -135,7 +139,7 @@ def detect_subject_base_side(vtk_dir: Path, args: argparse.Namespace) -> Tuple[O
                 })
                 continue
             profile = base.compute_area_profile(
-                base.load_surface(mesh_path),
+                (surface_loader or base.load_surface)(mesh_path),
                 samples=args.samples,
                 slab_fraction=args.slab_fraction,
                 end_band_fraction=args.end_band_fraction,

@@ -1,0 +1,6 @@
+# Geometry dependencies used by Step 05 and the active surface pipeline.
+open3d>=0.18,<0.20
+python-fcl>=0.7.0.11
+shapely>=2.0,<3
+manifold3d>=3.0
+tetgen>=0.6,<0.7

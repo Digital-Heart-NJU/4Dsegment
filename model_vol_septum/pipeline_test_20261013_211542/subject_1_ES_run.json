@@ -1,0 +1,87 @@
+{
+  "subject": "subject_1",
+  "frame": "ES",
+  "command": [
+    "/home/mengao/anaconda3/envs/morphinet/bin/python",
+    "-B",
+    "/home/mengao/Code/4Dsegment/model_vol_septum/generate_open_volmesh_stable.py",
+    "--subject-dir",
+    "/home/mengao/Code/4Dsegment/data/subject_1",
+    "--frame",
+    "ES"
+  ],
+  "exit_code": 0,
+  "elapsed_seconds": 12.65,
+  "log": "/home/mengao/Code/4Dsegment/model_vol_septum/pipeline_test_20261013_211542/subject_1_ES.log",
+  "result": {
+    "subject": "subject_1",
+    "frame": "ES",
+    "stopped_after": "step07_whole_points_surf",
+    "stage_outputs": {
+      "step_01_load_surf": {
+        "LVendo": "/home/mengao/Code/4Dsegment/data/subject_1/volmesh_pipline/step_01_load_surf/subject_1_ES_LVendo.vtk",
+        "LVepi": "/home/mengao/Code/4Dsegment/data/subject_1/volmesh_pipline/step_01_load_surf/subject_1_ES_LVepi.vtk",
+        "RV": "/home/mengao/Code/4Dsegment/data/subject_1/volmesh_pipline/step_01_load_surf/subject_1_ES_RV.vtk",
+        "RVepi": "/home/mengao/Code/4Dsegment/data/subject_1/volmesh_pipline/step_01_load_surf/subject_1_ES_RVepi.vtk",
+        "summary": "/home/mengao/Code/4Dsegment/data/subject_1/volmesh_pipline/step_01_load_surf/subject_1_ES_step01_load_surf_summary.json"
+      },
+      "step_02_base_detection": {
+        "LV_z_area_profile": "/home/mengao/Code/4Dsegment/data/subject_1/volmesh_pipline/step_02_base_detection/subject_1_ES_LV_z_area_profile.csv",
+        "RV_z_area_profile": "/home/mengao/Code/4Dsegment/data/subject_1/volmesh_pipline/step_02_base_detection/subject_1_ES_RV_z_area_profile.csv",
+        "summary": "/home/mengao/Code/4Dsegment/data/subject_1/volmesh_pipline/step_02_base_detection/subject_1_ES_step02_base_detection_summary.json"
+      },
+      "step_03_LV_openbase": {
+        "LV_openbase_epi": "/home/mengao/Code/4Dsegment/data/subject_1/volmesh_pipline/step_03_LV_openbase/subject_1_ES_LV_openbase_epi.vtk",
+        "LV_openbase_endo": "/home/mengao/Code/4Dsegment/data/subject_1/volmesh_pipline/step_03_LV_openbase/subject_1_ES_LV_openbase_endo.vtk",
+        "LV_openbase_annulus": "/home/mengao/Code/4Dsegment/data/subject_1/volmesh_pipline/step_03_LV_openbase/subject_1_ES_LV_openbase_annulus.vtk",
+        "summary": "/home/mengao/Code/4Dsegment/data/subject_1/volmesh_pipline/step_03_LV_openbase/subject_1_ES_step03_LV_openbase_summary.json"
+      },
+      "step_04_RV_openbase": {
+        "RV_openbase_epi": "/home/mengao/Code/4Dsegment/data/subject_1/volmesh_pipline/step_04_RV_openbase/subject_1_ES_RV_openbase_epi.vtk",
+        "RV_openbase_endo": "/home/mengao/Code/4Dsegment/data/subject_1/volmesh_pipline/step_04_RV_openbase/subject_1_ES_RV_openbase_endo.vtk",
+        "RV_openbase_annulus": "/home/mengao/Code/4Dsegment/data/subject_1/volmesh_pipline/step_04_RV_openbase/subject_1_ES_RV_openbase_annulus.vtk",
+        "summary": "/home/mengao/Code/4Dsegment/data/subject_1/volmesh_pipline/step_04_RV_openbase/subject_1_ES_step04_RV_openbase_summary.json"
+      },
+      "step_05_move_RVepi": {
+        "RV_openbase_epi_moved": "/home/mengao/Code/4Dsegment/data/subject_1/volmesh_pipline/step_05_move_RVepi/subject_1_ES_RV_openbase_epi_moved.vtk",
+        "summary": "/home/mengao/Code/4Dsegment/data/subject_1/volmesh_pipline/step_05_move_RVepi/subject_1_ES_step05_move_RVepi_summary.json"
+      },
+      "step_06_reconstruct_annulus": {
+        "LV_openbase_epi": "/home/mengao/Code/4Dsegment/data/subject_1/volmesh_pipline/step_06_reconstruct_annulus/subject_1_ES_LV_openbase_epi.vtk",
+        "LV_openbase_endo": "/home/mengao/Code/4Dsegment/data/subject_1/volmesh_pipline/step_06_reconstruct_annulus/subject_1_ES_LV_openbase_endo.vtk",
+        "RV_openbase_epi_moved": "/home/mengao/Code/4Dsegment/data/subject_1/volmesh_pipline/step_06_reconstruct_annulus/subject_1_ES_RV_openbase_epi_moved.vtk",
+        "RV_openbase_endo": "/home/mengao/Code/4Dsegment/data/subject_1/volmesh_pipline/step_06_reconstruct_annulus/subject_1_ES_RV_openbase_endo.vtk",
+        "LV_openbase_annulus_recon": "/home/mengao/Code/4Dsegment/data/subject_1/volmesh_pipline/step_06_reconstruct_annulus/subject_1_ES_LV_openbase_annulus_recon.vtk",
+        "RV_openbase_annulus_recon": "/home/mengao/Code/4Dsegment/data/subject_1/volmesh_pipline/step_06_reconstruct_annulus/subject_1_ES_RV_openbase_annulus_recon.vtk",
+        "summary": "/home/mengao/Code/4Dsegment/data/subject_1/volmesh_pipline/step_06_reconstruct_annulus/subject_1_ES_step06_reconstruct_annulus_summary.json",
+        "LVRV_point_cloud": "/home/mengao/Code/4Dsegment/data/subject_1/volmesh_pipline/step_06_reconstruct_annulus/subject_1_ES_LVRV.vtk",
+        "LVRV_point_cloud_summary": "/home/mengao/Code/4Dsegment/data/subject_1/volmesh_pipline/step_06_reconstruct_annulus/subject_1_ES_LVRV_point_cloud_summary.json",
+        "LVRV_surface_manifold_union": "/home/mengao/Code/4Dsegment/data/subject_1/volmesh_pipline/step_06_reconstruct_annulus/subject_1_ES_LVRV_surf.vtk",
+        "LVRV_surface_manifold_union_summary": "/home/mengao/Code/4Dsegment/data/subject_1/volmesh_pipline/step_06_reconstruct_annulus/subject_1_ES_LVRV_surface_manifold_union_summary.json"
+      },
+      "step_07_whole_points_surf": {
+        "RVendo_clean_surf": "/home/mengao/Code/4Dsegment/data/subject_1/volmesh_pipline/step_07_whole_points_surf/subject_1_ES_RVendo_clean_surf.vtk",
+        "RVepi_clean_surf": "/home/mengao/Code/4Dsegment/data/subject_1/volmesh_pipline/step_07_whole_points_surf/subject_1_ES_RVepi_clean_surf.vtk",
+        "LVRV_surf": "/home/mengao/Code/4Dsegment/data/subject_1/volmesh_pipline/step_07_whole_points_surf/subject_1_ES_LVRV_surf.vtk",
+        "summary": "/home/mengao/Code/4Dsegment/data/subject_1/volmesh_pipline/step_07_whole_points_surf/subject_1_ES_step07_whole_points_surf_summary.json"
+      }
+    },
+    "active_pipeline": [
+      "load_four_surfaces",
+      "subject_level_base_side_detection",
+      "build_LV_openbase_shell",
+      "build_initial_RV_openbase_shell",
+      "move_RVepi_to_minimum_3mm_from_fixed_RVendo_with_adaptive_opening_ring",
+      "directly_reconstruct_LV_and_RV_openbase_annuli",
+      "merge_six_step06_surfaces_to_raw_point_only_LVRV_cloud",
+      "reconstruct_LVRV_surface_with_manifold3d_boolean_union",
+      "remove_RV_points_intersecting_LVepi_and_save_point_only_LVRV_cloud"
+    ],
+    "disabled_downstream_stages": [
+      "intersection_removal",
+      "surface_merge",
+      "TetGen",
+      "volume_tagging"
+    ]
+  }
+}

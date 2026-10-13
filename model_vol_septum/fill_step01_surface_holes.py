@@ -21,9 +21,6 @@ import numpy as np
 import pyvista as pv
 import vtk
 
-from generate_open_volmesh_stable import write_custom_surface_vtk
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--subject-dir", type=Path, default=Path("data/subject_3"))
@@ -111,6 +108,8 @@ def fill_surface(source: pv.PolyData, tag: int, max_radius: float | None) -> pv.
 
 
 def main() -> None:
+    from generate_open_volmesh_stable import write_custom_surface_vtk
+
     args = parse_args()
     subject_id = args.subject_dir.resolve().name
     surface_dir = args.surface_dir or args.subject_dir / "volmesh_pipline" / "step_01_load_surf"

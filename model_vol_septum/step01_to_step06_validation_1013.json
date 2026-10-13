@@ -1,0 +1,282 @@
+{
+  "date": "2026-10-13",
+  "pipeline": "model_vol_septum/generate_open_volmesh_stable.py",
+  "command_template": "conda run -n morphinet python model_vol_septum/generate_open_volmesh_stable.py --subject-dir data/<subject> --frame <ED_or_ES> --stop-after-step6",
+  "scope": "Steps 1 through 6, including automatic hole filling and Manifold3D whole-surface union",
+  "all_six_runs_completed": true,
+  "stop_after": "step06_reconstruct_annulus",
+  "unit_tests_passed": 4,
+  "original_vtks_unchanged": true,
+  "step7_outputs_unchanged": true,
+  "results": [
+    {
+      "subject": "subject_1",
+      "frame": "ED",
+      "base_side": "high_z",
+      "surface_path": "/home/mengao/Code/4Dsegment/data/subject_1/volmesh_pipline/step_06_reconstruct_annulus/subject_1_ED_LVRV_surf.vtk",
+      "surface": {
+        "points": 38141,
+        "triangles": 76278,
+        "free_edges": 0,
+        "nonmanifold_edges": 0,
+        "inconsistent_orientation_edges": 0,
+        "degenerate_triangles": 0
+      },
+      "manifold": true,
+      "tag_counts": {
+        "0": 45560,
+        "1": 30718
+      },
+      "boolean_status": "Error.NoError",
+      "input_holes": {
+        "LVendo": {
+          "before_free_edges": 0,
+          "after_free_edges": 0,
+          "added_triangles": 0
+        },
+        "LVepi": {
+          "before_free_edges": 0,
+          "after_free_edges": 0,
+          "added_triangles": 0
+        },
+        "RV": {
+          "before_free_edges": 0,
+          "after_free_edges": 0,
+          "added_triangles": 0
+        },
+        "RVepi": {
+          "before_free_edges": 0,
+          "after_free_edges": 0,
+          "added_triangles": 0
+        }
+      },
+      "exit_code": 0,
+      "quality_status": "passed_topology_and_degeneracy_checks"
+    },
+    {
+      "subject": "subject_1",
+      "frame": "ES",
+      "base_side": "high_z",
+      "surface_path": "/home/mengao/Code/4Dsegment/data/subject_1/volmesh_pipline/step_06_reconstruct_annulus/subject_1_ES_LVRV_surf.vtk",
+      "surface": {
+        "points": 32508,
+        "triangles": 65012,
+        "free_edges": 0,
+        "nonmanifold_edges": 0,
+        "inconsistent_orientation_edges": 0,
+        "degenerate_triangles": 0
+      },
+      "manifold": true,
+      "tag_counts": {
+        "0": 41690,
+        "1": 23322
+      },
+      "boolean_status": "Error.NoError",
+      "input_holes": {
+        "LVendo": {
+          "before_free_edges": 0,
+          "after_free_edges": 0,
+          "added_triangles": 0
+        },
+        "LVepi": {
+          "before_free_edges": 0,
+          "after_free_edges": 0,
+          "added_triangles": 0
+        },
+        "RV": {
+          "before_free_edges": 0,
+          "after_free_edges": 0,
+          "added_triangles": 0
+        },
+        "RVepi": {
+          "before_free_edges": 0,
+          "after_free_edges": 0,
+          "added_triangles": 0
+        }
+      },
+      "exit_code": 0,
+      "quality_status": "passed_topology_and_degeneracy_checks"
+    },
+    {
+      "subject": "subject_2",
+      "frame": "ED",
+      "base_side": "high_z",
+      "surface_path": "/home/mengao/Code/4Dsegment/data/subject_2/volmesh_pipline/step_06_reconstruct_annulus/subject_2_ED_LVRV_surf.vtk",
+      "surface": {
+        "points": 39879,
+        "triangles": 79754,
+        "free_edges": 0,
+        "nonmanifold_edges": 0,
+        "inconsistent_orientation_edges": 0,
+        "degenerate_triangles": 0
+      },
+      "manifold": true,
+      "tag_counts": {
+        "0": 46835,
+        "1": 32919
+      },
+      "boolean_status": "Error.NoError",
+      "input_holes": {
+        "LVendo": {
+          "before_free_edges": 0,
+          "after_free_edges": 0,
+          "added_triangles": 0
+        },
+        "LVepi": {
+          "before_free_edges": 0,
+          "after_free_edges": 0,
+          "added_triangles": 0
+        },
+        "RV": {
+          "before_free_edges": 0,
+          "after_free_edges": 0,
+          "added_triangles": 0
+        },
+        "RVepi": {
+          "before_free_edges": 0,
+          "after_free_edges": 0,
+          "added_triangles": 0
+        }
+      },
+      "exit_code": 0,
+      "quality_status": "passed_topology_and_degeneracy_checks"
+    },
+    {
+      "subject": "subject_2",
+      "frame": "ES",
+      "base_side": "high_z",
+      "surface_path": "/home/mengao/Code/4Dsegment/data/subject_2/volmesh_pipline/step_06_reconstruct_annulus/subject_2_ES_LVRV_surf.vtk",
+      "surface": {
+        "points": 34982,
+        "triangles": 69960,
+        "free_edges": 0,
+        "nonmanifold_edges": 0,
+        "inconsistent_orientation_edges": 0,
+        "degenerate_triangles": 0
+      },
+      "manifold": true,
+      "tag_counts": {
+        "0": 40731,
+        "1": 29229
+      },
+      "boolean_status": "Error.NoError",
+      "input_holes": {
+        "LVendo": {
+          "before_free_edges": 0,
+          "after_free_edges": 0,
+          "added_triangles": 0
+        },
+        "LVepi": {
+          "before_free_edges": 0,
+          "after_free_edges": 0,
+          "added_triangles": 0
+        },
+        "RV": {
+          "before_free_edges": 0,
+          "after_free_edges": 0,
+          "added_triangles": 0
+        },
+        "RVepi": {
+          "before_free_edges": 0,
+          "after_free_edges": 0,
+          "added_triangles": 0
+        }
+      },
+      "exit_code": 0,
+      "quality_status": "passed_topology_and_degeneracy_checks"
+    },
+    {
+      "subject": "subject_3",
+      "frame": "ED",
+      "base_side": "high_z",
+      "surface_path": "/home/mengao/Code/4Dsegment/data/subject_3/volmesh_pipline/step_06_reconstruct_annulus/subject_3_ED_LVRV_surf.vtk",
+      "surface": {
+        "points": 46360,
+        "triangles": 92720,
+        "free_edges": 0,
+        "nonmanifold_edges": 0,
+        "inconsistent_orientation_edges": 0,
+        "degenerate_triangles": 2
+      },
+      "manifold": true,
+      "tag_counts": {
+        "0": 47796,
+        "1": 44924
+      },
+      "boolean_status": "Error.NoError",
+      "input_holes": {
+        "LVendo": {
+          "before_free_edges": 0,
+          "after_free_edges": 0,
+          "added_triangles": 0
+        },
+        "LVepi": {
+          "before_free_edges": 52,
+          "after_free_edges": 0,
+          "added_triangles": 50
+        },
+        "RV": {
+          "before_free_edges": 36,
+          "after_free_edges": 0,
+          "added_triangles": 34
+        },
+        "RVepi": {
+          "before_free_edges": 76,
+          "after_free_edges": 0,
+          "added_triangles": 74
+        }
+      },
+      "exit_code": 0,
+      "quality_status": "closed_manifold_with_degenerate_triangle_warning"
+    },
+    {
+      "subject": "subject_3",
+      "frame": "ES",
+      "base_side": "high_z",
+      "surface_path": "/home/mengao/Code/4Dsegment/data/subject_3/volmesh_pipline/step_06_reconstruct_annulus/subject_3_ES_LVRV_surf.vtk",
+      "surface": {
+        "points": 33941,
+        "triangles": 67874,
+        "free_edges": 0,
+        "nonmanifold_edges": 0,
+        "inconsistent_orientation_edges": 0,
+        "degenerate_triangles": 2
+      },
+      "manifold": true,
+      "tag_counts": {
+        "0": 36690,
+        "1": 31184
+      },
+      "boolean_status": "Error.NoError",
+      "input_holes": {
+        "LVendo": {
+          "before_free_edges": 0,
+          "after_free_edges": 0,
+          "added_triangles": 0
+        },
+        "LVepi": {
+          "before_free_edges": 0,
+          "after_free_edges": 0,
+          "added_triangles": 0
+        },
+        "RV": {
+          "before_free_edges": 0,
+          "after_free_edges": 0,
+          "added_triangles": 0
+        },
+        "RVepi": {
+          "before_free_edges": 0,
+          "after_free_edges": 0,
+          "added_triangles": 0
+        }
+      },
+      "exit_code": 0,
+      "quality_status": "closed_manifold_with_degenerate_triangle_warning"
+    }
+  ],
+  "warnings": [
+    "subject_3 ED contains 2 zero-area triangles in the saved Step 6 union surface.",
+    "subject_3 ES contains 2 zero-area triangles in the saved Step 6 union surface."
+  ]
+}
+
