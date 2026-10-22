@@ -1,0 +1,140 @@
+[
+  {
+    "subject": 1,
+    "phase": "ED",
+    "status": "passed",
+    "paths": {
+      "volmesh": "/home/mengao/Code/4Dsegment/data/subject_1/volmesh_pipline_signed_clearance/step_10_final_mesh/subject_1_ED_volmesh.vtk",
+      "summary": "/home/mengao/Code/4Dsegment/data/subject_1/volmesh_pipline_signed_clearance/step_10_final_mesh/subject_1_ED_step10_final_mesh_summary.json"
+    },
+    "regions": {
+      "LV": {
+        "tetrahedra": 185359,
+        "volume_mm3": 99783.61908111839,
+        "component_count": 1
+      },
+      "RV": {
+        "tetrahedra": 180078,
+        "volume_mm3": 55311.75218418141,
+        "component_count": 91
+      }
+    },
+    "geometry_preserved": true,
+    "ambiguous_cells": 19055
+  },
+  {
+    "subject": 1,
+    "phase": "ES",
+    "status": "passed",
+    "paths": {
+      "volmesh": "/home/mengao/Code/4Dsegment/data/subject_1/volmesh_pipline_signed_clearance/step_10_final_mesh/subject_1_ES_volmesh.vtk",
+      "summary": "/home/mengao/Code/4Dsegment/data/subject_1/volmesh_pipline_signed_clearance/step_10_final_mesh/subject_1_ES_step10_final_mesh_summary.json"
+    },
+    "regions": {
+      "LV": {
+        "tetrahedra": 155628,
+        "volume_mm3": 102518.7490439902,
+        "component_count": 2
+      },
+      "RV": {
+        "tetrahedra": 176573,
+        "volume_mm3": 56525.61463426168,
+        "component_count": 74
+      }
+    },
+    "geometry_preserved": true,
+    "ambiguous_cells": 16877
+  },
+  {
+    "subject": 2,
+    "phase": "ED",
+    "status": "passed",
+    "paths": {
+      "volmesh": "/home/mengao/Code/4Dsegment/data/subject_2/volmesh_pipline_signed_clearance/step_10_final_mesh/subject_2_ED_volmesh.vtk",
+      "summary": "/home/mengao/Code/4Dsegment/data/subject_2/volmesh_pipline_signed_clearance/step_10_final_mesh/subject_2_ED_step10_final_mesh_summary.json"
+    },
+    "regions": {
+      "LV": {
+        "tetrahedra": 197303,
+        "volume_mm3": 104117.06422426064,
+        "component_count": 3
+      },
+      "RV": {
+        "tetrahedra": 201181,
+        "volume_mm3": 64460.63775604862,
+        "component_count": 90
+      }
+    },
+    "geometry_preserved": true,
+    "ambiguous_cells": 20423
+  },
+  {
+    "subject": 2,
+    "phase": "ES",
+    "status": "passed",
+    "paths": {
+      "volmesh": "/home/mengao/Code/4Dsegment/data/subject_2/volmesh_pipline_signed_clearance/step_10_final_mesh/subject_2_ES_volmesh.vtk",
+      "summary": "/home/mengao/Code/4Dsegment/data/subject_2/volmesh_pipline_signed_clearance/step_10_final_mesh/subject_2_ES_step10_final_mesh_summary.json"
+    },
+    "regions": {
+      "LV": {
+        "tetrahedra": 190705,
+        "volume_mm3": 125531.27237432066,
+        "component_count": 3
+      },
+      "RV": {
+        "tetrahedra": 172810,
+        "volume_mm3": 53679.57283695675,
+        "component_count": 99
+      }
+    },
+    "geometry_preserved": true,
+    "ambiguous_cells": 19926
+  },
+  {
+    "subject": 3,
+    "phase": "ED",
+    "status": "passed",
+    "paths": {
+      "volmesh": "/home/mengao/Code/4Dsegment/data/subject_3/volmesh_pipline_signed_clearance/step_10_final_mesh/subject_3_ED_volmesh.vtk",
+      "summary": "/home/mengao/Code/4Dsegment/data/subject_3/volmesh_pipline_signed_clearance/step_10_final_mesh/subject_3_ED_step10_final_mesh_summary.json"
+    },
+    "regions": {
+      "LV": {
+        "tetrahedra": 259043,
+        "volume_mm3": 153621.68744602037,
+        "component_count": 5
+      },
+      "RV": {
+        "tetrahedra": 201776,
+        "volume_mm3": 61461.174295936304,
+        "component_count": 111
+      }
+    },
+    "geometry_preserved": true,
+    "ambiguous_cells": 26361
+  },
+  {
+    "subject": 3,
+    "phase": "ES",
+    "status": "passed",
+    "paths": {
+      "volmesh": "/home/mengao/Code/4Dsegment/data/subject_3/volmesh_pipline_signed_clearance/step_10_final_mesh/subject_3_ES_volmesh.vtk",
+      "summary": "/home/mengao/Code/4Dsegment/data/subject_3/volmesh_pipline_signed_clearance/step_10_final_mesh/subject_3_ES_step10_final_mesh_summary.json"
+    },
+    "regions": {
+      "LV": {
+        "tetrahedra": 203926,
+        "volume_mm3": 168524.31065730294,
+        "component_count": 1
+      },
+      "RV": {
+        "tetrahedra": 160128,
+        "volume_mm3": 52130.233966037194,
+        "component_count": 76
+      }
+    },
+    "geometry_preserved": true,
+    "ambiguous_cells": 21614
+  }
+]

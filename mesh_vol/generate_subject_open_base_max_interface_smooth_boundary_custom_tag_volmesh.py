@@ -748,6 +748,30 @@ def smooth_open_surface_boundary(
             current = next_ring
 
     points[loop_ids] = smoothed_loop
+    # A smoothed rim can fold across the very small triangles produced by
+    # clipping. Backtrack the entire connected displacement, not just the rim.
+    from model_vol_septum.mesh_intersections import confirmed_self_intersections
+    original = np.asarray(mesh.points, dtype=float)
+    faces = base.triangle_faces(mesh)
+    if len(confirmed_self_intersections(original, faces)):
+        raise RuntimeError("Clipped surface already self-intersects before boundary smoothing.")
+    delta = points - original
+    xyz = original[faces]
+    cross = np.cross(xyz[:, 1] - xyz[:, 0], xyz[:, 2] - xyz[:, 0])
+    accepted_scale = 0.0
+    for half in range(17):
+        scale = 0.5 ** half
+        candidate = original + scale * delta
+        xyz = candidate[faces]
+        candidate_cross = np.cross(xyz[:, 1] - xyz[:, 0], xyz[:, 2] - xyz[:, 0])
+        if np.any(np.einsum("ij,ij->i", cross, candidate_cross) <= 0):
+            continue
+        if not len(confirmed_self_intersections(candidate, faces)):
+            accepted_scale = scale
+            break
+    points = original + accepted_scale * delta
+    smoothed_loop = points[loop_ids]
+    displacement = smoothed_loop - exact_loop
     smoothed_mesh = mesh.copy(deep=True)
     smoothed_mesh.points = points
     smoothed_mesh = smoothed_mesh.extract_surface().triangulate().clean(tolerance=1e-7)
@@ -765,6 +789,7 @@ def smooth_open_surface_boundary(
         "blend_relaxation": float(blend_relaxation),
         "iterations": int(iterations),
         "relaxation": float(relaxation),
+        "intersection_safe_displacement_scale": accepted_scale,
     }
     return smoothed_mesh, base.make_polyline(smoothed_loop), info
 

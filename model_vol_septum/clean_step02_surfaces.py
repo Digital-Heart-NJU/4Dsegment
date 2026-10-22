@@ -1,4 +1,4 @@
-"""MeshFix repair and validation of the closed surfaces saved by Step 01."""
+"""MeshFix repair and validation shared by pipeline Steps 02 and 08."""
 
 from __future__ import annotations
 
@@ -29,11 +29,11 @@ def validate_clean_surface(surface: pv.PolyData) -> dict:
         "inconsistent_orientation_edges", "self_intersection_pairs",
     ) if stats[key]}
     if failures:
-        raise RuntimeError(f"Step 02 MeshFix validation failed: {failures}")
+        raise RuntimeError(f"MeshFix surface validation failed: {failures}")
     return stats
 
 
-def clean_surface_meshfix(surface: pv.PolyData, tag: int) -> tuple[pv.PolyData, dict]:
+def clean_surface_meshfix(surface: pv.PolyData, tag: int | None) -> tuple[pv.PolyData, dict]:
     """Repair a copy; MeshFix may change point locations and connectivity."""
     source = surface.extract_surface().triangulate()
     before = surface_quality(source)
@@ -49,7 +49,12 @@ def clean_surface_meshfix(surface: pv.PolyData, tag: int) -> tuple[pv.PolyData, 
         point_normals=True, cell_normals=True, consistent_normals=True,
         auto_orient_normals=True, split_vertices=False,
     )
-    repaired.cell_data["elemTag"] = np.full(repaired.n_cells, tag, dtype=np.int32)
+    # A merged LV/RV surface has no single chamber tag. MeshFix may change
+    # connectivity, so its original per-face labels cannot be reused directly.
+    if tag is None:
+        repaired.clear_data()
+    else:
+        repaired.cell_data["elemTag"] = np.full(repaired.n_cells, tag, dtype=np.int32)
     after = validate_clean_surface(repaired)
     return repaired, {
         "method": "pymeshfix.MeshFix.repair",
@@ -58,6 +63,6 @@ def clean_surface_meshfix(surface: pv.PolyData, tag: int) -> tuple[pv.PolyData, 
         "additional_intersection_cleanup": extra_cleanup,
         "intersection_validation": "Open3D_candidates_confirmed_by_FCL_double_precision_triangle_distance",
         "before": before, "after": after,
-        "elemTag": int(tag),
+        "elemTag": int(tag) if tag is not None else None,
         "input_file_modified": False,
     }

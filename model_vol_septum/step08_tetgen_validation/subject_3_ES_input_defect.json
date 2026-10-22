@@ -1,0 +1,22 @@
+{
+  "input_path": "/home/mengao/Code/4Dsegment/data/subject_3/volmesh_pipline_signed_clearance/step_07_reconstruct_annulus/subject_3_ES_LVRV_surf.vtk",
+  "self_intersection_pairs": [
+    [
+      47038,
+      47089
+    ],
+    [
+      47039,
+      47089
+    ],
+    [
+      47089,
+      47097
+    ],
+    [
+      65599,
+      65602
+    ]
+  ],
+  "diagnostic_vtk": "/home/mengao/Code/4Dsegment/model_vol_septum/step08_tetgen_validation/subject_3_ES_intersecting_triangles.vtk"
+}

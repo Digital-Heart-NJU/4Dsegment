@@ -1,0 +1,76 @@
+{
+  "runs": [
+    {
+      "subject": 1,
+      "returncode": 0,
+      "command": [
+        "/home/mengao/anaconda3/envs/morphinet/bin/python",
+        "-B",
+        "model_vol_septum/generate_open_volmesh_stable.py",
+        "--subject-dir",
+        "data/subject_1",
+        "--frames",
+        "ED,ES",
+        "--pipeline-output-root",
+        "data/subject_1/volmesh_pipline_signed_clearance"
+      ]
+    },
+    {
+      "subject": 2,
+      "returncode": 0,
+      "command": [
+        "/home/mengao/anaconda3/envs/morphinet/bin/python",
+        "-B",
+        "model_vol_septum/generate_open_volmesh_stable.py",
+        "--subject-dir",
+        "data/subject_2",
+        "--frames",
+        "ED,ES",
+        "--pipeline-output-root",
+        "data/subject_2/volmesh_pipline_signed_clearance"
+      ]
+    },
+    {
+      "subject": 3,
+      "returncode": 0,
+      "command": [
+        "/home/mengao/anaconda3/envs/morphinet/bin/python",
+        "-B",
+        "model_vol_septum/generate_open_volmesh_stable.py",
+        "--subject-dir",
+        "data/subject_3",
+        "--frames",
+        "ED,ES",
+        "--pipeline-output-root",
+        "data/subject_3/volmesh_pipline_signed_clearance"
+      ]
+    }
+  ],
+  "original_24_vtks_unchanged": true,
+  "source_sha256": {
+    "data/subject_1/vtks/LVendo_ED.vtk": "ef5b0a19b17340b4105b3178c69a0bd84ae4dfe62e80a18d92580e64c74773e3",
+    "data/subject_1/vtks/LVepi_ED.vtk": "99243cba67694d9498a0bd42fb066fbf624a5408bc4fc9e86c73fbff4989ac6a",
+    "data/subject_1/vtks/RV_ED.vtk": "51be6b749d5d393d997eb3334aad985d81ba9473f65d8eb0cb61049c4ae9dbaa",
+    "data/subject_1/vtks/RVepi_ED.vtk": "447cf25b3ddeb617d5eb8945d173713c1eccc7091df1388d6d22f3192fbc798b",
+    "data/subject_1/vtks/LVendo_ES.vtk": "ff1f2a5a779c4efd8647a4fa85f675b539002f318c6592df77db49734cd0a365",
+    "data/subject_1/vtks/LVepi_ES.vtk": "d3eafe80131ef563d3a78a86f8f455b9be536aadfd8a16438512253377bdc593",
+    "data/subject_1/vtks/RV_ES.vtk": "7137d3d82191455dc59ed2fe7fc6af52d4fea28429244e7f41cc219949e2a06a",
+    "data/subject_1/vtks/RVepi_ES.vtk": "dc989eff924e5b5aab9aa8552e537ce6d12dcda780c2042acc5b4934e547f1c0",
+    "data/subject_2/vtks/LVendo_ED.vtk": "f83017c1dc4a674742b01ba77c3ca002685e0ac3077651919922b81df3bcfe20",
+    "data/subject_2/vtks/LVepi_ED.vtk": "c9f00ade9bcb6c6b943042183c54785c1958083f8669497f7e8c5fc877d6ba27",
+    "data/subject_2/vtks/RV_ED.vtk": "96d31997589bdaed9d891c18e087fd5588e17de1df3b9b4451e23b019fb25e22",
+    "data/subject_2/vtks/RVepi_ED.vtk": "6d5c1109fc29f08397eb42c2c986ff32734c10c512ce3a9eed658a00f13dc312",
+    "data/subject_2/vtks/LVendo_ES.vtk": "2f0f565bfc448e9bf95da898cde196ad81bec0c7e87893450fe218c25e38bb00",
+    "data/subject_2/vtks/LVepi_ES.vtk": "73c6f3e94c7bcc8f2c4fb08f8acf23513ec342c56b242b524220ab158dbd0278",
+    "data/subject_2/vtks/RV_ES.vtk": "55f80ed248cfeb294cdbae20f80883b4fc7e1081bbb89ffa6446361311178a5b",
+    "data/subject_2/vtks/RVepi_ES.vtk": "02d9e515b6135cd5d81f9949fc8343a73cd00eb52a21a7d42fa51b2e198a72ca",
+    "data/subject_3/vtks/LVendo_ED.vtk": "63d2dbb70d58dbd940028491d2d3911ecd70599fa021e4388bd69916d9f0a2c4",
+    "data/subject_3/vtks/LVepi_ED.vtk": "ff82d8e8eac4f2b8f62e8dc24ba791991660ee2443a32c3a8cb29c3566c310bc",
+    "data/subject_3/vtks/RV_ED.vtk": "ca6a3239d8c02c0fa861796d3851a8cc1a29e3e7b7872ce76d93000d64176b02",
+    "data/subject_3/vtks/RVepi_ED.vtk": "a189e0c7fb54560bced92617468062ac507dc32955e3a2468f0324ac83b36558",
+    "data/subject_3/vtks/LVendo_ES.vtk": "1ba433934dcf96d3745e3707912ee36e210ca5500a96ce9a5a2057cc18f046d4",
+    "data/subject_3/vtks/LVepi_ES.vtk": "868fda658d728ac244a7fe4e76e82a62c863916d135aa2d3a921723d7394f6c0",
+    "data/subject_3/vtks/RV_ES.vtk": "fa9c81f003bccc5c717246013952c0f694085be3710151190d2f2e41c130b408",
+    "data/subject_3/vtks/RVepi_ES.vtk": "d40d7a227064098f09181818d3b9632bbc57f21ed8d43145aaf30f8297d8931d"
+  }
+}

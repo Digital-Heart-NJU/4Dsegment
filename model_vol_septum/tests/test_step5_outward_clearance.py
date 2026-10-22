@@ -11,7 +11,7 @@ import pyvista as pv
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from rvepi_outward_clearance import FixedEndo, _edges, face_clearance, move_rvepi, triangles
+from rvepi_outward_clearance import FixedEndo, _edges, face_clearance, move_rvepi, triangles, validate_rvepi
 import generate_open_volmesh_stable as pipeline
 
 
@@ -40,6 +40,52 @@ def ring_indices(mesh):
 
 
 class Step5OutwardTests(unittest.TestCase):
+    def test_signed_pipeline_repairs_deep_inside_and_roundtrips_diagnostics(self):
+        epi, endo = open_cube(4), open_cube(10)
+        reference = pv.Cube(bounds=(-10, 10, -10, 10, -10, 10)).triangulate()
+        original_endo = endo.points.copy()
+        original_faces = endo.faces.copy()
+        # Every point is inside despite an unsigned surface distance > 3 mm.
+        fixed = FixedEndo(endo, closed_reference=reference)
+        self.assertTrue(np.all(fixed.values(epi.points) < -3))
+        with self.assertRaisesRegex(RuntimeError, "inside"):
+            validate_rvepi(epi, endo, closed_reference=reference)
+        with patch.object(sys, "argv", ["pipeline"]):
+            args = pipeline.parse_args()
+        self.assertEqual(args.step6_clearance_method, "signed")
+        loop = pipeline.base.make_polyline(epi.points[ring_indices(epi)])
+        moved, mask, opening, band, final_loop, info = pipeline.enforce_rvepi_distance_adaptive_opening_ring(
+            epi, endo, loop, args, closed_endo_reference=reference)
+        np.testing.assert_array_equal(endo.points, original_endo)
+        np.testing.assert_array_equal(endo.faces, original_faces)
+        np.testing.assert_array_equal(moved.faces, epi.faces)
+        self.assertEqual(final_loop.n_points, loop.n_points)
+        self.assertEqual(info["initial_vertices_inside_RVendo"], epi.n_points)
+        self.assertEqual(info["final_vertices_inside_RVendo"], 0)
+        with tempfile.TemporaryDirectory() as directory:
+            paths, summary = pipeline.save_step6_moved_rvepi(
+                Path(directory), "test", "ED", moved, endo, mask, opening, band, info, args,
+                closed_endo_reference=reference)
+            saved = pv.read(paths["RV_openbase_epi_moved"])
+            np.testing.assert_array_equal(saved.points, moved.points)
+            np.testing.assert_allclose(saved["step6Displacement"], saved.points - epi.points, atol=1e-7)
+            self.assertTrue(np.all(saved["initialInsideRVendo"] == 1))
+            self.assertTrue(np.all(saved["insideRVendo"] == 0))
+            self.assertTrue(np.all(saved["belowRequested3mm"] == 0))
+            self.assertGreaterEqual(summary["surface"]["saved_surface_validation"]["minimum_certified_surface_distance_mm"], 3.)
+
+    def test_signed_method_leaves_already_clear_geometry_unchanged(self):
+        epi, endo = open_cube(9), open_cube(5)
+        reference = pv.Cube(bounds=(-5, 5, -5, 5, -5, 5)).triangulate()
+        with patch.object(sys, "argv", ["pipeline"]):
+            args = pipeline.parse_args()
+        loop = pipeline.base.make_polyline(epi.points[ring_indices(epi)])
+        moved, mask, _, _, _, info = pipeline.enforce_rvepi_distance_adaptive_opening_ring(
+            epi, endo, loop, args, closed_endo_reference=reference)
+        np.testing.assert_array_equal(moved.points, epi.points)
+        self.assertFalse(np.any(mask))
+        self.assertEqual(info["iterations"], 0)
+
     def test_signed_distance_uses_triangles_and_detects_inside(self):
         fixed = FixedEndo(open_cube(5))
         distance = fixed.values(np.array([[0., 0., -8.], [0., 0., 0.]]))

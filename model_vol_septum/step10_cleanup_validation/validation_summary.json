@@ -1,0 +1,140 @@
+[
+  {
+    "subject": "subject_1",
+    "phase": "ED",
+    "status": "passed",
+    "paths": {
+      "volmesh": "/home/mengao/Code/4Dsegment/data/subject_1/volmesh_pipline_signed_clearance/step_10_final_mesh/subject_1_ED_volmesh.vtk",
+      "before_tag_cleanup": "/home/mengao/Code/4Dsegment/data/subject_1/volmesh_pipline_signed_clearance/step_10_final_mesh/subject_1_ED_volmesh_before_tag_cleanup.vtk",
+      "summary": "/home/mengao/Code/4Dsegment/data/subject_1/volmesh_pipline_signed_clearance/step_10_final_mesh/subject_1_ED_step10_final_mesh_summary.json"
+    },
+    "changed_cells": 151,
+    "components_before": {
+      "LV": 1,
+      "RV": 91
+    },
+    "components_after": {
+      "LV": 1,
+      "RV": 1
+    },
+    "unresolved_components": [],
+    "geometry_connectivity_order_preserved": true,
+    "inputs_unchanged": true,
+    "tag_changed_flags_verified": true
+  },
+  {
+    "subject": "subject_1",
+    "phase": "ES",
+    "status": "passed",
+    "paths": {
+      "volmesh": "/home/mengao/Code/4Dsegment/data/subject_1/volmesh_pipline_signed_clearance/step_10_final_mesh/subject_1_ES_volmesh.vtk",
+      "before_tag_cleanup": "/home/mengao/Code/4Dsegment/data/subject_1/volmesh_pipline_signed_clearance/step_10_final_mesh/subject_1_ES_volmesh_before_tag_cleanup.vtk",
+      "summary": "/home/mengao/Code/4Dsegment/data/subject_1/volmesh_pipline_signed_clearance/step_10_final_mesh/subject_1_ES_step10_final_mesh_summary.json"
+    },
+    "changed_cells": 124,
+    "components_before": {
+      "LV": 2,
+      "RV": 74
+    },
+    "components_after": {
+      "LV": 1,
+      "RV": 1
+    },
+    "unresolved_components": [],
+    "geometry_connectivity_order_preserved": true,
+    "inputs_unchanged": true,
+    "tag_changed_flags_verified": true
+  },
+  {
+    "subject": "subject_2",
+    "phase": "ED",
+    "status": "passed",
+    "paths": {
+      "volmesh": "/home/mengao/Code/4Dsegment/data/subject_2/volmesh_pipline_signed_clearance/step_10_final_mesh/subject_2_ED_volmesh.vtk",
+      "before_tag_cleanup": "/home/mengao/Code/4Dsegment/data/subject_2/volmesh_pipline_signed_clearance/step_10_final_mesh/subject_2_ED_volmesh_before_tag_cleanup.vtk",
+      "summary": "/home/mengao/Code/4Dsegment/data/subject_2/volmesh_pipline_signed_clearance/step_10_final_mesh/subject_2_ED_step10_final_mesh_summary.json"
+    },
+    "changed_cells": 171,
+    "components_before": {
+      "LV": 3,
+      "RV": 90
+    },
+    "components_after": {
+      "LV": 1,
+      "RV": 1
+    },
+    "unresolved_components": [],
+    "geometry_connectivity_order_preserved": true,
+    "inputs_unchanged": true,
+    "tag_changed_flags_verified": true
+  },
+  {
+    "subject": "subject_2",
+    "phase": "ES",
+    "status": "passed",
+    "paths": {
+      "volmesh": "/home/mengao/Code/4Dsegment/data/subject_2/volmesh_pipline_signed_clearance/step_10_final_mesh/subject_2_ES_volmesh.vtk",
+      "before_tag_cleanup": "/home/mengao/Code/4Dsegment/data/subject_2/volmesh_pipline_signed_clearance/step_10_final_mesh/subject_2_ES_volmesh_before_tag_cleanup.vtk",
+      "summary": "/home/mengao/Code/4Dsegment/data/subject_2/volmesh_pipline_signed_clearance/step_10_final_mesh/subject_2_ES_step10_final_mesh_summary.json"
+    },
+    "changed_cells": 213,
+    "components_before": {
+      "LV": 3,
+      "RV": 99
+    },
+    "components_after": {
+      "LV": 1,
+      "RV": 1
+    },
+    "unresolved_components": [],
+    "geometry_connectivity_order_preserved": true,
+    "inputs_unchanged": true,
+    "tag_changed_flags_verified": true
+  },
+  {
+    "subject": "subject_3",
+    "phase": "ED",
+    "status": "passed",
+    "paths": {
+      "volmesh": "/home/mengao/Code/4Dsegment/data/subject_3/volmesh_pipline_signed_clearance/step_10_final_mesh/subject_3_ED_volmesh.vtk",
+      "before_tag_cleanup": "/home/mengao/Code/4Dsegment/data/subject_3/volmesh_pipline_signed_clearance/step_10_final_mesh/subject_3_ED_volmesh_before_tag_cleanup.vtk",
+      "summary": "/home/mengao/Code/4Dsegment/data/subject_3/volmesh_pipline_signed_clearance/step_10_final_mesh/subject_3_ED_step10_final_mesh_summary.json"
+    },
+    "changed_cells": 277,
+    "components_before": {
+      "LV": 5,
+      "RV": 111
+    },
+    "components_after": {
+      "LV": 1,
+      "RV": 1
+    },
+    "unresolved_components": [],
+    "geometry_connectivity_order_preserved": true,
+    "inputs_unchanged": true,
+    "tag_changed_flags_verified": true
+  },
+  {
+    "subject": "subject_3",
+    "phase": "ES",
+    "status": "passed",
+    "paths": {
+      "volmesh": "/home/mengao/Code/4Dsegment/data/subject_3/volmesh_pipline_signed_clearance/step_10_final_mesh/subject_3_ES_volmesh.vtk",
+      "before_tag_cleanup": "/home/mengao/Code/4Dsegment/data/subject_3/volmesh_pipline_signed_clearance/step_10_final_mesh/subject_3_ES_volmesh_before_tag_cleanup.vtk",
+      "summary": "/home/mengao/Code/4Dsegment/data/subject_3/volmesh_pipline_signed_clearance/step_10_final_mesh/subject_3_ES_step10_final_mesh_summary.json"
+    },
+    "changed_cells": 151,
+    "components_before": {
+      "LV": 1,
+      "RV": 76
+    },
+    "components_after": {
+      "LV": 1,
+      "RV": 1
+    },
+    "unresolved_components": [],
+    "geometry_connectivity_order_preserved": true,
+    "inputs_unchanged": true,
+    "tag_changed_flags_verified": true
+  }
+]

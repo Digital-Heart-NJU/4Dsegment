@@ -1,0 +1,45 @@
+{
+  "subject": "3",
+  "phase": "ES",
+  "status": "passed",
+  "cleaned_surface": "/home/mengao/Code/4Dsegment/data/subject_3/volmesh_pipline_signed_clearance/step_08_LVRV_surf_clean/subject_3_ES_LVRV_surf.vtk",
+  "volume_mesh": "/home/mengao/Code/4Dsegment/data/subject_3/volmesh_pipline_signed_clearance/step_09_volmesh_generate/subject_3_ES_volmesh_notag.vtk",
+  "before": {
+    "points": 33911,
+    "triangles": 67818,
+    "free_edges": 0,
+    "nonmanifold_edges": 0,
+    "inconsistent_orientation_edges": 0,
+    "degenerate_triangles": 0,
+    "self_intersection_pairs": 4
+  },
+  "after": {
+    "points": 33911,
+    "triangles": 67818,
+    "free_edges": 0,
+    "nonmanifold_edges": 0,
+    "inconsistent_orientation_edges": 0,
+    "degenerate_triangles": 0,
+    "self_intersection_pairs": 0
+  },
+  "step07_unchanged": true,
+  "step09_input_path": "/home/mengao/Code/4Dsegment/data/subject_3/volmesh_pipline_signed_clearance/step_08_LVRV_surf_clean/subject_3_ES_LVRV_surf.vtk",
+  "step08_unchanged": true,
+  "volume_validation": {
+    "points": 75521,
+    "tetrahedra": 364054,
+    "component_count": 1,
+    "nonpositive_tetrahedra": 0,
+    "minimum_tetrahedron_volume_mm3": 9.264567525501258e-15,
+    "maximum_tetrahedron_volume_mm3": 22.521686575332552,
+    "total_tetrahedron_volume_mm3": 220654.5446233402,
+    "input_solid_volume_mm3": 220654.54462334013,
+    "relative_volume_error": 2.6379543196279307e-16,
+    "boundary_triangles": 67818,
+    "boundary_matches_step08": true,
+    "maximum_boundary_point_error_mm": 0.0,
+    "point_data": [],
+    "cell_data": [],
+    "field_data": []
+  }
+}

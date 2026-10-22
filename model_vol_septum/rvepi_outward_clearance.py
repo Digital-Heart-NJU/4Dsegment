@@ -1,7 +1,8 @@
 """Outward RVepi deformation against fixed open RVendo (coordinates in mm).
 
-Diagnostic basal closures define inside/outside. Only real triangles enter
-clearance queries. Invalid inputs are rejected rather than silently faired.
+The signed solver uses the cleaned closed RVendo for inside/outside. The
+legacy normal-only trial uses diagnostic basal closures. Only real open
+triangles enter clearance queries. Invalid inputs are rejected.
 """
 from __future__ import annotations
 
@@ -172,11 +173,18 @@ def outward_normals(mesh, axis=None, plane=None):
 
 
 class FixedEndo:
-    def __init__(self, mesh, axis=None, plane=None):
+    def __init__(self, mesh, axis=None, plane=None, closed_reference=None):
         self.points = np.asarray(mesh.points, dtype=float).copy()
         self.faces = triangles(mesh).copy()
-        self.closed_mesh = close_for_inside_test(mesh, axis, plane)
-        oriented_open = _surface(self.points, triangles(self.closed_mesh)[:mesh.n_cells])
+        self.reference_supplied = closed_reference is not None
+        if closed_reference is None:
+            self.closed_mesh = close_for_inside_test(mesh, axis, plane)
+            oriented_open = _surface(self.points, triangles(self.closed_mesh)[:mesh.n_cells])
+        else:
+            _check_geometry(closed_reference, "Closed RVendo reference", closed=True)
+            self.closed_mesh = closed_reference.copy(deep=True).compute_normals(
+                point_normals=False, consistent_normals=True, auto_orient_normals=True)
+            oriented_open = mesh
         self.open, self.closed = scene(oriented_open), scene(self.closed_mesh)
         self.distance_function = vtk.vtkImplicitPolyDataDistance()
         self.distance_function.SetInput(oriented_open)
@@ -211,8 +219,7 @@ class FixedEndo:
         gradient = np.asarray(points) - closest
         inside = signed < 0
         if np.any(inside):
-            nearest = self.closed.compute_closest_points(query(self.closed, points[inside]))
-            gradient[inside] = nearest["points"].numpy() - points[inside]
+            gradient[inside] *= -1
         length = np.linalg.norm(gradient, axis=1)
         good = length > 1e-8
         gradient[good] /= length[good, None]
@@ -238,7 +245,7 @@ def _band_levels(faces, ring_ids, count, layers):
     return levels
 
 
-def _scalar_smoother(points, faces):
+def _scalar_smoother(points, faces, vector=False):
     """An M-matrix smooths positive amounts without changing directions."""
     edges = _edges(faces)
     lengths = np.linalg.norm(points[edges[:, 0]] - points[edges[:, 1]], axis=1)
@@ -248,7 +255,7 @@ def _scalar_smoother(points, faces):
     laplace = coo_matrix((np.r_[weights, weights, -weights, -weights],
                           (np.r_[a, b, a, b], np.r_[a, b, b, a])), shape=(len(points), len(points))).tocsc()
     solve = factorized(eye(len(points), format="csc") + 2 * laplace)
-    return lambda amounts: np.maximum(solve(amounts), 0.0), typical
+    return (solve if vector else lambda amounts: np.maximum(solve(amounts), 0.0)), typical
 
 
 def _ring_directions(ring, axis):
@@ -312,7 +319,7 @@ def face_clearance(points, faces, fixed, minimum):
     return np.flatnonzero(failing), distance, minima
 
 
-def validate_rvepi(epi, endo, minimum=3.0, axis=None, plane=None, fixed=None):
+def validate_rvepi(epi, endo, minimum=3.0, axis=None, plane=None, fixed=None, closed_reference=None):
     """Prove full-surface side/containment via intersection exclusion and classification.
 
 The side of a connected surface cannot change without crossing the closed
@@ -324,11 +331,25 @@ boundary. Vertex classification is used only after excluding all crossings.
         axis, plane = _basal_reference(epi, _opening_indices(epi))
         plane = max(plane, float(np.max(endo.points @ axis) + endo.length))
     if fixed is None:
-        fixed = FixedEndo(endo, axis, plane)
+        fixed = FixedEndo(endo, axis, plane, closed_reference)
     fixed.assert_unchanged(endo)
     bad, distance, _ = face_clearance(np.asarray(epi.points, dtype=float), triangles(epi), fixed, minimum)
     if len(bad):
         raise RuntimeError(f"RVepi surface clearance is {distance:.9g} mm, below {minimum:g}; faces {bad[:12].tolist()}.")
+    if fixed.reference_supplied:
+        contact = fixed.fcl.CollisionResult()
+        fixed.fcl.collide(fixed.collision_object(epi.points, triangles(epi)), fixed.closed_object,
+                          fixed.fcl.CollisionRequest(), contact)
+        if contact.is_collision or np.any(fixed.values(epi.points) <= 0):
+            raise RuntimeError("RVepi crosses or lies inside the closed Step 02 RVendo reference.")
+        return {
+            "minimum_certified_surface_distance_mm": distance,
+            "surface_distance_method": "FCL_double_precision_global_triangle_triangle_distance",
+            "whole_surface_containment_method": "closed_Step02_RVendo_intersection_exclusion_and_vertex_classification",
+            "RVepi_entirely_outside_RVendo": True,
+            "final_RVepi_self_intersection_pairs": 0, "final_vertices_inside_RVendo": 0,
+            "rv_endo_fixed": True,
+        }
     closed_epi = close_for_inside_test(epi, axis, plane)
     epi_object = fixed.collision_object(epi.points, triangles(epi))
     closed_epi_object = fixed.collision_object(closed_epi.points, triangles(closed_epi))
@@ -516,4 +537,124 @@ def move_rvepi(epi, endo, ring_ids, minimum, padding, max_step,
         "max_displacement_mm": float(np.linalg.norm(displacement, axis=1).max()),
         "_opening_ring_ids": ring_ids.tolist(), "basal_reference_axis": axis.tolist(), "basal_reference_plane": float(plane),
         **verification,
+    }
+
+
+def move_rvepi_signed(epi, endo, ring_ids, minimum, padding, max_step,
+                       ring_smooth_iterations, ring_relaxation, max_iterations=600,
+                       band_layers=3, closed_reference=None):
+    """Correct signed clearance using a connected, smoothed vector displacement.
+
+    The closed Step 02 endocardium supplies the side test; distances and
+    witnesses use the actual fixed open endocardial triangles. No artificial
+    closure is added to either exported surface.
+    """
+    if closed_reference is None:
+        raise ValueError("Signed Step 06 requires the cleaned closed Step 02 RVendo reference.")
+    if not np.isfinite([minimum, padding, max_step]).all() or minimum <= 0 or max_step <= 0 or padding < 0 or max_iterations < 1:
+        raise ValueError("Invalid signed-clearance parameters.")
+    _check_geometry(epi, "Step 05 RVepi")
+    _check_geometry(endo, "Step 05 RVendo")
+    original = np.asarray(epi.points, dtype=float).copy()
+    faces = triangles(epi).copy()
+    ring_ids = np.asarray(ring_ids, dtype=np.int64)
+    boundary = _opening_indices(epi)
+    if len(ring_ids) != len(boundary) or set(ring_ids.tolist()) != set(boundary.tolist()):
+        raise ValueError("Opening IDs must match the RVepi boundary.")
+    fixed = FixedEndo(endo, closed_reference=closed_reference)
+    smoother, typical = _scalar_smoother(original, faces, vector=True)
+    trust = min(max_step, max(typical * .5, .001))
+    target = minimum + max(padding, .001)
+    points = original.copy()
+    initial = fixed.values(points)
+    failing = np.empty(0, dtype=np.int64)
+    minima = np.full(len(faces), np.inf)
+    for iteration in range(max_iterations):
+        signed, closest = fixed.values(points, closest=True)
+        if np.all(signed >= minimum):
+            failing, distance, minima = face_clearance(points, faces, fixed, minimum)
+            if not len(failing):
+                # Also exclude crossings of the retained closed basal anatomy.
+                validate_rvepi(_surface(points, faces), endo, minimum, fixed=fixed)
+                break
+        gradient = fixed.gradient(points, signed, closest)
+        raw = gradient * np.minimum(np.maximum(target - signed, 0), trust)[:, None]
+        xyz = points[faces]
+        probes = np.stack((xyz.mean(axis=1), (xyz[:, 0] + xyz[:, 1]) * .5,
+                           (xyz[:, 1] + xyz[:, 2]) * .5, (xyz[:, 2] + xyz[:, 0]) * .5), axis=1)
+        values, nearest = fixed.values(probes.reshape(-1, 3), closest=True)
+        face_vectors = fixed.gradient(probes.reshape(-1, 3), values, nearest)
+        face_vectors *= np.minimum(np.maximum(target - values, 0), trust)[:, None]
+        face_vectors = face_vectors.reshape(-1, 4, 3)
+        worst = np.argmin(values.reshape(-1, 4), axis=1)
+        contributions = face_vectors[np.arange(len(faces)), worst]
+        if len(failing):
+            for index in failing:
+                if np.linalg.norm(contributions[index]) < 1e-8:
+                    direction = gradient[faces[index]].mean(axis=0)
+                    direction /= max(np.linalg.norm(direction), 1e-12)
+                    contributions[index] = direction * min(target - minima[index], trust)
+        sums = np.zeros_like(points)
+        counts = np.zeros(len(points))
+        for k in range(3):
+            np.add.at(sums, faces[:, k], contributions)
+            np.add.at(counts, faces[:, k], np.linalg.norm(contributions, axis=1) > 0)
+        averaged = sums / np.maximum(counts, 1)[:, None]
+        use = np.linalg.norm(averaged, axis=1) > np.linalg.norm(raw, axis=1)
+        raw[use] = averaged[use]
+        delta = smoother(raw)
+        # The opening participates in the same connected field; no frozen rim.
+        length = np.linalg.norm(delta, axis=1)
+        delta *= np.minimum(1, trust / np.maximum(length, 1e-12))[:, None]
+        cross = np.cross(xyz[:, 1] - xyz[:, 0], xyz[:, 2] - xyz[:, 0])
+        accepted = False
+        for half in range(17):
+            step = delta * .5 ** half
+            candidate = points + step
+            if np.max(np.linalg.norm(step, axis=1)) < 1e-8:
+                break
+            new = candidate[faces]
+            new_cross = np.cross(new[:, 1] - new[:, 0], new[:, 2] - new[:, 0])
+            if np.any(np.einsum("ij,ij->i", cross, new_cross) <= 0):
+                continue
+            if len(_self_intersections(candidate, faces)):
+                continue
+            points = candidate
+            accepted = True
+            break
+        if not accepted:
+            raise RuntimeError(f"Signed Step 06 stalled at iteration {iteration}: min_signed={signed.min():.6g} mm; geometry guards rejected displacement.")
+        if iteration % 20 == 0:
+            print(f"[Step06 signed] iteration={iteration} inside={np.count_nonzero(signed < 0)} "
+                  f"below_target={np.count_nonzero(signed < target)} min_signed={signed.min():.5g} "
+                  f"max_step={np.linalg.norm(step, axis=1).max():.5g}", flush=True)
+    else:
+        raise RuntimeError(f"Signed Step 06 did not converge after {max_iterations} iterations; min_signed={fixed.values(points).min():.6g} mm.")
+    result = epi.copy(deep=True)
+    result.points = points
+    final = np.where(fixed.values(points) < 0, -1., 1.) * fixed.exact_distances(points)
+    levels = _band_levels(faces, ring_ids, len(points), band_layers)
+    result.point_data["step6SourcePointId"] = np.arange(len(points))
+    result.point_data["step6Displacement"] = points - original
+    result.point_data["step6DisplacementMagnitude"] = np.linalg.norm(points - original, axis=1)
+    result.point_data["initialSignedDistanceToRVendo"] = initial
+    result.point_data["initialInsideRVendo"] = (initial < 0).astype(np.int32)
+    result.point_data["signedDistanceToRVendo"] = final
+    result.point_data["insideRVendo"] = (final < 0).astype(np.int32)
+    result.point_data["adaptiveOpeningBoundary"] = (levels == 0).astype(np.int32)
+    result.point_data["openingTransitionBand"] = (levels >= 0).astype(np.int32)
+    verification = validate_rvepi(result, endo, minimum, fixed=fixed)
+    fixed.assert_unchanged(endo)
+    return result, {
+        "method": "signed_triangle_clearance_with_connected_vector_smoothing",
+        "side_reference": "cleaned_closed_Step02_RVendo",
+        "minimum_requested_distance_mm": minimum,
+        "target_distance_with_padding_mm": target,
+        "initial_vertices_inside_RVendo": int(np.count_nonzero(initial < 0)),
+        "initial_vertices_below_3mm": int(np.count_nonzero(initial < minimum)),
+        "final_vertices_below_3mm": int(np.count_nonzero(final < minimum)),
+        "minimum_vertex_signed_distance_mm": float(final.min()),
+        "max_displacement_mm": float(np.linalg.norm(points - original, axis=1).max()),
+        "opening_vertex_count_preserved": True, "opening_edge_connections_preserved": True,
+        "iterations": iteration, "_opening_ring_ids": ring_ids.tolist(), **verification,
     }

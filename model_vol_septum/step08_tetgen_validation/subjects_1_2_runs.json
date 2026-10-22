@@ -1,0 +1,32 @@
+[
+  {
+    "subject": 1,
+    "returncode": 0,
+    "command": [
+      "/home/mengao/anaconda3/envs/morphinet/bin/python",
+      "-B",
+      "model_vol_septum/generate_open_volmesh_stable.py",
+      "--subject-dir",
+      "data/subject_1",
+      "--frames",
+      "ED,ES",
+      "--pipeline-output-root",
+      "data/subject_1/volmesh_pipline_signed_clearance"
+    ]
+  },
+  {
+    "subject": 2,
+    "returncode": 0,
+    "command": [
+      "/home/mengao/anaconda3/envs/morphinet/bin/python",
+      "-B",
+      "model_vol_septum/generate_open_volmesh_stable.py",
+      "--subject-dir",
+      "data/subject_2",
+      "--frames",
+      "ED,ES",
+      "--pipeline-output-root",
+      "data/subject_2/volmesh_pipline_signed_clearance"
+    ]
+  }
+]
