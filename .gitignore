@@ -1,6 +1,7 @@
 
 /data/
 /run_subjects_4_5/
+/model_nnunet
 
 #*/
 *.nii.gz
