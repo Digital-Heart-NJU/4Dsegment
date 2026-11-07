@@ -31,7 +31,7 @@ def inspect_surface(path):
     return {'points': mesh.GetNumberOfPoints(), 'cells': mesh.GetNumberOfCells()}
 
 
-def verify(subject, run_dir, stage):
+def verify(subject, run_dir, stage, require_manual_copy=False):
     frames = ('ED', 'ES')
     raw_names = {name + '_' + frame + '.vtk'
                  for name in ('LVendo', 'LVepi', 'RV', 'RVepi', 'LVmyo') for frame in frames}
@@ -76,6 +76,18 @@ def verify(subject, run_dir, stage):
             report['manual_test_copies_are_unedited'][frame] = bool(np.array_equal(
                 np.asarray(nib.load(manual).dataobj), np.asarray(nib.load(automatic).dataobj)))
         report['manual_inputs_match_archived_2D_segmentations'] = True
+        if require_manual_copy:
+            provenance = json.loads((run_dir / 'manual_test_fixture.json').read_text())
+            assert provenance['subject'] == subject.name
+            assert provenance['source_is_same_subject_automatic_prediction'] is True
+            for frame in frames:
+                automatic = subject / 'segs' / ('seg_lvsa_' + frame + '.nii.gz')
+                manual = subject / 'segs' / ('seg_lvsa_' + frame + '_manual.nii.gz')
+                record = provenance['frames'][frame]
+                assert Path(record['source']).resolve() == automatic.resolve()
+                assert Path(record['destination']).resolve() == manual.resolve()
+                assert digest(automatic) == digest(manual) == record['sha256']
+            report['manual_copies_match_own_automatic_prediction_sha256'] = True
     else:
         previous = json.loads((run_dir / 'validation_stage02.json').read_text())
         for path, expected in previous['preserved_inputs_for_stage03'].items():
@@ -116,5 +128,7 @@ if __name__ == '__main__':
     parser.add_argument('--subject-dir', required=True, type=Path)
     parser.add_argument('--run-dir', required=True, type=Path)
     parser.add_argument('--stage', required=True, choices=('02', '03'))
+    parser.add_argument('--require-manual-copy', action='store_true',
+                        help='For unedited tests only: require same-subject automatic/manual byte identity and provenance.')
     args = parser.parse_args()
-    verify(args.subject_dir.resolve(), args.run_dir.resolve(), args.stage)
+    verify(args.subject_dir.resolve(), args.run_dir.resolve(), args.stage, args.require_manual_copy)

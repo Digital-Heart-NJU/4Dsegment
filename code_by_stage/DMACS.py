@@ -1,7 +1,29 @@
 from __future__ import print_function
 
+import os
 import sys
 import time
+
+
+def requested_segmentation_backend(argv):
+    for index, item in enumerate(argv):
+        if item.startswith('--segmentation_backend='):
+            return item.split('=', 1)[1]
+        if item == '--segmentation_backend' and index + 1 < len(argv):
+            return argv[index + 1]
+    return 'legacy'
+
+
+# Route before importing TensorFlow: nnUNet runs in modern host Python, while
+# the legacy implementation and registration tools remain in their Docker.
+if __name__ == '__main__' and requested_segmentation_backend(sys.argv[1:]) == 'nnunet':
+    if sys.version_info < (3, 9):
+        sys.exit('Run the nnunet backend in the modern host environment (cme-dt-env), not legacy Docker Python.')
+    # Spawned nnUNet workers must import the modern launcher, not this
+    # TensorFlow entry point. Replace this process before inference begins.
+    launcher = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'nnunet_pipeline.py')
+    os.execv(sys.executable, [sys.executable, '-B', '-u', launcher] + sys.argv[1:])
+
 import tensorflow as tf
 from deepseg import deeplearningseg
 from p2processing import multiatlasreg3D
@@ -41,9 +63,12 @@ tf.app.flags.DEFINE_boolean('irtk', True, 'use irtk or not')
 tf.app.flags.DEFINE_boolean('stage01_seg_only', False, 'Preprocess and segment ED/ES, then stop.')
 tf.app.flags.DEFINE_boolean('stage02_surf_only', False, 'Refine manual ED/ES segmentations and extract raw surfaces, then stop.')
 tf.app.flags.DEFINE_boolean('stage03_addi_mot_fit', False, 'Fit saved raw surfaces, compute measurements and motion, then decimate.')
+tf.app.flags.DEFINE_string('segmentation_backend', 'legacy', 'legacy in Docker, or nnunet through modern host Python.')
 
 
 def run_pipeline(flags):
+    if getattr(flags, 'segmentation_backend', 'legacy') != 'legacy':
+        raise ValueError('Unknown segmentation backend; choose legacy or nnunet.')
     stage = select_stage(flags)
     subjects = subject_directories(flags.test_dir)
     print('[DMACS stages] Mode: ' + stage)

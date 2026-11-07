@@ -4,11 +4,17 @@ This is a separate, staged version of the original pipeline. All runtime
 Python modules are in `code_by_stage/`. The original `code/` sources and the
 shared pretrained checkpoint under `model/` are not modified.
 
+Two segmentation backends are available. The default `legacy` backend keeps
+the original TensorFlow behavior documented in Sections 1-8. The new
+`--segmentation_backend=nnunet` backend uses the supplied SAX-only model and
+XY-only synthetic RV myocardium described in Section 9. Its launcher runs
+in modern host Python; it starts the legacy Docker tools automatically.
+
 For the original image-to-mesh algorithms and file families, see
 [the original pipeline explanation](../code/readme_model_origin_end-to-end.md).
 This document explains the new execution boundaries and manual-input rules.
 
-## 1. Commands and Boundaries
+## 1. Legacy Commands and Boundaries
 
 Run these commands from the staged code directory **inside the supplied
 legacy Docker environment**, as shown in Section 6.
@@ -310,7 +316,7 @@ stage flags. It uses the automatic CNN predictions, even if manual files exist.
 | [decimation.py](decimation.py) | Unchanged copy of the original decimation implementation. |
 | [p1processing.py](p1processing.py) | Copied optional 2D atlas code; still not used by the default runner. |
 
-Neural weights, normalization, padding, atlas search, deformation settings,
+For the legacy backend, neural weights, normalization, padding, atlas search, deformation settings,
 mask rules, marching-cubes parameters, fitting commands, motion, and decimation
 methods are not replaced by new algorithms.
 
@@ -361,3 +367,209 @@ It expects the stage execution logs named `stage02.log` and `stage03.log`.
 
 The completed execution results, limitations, and links to evidence are
 summarized in [validation_subject_333.md](validation_subject_333.md).
+
+## 9. SAX nnUNet Backend and XY-Only RV Wall
+
+### Runtime and commands
+
+Use the existing `cme-dt-env` environment on the host, not Python 2 inside
+the legacy Docker image. Its PyTorch/nnUNet runtime loads the supplied
+`model_nnunet/nnunet_workspace/nnUNet_results/`
+`Dataset100_UKBB_Petersen_SAX/nnUNetTrainer__nnUNetPlans__2d` model.
+The default is the five-fold ensemble (0, 1, 2, 3, 4), `checkpoint_final.pth`,
+and CUDA. No LAX inputs, `Instance_*` directories, or renamed `SAX.nii`
+files are needed. Each subject's `example.nii` is the SAX cine input.
+
+From the project root:
+
+```bash
+conda run --no-capture-output -n cme-dt-env python -B -u code_by_stage/DMACS.py \
+  --segmentation_backend=nnunet --subject subject_666 --stage01_seg_only=true
+
+# Produce subject_777's own automatic segmentations first:
+conda run --no-capture-output -n cme-dt-env python -B -u code_by_stage/DMACS.py \
+  --segmentation_backend=nnunet --subject subject_777 --stage01_seg_only=true
+
+# For an unedited-input Stage 02 test, copy only subject_777's own results:
+conda run --no-capture-output -n cme-dt-env python -B code_by_stage/tests/prepare_manual_fixture.py \
+  --subject-dir data/subject_777 \
+  --report code_by_stage/runs/nnunet_subject_777/manual_test_fixture.json
+
+conda run --no-capture-output -n cme-dt-env python -B -u code_by_stage/DMACS.py \
+  --segmentation_backend=nnunet --subject subject_777 --stage02_surf_only=true
+
+# Only after inspecting Stage 02 outputs; not run for the 666/777 tests:
+conda run --no-capture-output -n cme-dt-env python -B -u code_by_stage/DMACS.py \
+  --segmentation_backend=nnunet --subject subject_777 --stage03_addi_mot_fit=true
+```
+
+Change `--subject` for another folder, and optionally `--data-dir` for a
+different dataset parent. `--input-name` defaults to `example.nii`.
+Use `--device cpu` explicitly if CUDA is unavailable. The model directory,
+checkpoint, folds, Docker image, and inference working directory have
+dedicated options; inspect `--segmentation_backend=nnunet --help`.
+The same stage flags accept `=true` / `=false`; at most one may be true.
+
+For this backend, no enabled stage flag means nnUNet Stage 01 followed by
+automatic atlas refinement/extraction, then the original Stage 03. This
+does not manufacture `_manual` inputs. Incomplete predictions are saved,
+but full mode refuses to continue into refinement with missing anatomy.
+
+### Stage 01 processing
+
+```text
+example.nii (read only)
+  -> original headertool / temporalalign / autocontrast / phase detection
+  -> lvsa_.nii.gz and lvsa_ED.nii.gz / lvsa_ES.nii.gz
+  -> 3D ED and ES nnUNet cases, on the corresponding phase image grids
+  -> supplied 2D SAX nnUNet, with its own normalization/resampling
+  -> native labels: background=0, LV blood=1, LV myocardium=2, RV blood=3
+  -> remap native RV blood from 3 to 4
+  -> generate synthetic RV myocardium=3 in original background only
+  -> save final ED/ES label maps, then stop
+```
+
+Inference uses the official installed `nnUNetPredictor` API, not the
+supplied multi-view `segment_predict.py` wrapper. The original wrapper,
+model plans, and weights remain unchanged. Temporary inference inputs and
+predictions are retained under `code_by_stage/runs/nnunet_<subject>/`;
+the existing `Dataset12345_temp` and similar model-workspace folders are
+not modified. Worker processes import the modern launcher rather than the
+TensorFlow entry point.
+
+The phase arrays are split only along their singleton time axis. Their
+spatial affine, resolution, orientation, and slice order are not replaced
+with the training image geometry. nnUNet's exported predictions must match
+the phase grid before labels are published.
+
+The resulting canonical labels are:
+
+| Label | Meaning | Source |
+| --- | --- | --- |
+| 0 | Background | nnUNet background, except added RV wall |
+| 1 | LV blood pool | Native nnUNet label 1, unchanged |
+| 2 | LV myocardium | Native nnUNet label 2, unchanged |
+| 3 | Synthetic RV myocardium | XY-only background expansion |
+| 4 | RV blood pool | Native nnUNet label 3 remapped to 4 |
+
+### Exact RV wall construction rule
+
+For each fixed image Z slice independently:
+
+1. Find RV blood-pool voxels with canonical label 4.
+2. Measure the physical distance from background voxel centers to the
+   nearest RV voxel center in that same XY image plane.
+3. Add label 3 where the original label is 0 and the distance is within
+   3 mm. Never overwrite labels 1, 2, 3, or 4.
+4. Keep additions reachable from the RV through eligible background or
+   existing RV myocardium in that slice. Do not create detached patches
+   behind an intervening protected label.
+5. A slice without RV blood is unchanged. No growth occurs along Z or time.
+
+Orthogonal in-plane axes use a 2D Euclidean distance transform with the
+actual physical XY spacing. Oblique rotations and reflections are supported.
+For sheared axes, a KD-tree measures distances using both in-plane affine
+columns in physical coordinates. Known meter/millimeter/micron units are
+converted to millimeters. Unknown spatial units require the explicit
+`--assume-mm-if-unknown` option; no silent unit assumption is made.
+
+Here XY means the first two NIfTI voxel axes within a fixed slice, not the
+scanner's global axial plane. `--rv-wall-radius-mm` defaults to 3.0.
+Image dimensions and fields of view are not enlarged.
+
+**Limitation:** this is a voxel-center expansion radius, not a certified
+3 mm continuous surface-to-surface minimum wall thickness. Protected labels,
+image edges, and voxel discretization can restrict the synthetic wall.
+The unchanged downstream atlas refinement can alter it further.
+
+### Saved files and protection
+
+Each phase produces the following files in `<subject>/segs/`:
+
+```text
+nnunet_native/seg_lvsa_ED.nii.gz  # original four-label nnUNet prediction
+nnunet_mapped_ED.nii.gz          # RV blood remapped to 4, before wall growth
+rv_myo_added_ED.nii.gz           # binary mask of only newly added wall voxels
+rv_myo_added_ED_summary.json     # distances, slice counts, edge flags, warnings
+seg_lvsa_ED.nii.gz               # final canonical DMACS label map
+```
+
+The same files are saved for ES. Canonical outputs are int16, with the
+phase's affine, spatial units, and qform/sform preserved. The subject-level
+`dmacs_nnunet_stage01_summary.json` records the model, selected folds,
+native-label mapping, protected input checksum, and missing anatomy.
+
+Stage 01 refuses to replace existing canonical predictions/preprocessed
+cine unless `--overwrite` is supplied. Even with that option, existing
+manual labels and the original `example.nii` are protected and are not
+rewritten. New preprocessing creates working directories without clearing
+their contents; unlike the legacy CNN rerun, it does not reset downstream
+folders. Downstream results may therefore be stale after a deliberate
+rerun, and should be regenerated separately. Stage 02 keeps its original
+raw-surface cleanup behavior described in Section 3.
+
+Missing anatomy is not invented. An empty/incomplete prediction is retained
+for inspection, its summary status is `completed_requires_manual_correction`,
+and any absent RV blood pool yields no added RV wall. Stage 01 execution
+success is not proof of segmentation quality.
+
+### Stage 02 and Stage 03 compatibility
+
+Stage 02 still requires the two explicitly saved
+`segs/seg_lvsa_ED_manual.nii.gz` / `seg_lvsa_ES_manual.nii.gz` inputs,
+including all foreground classes. It never falls back to automatic or
+native labels. Corrected manual files must use canonical RV blood=4 and
+RV myocardium=3, not the native nnUNet label convention.
+
+The host launcher starts the unchanged atlas/refinement and raw-surface
+operations in `jinmingduan/segmentationmeshmotion:latest`. No nnUNet or old
+TensorFlow model inference runs during Stage 02. Stage 03 remains unchanged
+and likewise skips segmentation and atlas refinement.
+
+Additional backend modules are [nnunet_pipeline.py](nnunet_pipeline.py),
+[build_rv_myo_xy.py](build_rv_myo_xy.py),
+[prepare_nnunet_phases.py](prepare_nnunet_phases.py), and
+[refine_nnunet_automatic.py](refine_nnunet_automatic.py).
+The wall builder is also a standalone tool for already-canonical labels:
+
+```bash
+conda run --no-capture-output -n cme-dt-env python -B code_by_stage/build_rv_myo_xy.py \
+  --input input_canonical.nii.gz --output output_with_rv_wall.nii.gz --radius-mm 3
+```
+
+### Tests and current 666/777 test scope
+
+```bash
+conda run --no-capture-output -n cme-dt-env python -B -m unittest discover \
+  -s code_by_stage/tests -p nnunet_checks.py -v
+
+conda run --no-capture-output -n cme-dt-env python -B code_by_stage/tests/validate_nnunet.py \
+  --subject-dir data/subject_666 \
+  --output code_by_stage/runs/nnunet_subject_666/validation_stage01.json
+```
+
+Run the existing legacy regression tests in Docker as in Section 8.
+The modern tests check native label mapping, physical XY distances,
+nonzero-label preservation, absent-RV slices, unit/affine handling, file
+geometry, manual-input protection, full-mode dispatch, and incomplete
+prediction handling.
+
+The Stage 02 test's `_manual` inputs must be byte-identical copies of
+**subject_777's own final automatic segmentation files**, including their
+synthetic RV myocardium. No labels from subjects 333, 444, 555, or 666 are
+used. The explicit copy helper accepts only `--subject-dir`, checks phase
+geometry and foreground classes before copying, refuses existing manual
+files, and records the automatic-source checksums. It rejects links to
+predictions outside the subject's segmentation directory. This is test
+setup, not an implicit fallback in the production Stage 02 runner, and the
+copies are not human-corrected inputs.
+
+See [validation_nnunet_subjects_666_777.md](validation_nnunet_subjects_666_777.md)
+for the completed test results and provenance: Stage 01 succeeded for both
+phases of subject_666, and Stage 02 generated all ten raw surfaces for
+subject_777 using its own prediction copies. All 43 unit/regression tests
+and the output/integrity validators passed. Stage 03 was not run.
+The earlier 444/555 tests were
+stopped at the user's request; their historical limitations and partial
+outputs are recorded in
+[validation_nnunet_subjects_444_555.md](validation_nnunet_subjects_444_555.md).
