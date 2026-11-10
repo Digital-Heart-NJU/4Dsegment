@@ -426,6 +426,7 @@ example.nii (read only)
   -> native labels: background=0, LV blood=1, LV myocardium=2, RV blood=3
   -> remap native RV blood from 3 to 4
   -> generate synthetic RV myocardium=3 in original background only
+  -> clear all labels in the whole image's first and last Z slices
   -> save final ED/ES label maps, then stop
 ```
 
@@ -446,11 +447,16 @@ The resulting canonical labels are:
 
 | Label | Meaning | Source |
 | --- | --- | --- |
-| 0 | Background | nnUNet background, except added RV wall |
-| 1 | LV blood pool | Native nnUNet label 1, unchanged |
-| 2 | LV myocardium | Native nnUNet label 2, unchanged |
+| 0 | Background | Native background and cleared terminal slices, except added RV wall |
+| 1 | LV blood pool | Native label 1 outside the cleared terminal slices |
+| 2 | LV myocardium | Native label 2 outside the cleared terminal slices |
 | 3 | Synthetic RV myocardium | XY-only background expansion |
 | 4 | RV blood pool | Native nnUNet label 3 remapped to 4 |
+
+Starting with the 2026-11-10 change, all foreground classes are cleared on
+the two terminal image slices before final Stage 01 saving, as detailed
+below. Label preservation during wall expansion still applies before that
+explicit terminal-slice cleanup.
 
 ### Exact RV wall construction rule
 
@@ -482,6 +488,35 @@ Image dimensions and fields of view are not enlarged.
 image edges, and voxel discretization can restrict the synthetic wall.
 The unchanged downstream atlas refinement can alter it further.
 
+### Final Stage 01 terminal-slice cleanup
+
+After XY wall expansion, `finalize_stage01_labels` in `nnunet_pipeline.py`
+sets labels 1-4 to background on `z=0` and `z=N_z-1`, independently for ED
+and ES. `N_z` comes from the original input image header, and processing
+fails if preprocessing changes that slice count. These are the endpoints
+of the **whole image stack**, not the first/last slices containing the heart.
+
+Every intermediate label voxel remains identical to its pre-cleanup value.
+No image slice is removed, and the image dimensions, resolution, affine,
+qform/sform, source MRI and existing manual labels are not changed by this
+cleanup. An already empty endpoint remains empty. One-/two-slice inputs
+have no intermediate slices and therefore become empty segmentations;
+missing anatomy is reported rather than replaced.
+
+The native and mapped prediction files remain untrimmed diagnostics. The
+final `seg_lvsa_ED/ES.nii.gz` files and `rv_myo_added_ED/ES.nii.gz` masks
+contain the cleanup. Top-level wall-summary counts describe retained voxels;
+`growth_before_terminal_z_cleanup` preserves the original growth statistics,
+and `terminal_z_cleanup` records removed counts per slice and label.
+`protected_labels_unchanged` can consequently be false when original
+foreground is deliberately cleared at an endpoint;
+`nonterminal_protected_labels_unchanged` must remain true.
+
+This rule applies to the nnUNet Stage 01 path, including its use in full
+automatic mode. The legacy CNN backend and Stage 02 atlas algorithms are
+unchanged. Atlas refinement uses its own resampled grid and is not subjected
+to an additional terminal-slice deletion by this change.
+
 ### Saved files and protection
 
 Each phase produces the following files in `<subject>/segs/`:
@@ -489,7 +524,7 @@ Each phase produces the following files in `<subject>/segs/`:
 ```text
 nnunet_native/seg_lvsa_ED.nii.gz  # original four-label nnUNet prediction
 nnunet_mapped_ED.nii.gz          # RV blood remapped to 4, before wall growth
-rv_myo_added_ED.nii.gz           # binary mask of only newly added wall voxels
+rv_myo_added_ED.nii.gz           # newly added wall retained after terminal cleanup
 rv_myo_added_ED_summary.json     # distances, slice counts, edge flags, warnings
 seg_lvsa_ED.nii.gz               # final canonical DMACS label map
 ```
@@ -537,7 +572,7 @@ conda run --no-capture-output -n cme-dt-env python -B code_by_stage/build_rv_myo
   --input input_canonical.nii.gz --output output_with_rv_wall.nii.gz --radius-mm 3
 ```
 
-### Tests and current 666/777 test scope
+### Earlier 666/777 verification
 
 ```bash
 conda run --no-capture-output -n cme-dt-env python -B -m unittest discover \
@@ -573,3 +608,35 @@ The earlier 444/555 tests were
 stopped at the user's request; their historical limitations and partial
 outputs are recorded in
 [validation_nnunet_subjects_444_555.md](validation_nnunet_subjects_444_555.md).
+
+### Current 888/999 terminal-slice verification
+
+```bash
+conda run --no-capture-output -n cme-dt-env python -B -u code_by_stage/DMACS.py \
+  --segmentation_backend=nnunet --subject subject_888 --stage01_seg_only=true
+
+# Generate subject_999's own cleaned predictions for its Stage 02 test:
+conda run --no-capture-output -n cme-dt-env python -B -u code_by_stage/DMACS.py \
+  --segmentation_backend=nnunet --subject subject_999 --stage01_seg_only=true
+conda run --no-capture-output -n cme-dt-env python -B code_by_stage/tests/prepare_manual_fixture.py \
+  --subject-dir data/subject_999 \
+  --report code_by_stage/runs/nnunet_subject_999/manual_test_fixture.json
+conda run --no-capture-output -n cme-dt-env python -B -u code_by_stage/DMACS.py \
+  --segmentation_backend=nnunet --subject subject_999 --stage02_surf_only=true
+```
+
+Stage 01 is checked with `tests/validate_nnunet.py`. It reconstructs the
+pre-cleanup wall expansion, compares every intermediate slice exactly,
+checks that the first/last segmentation and added-wall slices are empty,
+and verifies unchanged geometry. Historical reports without cleanup metadata
+remain readable. For Stage 02 use `tests/validate_subject.py --stage 02
+--require-manual-copy` as described in the previous validation section.
+The current copy helper uses subject_999's own cleaned canonical outputs;
+no predictions from another subject are used.
+
+See [validation_terminal_slices_888_999.md](validation_terminal_slices_888_999.md)
+for this run's completed results and output locations. Stage 01 verification
+passed on subject_888, Stage 02 generated all ten raw surfaces for subject_999
+using its own cleaned prediction copies, and all 49 unit/regression tests
+passed. Both terminal planes were verified empty in the canonical predictions,
+manual copies and input archives. Stage 03 was not run.

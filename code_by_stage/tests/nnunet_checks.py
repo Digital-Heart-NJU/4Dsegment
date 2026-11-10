@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from build_rv_myo_xy import remap_nnunet_labels, expand_rv_myo_xy, save_labels
 import nnunet_pipeline
 import prepare_manual_fixture
+import validate_nnunet
 
 
 class XYWallTests(unittest.TestCase):
@@ -195,6 +196,76 @@ class LauncherTests(unittest.TestCase):
             call.assert_not_called()
 
 
+class TerminalSliceTests(unittest.TestCase):
+    def prepare(self, z_count=5, occupied=(0, 2, 4)):
+        mapped = np.zeros((11, 11, z_count), dtype=np.int16)
+        for z in occupied:
+            mapped[3, 3, z], mapped[4, 3, z], mapped[7, 7, z] = 1, 2, 4
+        grown, added, report = expand_rv_myo_xy(mapped, np.diag([1., 1., 8., 1.]))
+        return mapped, grown, added, report
+
+    def test_clears_all_labels_at_both_stack_ends_only(self):
+        mapped, grown, added, report = self.prepare()
+        original_grown, original_added, original_report = grown.copy(), added.copy(), json.dumps(report, sort_keys=True)
+        final, retained, summary = nnunet_pipeline.finalize_stage01_labels(mapped, grown, added, report, 5)
+        self.assertFalse(final[:, :, 0].any())
+        self.assertFalse(final[:, :, -1].any())
+        self.assertFalse(retained[:, :, (0, 4)].any())
+        np.testing.assert_array_equal(final[:, :, 1:-1], grown[:, :, 1:-1])
+        np.testing.assert_array_equal(retained[:, :, 1:-1], added[:, :, 1:-1])
+        np.testing.assert_array_equal(grown, original_grown)
+        np.testing.assert_array_equal(added, original_added)
+        self.assertEqual(json.dumps(report, sort_keys=True), original_report)
+        self.assertEqual(final.shape, grown.shape)
+        self.assertEqual(summary['terminal_z_cleanup']['slice_indices'], [0, 4])
+        self.assertEqual(summary['terminal_z_cleanup']['removed_foreground_voxels'],
+                         int(np.count_nonzero(grown[:, :, (0, 4)])))
+        self.assertFalse(summary['protected_labels_unchanged'])
+        self.assertTrue(summary['nonterminal_protected_labels_unchanged'])
+        self.assertEqual(summary['added_voxels'], int(retained.sum()))
+        self.assertEqual(sum(row['added_voxels'] for row in summary['slices']), int(retained.sum()))
+
+    def test_does_not_clear_first_or_last_foreground_slice_inside_stack(self):
+        mapped, grown, added, report = self.prepare(occupied=(1, 3))
+        final, retained, summary = nnunet_pipeline.finalize_stage01_labels(mapped, grown, added, report, 5)
+        np.testing.assert_array_equal(final, grown)
+        np.testing.assert_array_equal(retained, added)
+        self.assertTrue(final[:, :, 1].any())
+        self.assertTrue(final[:, :, 3].any())
+        self.assertEqual(summary['terminal_z_cleanup']['removed_foreground_voxels'], 0)
+
+    def test_clears_each_terminal_slice_independently(self):
+        for occupied in ((0,), (4,)):
+            mapped, grown, added, report = self.prepare(occupied=occupied)
+            final, _, summary = nnunet_pipeline.finalize_stage01_labels(mapped, grown, added, report, 5)
+            self.assertFalse(final.any())
+            rows = summary['terminal_z_cleanup']['slices']
+            self.assertEqual(sum(row['foreground_voxels_removed'] > 0 for row in rows), 1)
+
+    def test_single_and_two_slice_stacks_are_cleared_without_double_counting(self):
+        for count in (1, 2):
+            mapped, grown, added, report = self.prepare(count, tuple(range(count)))
+            final, retained, summary = nnunet_pipeline.finalize_stage01_labels(mapped, grown, added, report, count)
+            self.assertFalse(final.any())
+            self.assertFalse(retained.any())
+            self.assertEqual(len(summary['terminal_z_cleanup']['slice_indices']), count)
+            self.assertEqual(summary['terminal_z_cleanup']['removed_foreground_voxels'], int(np.count_nonzero(grown)))
+
+    def test_rejects_original_stack_or_mask_shape_mismatch(self):
+        mapped, grown, added, report = self.prepare()
+        with self.assertRaises(ValueError):
+            nnunet_pipeline.finalize_stage01_labels(mapped, grown, added, report, 6)
+        with self.assertRaises(ValueError):
+            nnunet_pipeline.finalize_stage01_labels(mapped, grown, added[:, :, :-1], report, 5)
+
+    def test_empty_stack_labels_remain_empty(self):
+        mapped, grown, added, report = self.prepare(occupied=())
+        final, retained, summary = nnunet_pipeline.finalize_stage01_labels(mapped, grown, added, report, 5)
+        self.assertFalse(final.any())
+        self.assertFalse(retained.any())
+        self.assertEqual(summary['terminal_z_cleanup']['removed_foreground_voxels'], 0)
+
+
 class Stage01FileTests(unittest.TestCase):
     def run_stage01(self, root, with_anatomy):
         root = Path(root)
@@ -222,10 +293,11 @@ class Stage01FileTests(unittest.TestCase):
                 nib.save(phase, subject / ('lvsa_' + frame + '.nii.gz'))
 
         def predict(args, inputs, outputs):
-            native = np.zeros(shape, dtype=np.uint8)
-            if with_anatomy:
-                native[4, 4, 1], native[5, 4, 1], native[9, 9, 1] = 1, 2, 3
             for frame in ('ED', 'ES'):
+                native = np.zeros(shape, dtype=np.uint8)
+                if with_anatomy:
+                    for z in ((0, 1, 2) if frame == 'ED' else (1, 2)):
+                        native[4, 4, z], native[5, 4, z], native[9, 9, z] = 1, 2, 3
                 nib.save(nib.Nifti1Image(native, affine), outputs / (subject.name + '_sax_' + frame + '.nii.gz'))
 
         from argparse import Namespace
@@ -242,15 +314,19 @@ class Stage01FileTests(unittest.TestCase):
             final = nib.load(subject / 'segs' / ('seg_lvsa_' + frame + '.nii.gz'))
             self.assertEqual(final.shape, shape)
             labels = np.asarray(final.dataobj)
+            self.assertFalse(labels[:, :, 0].any())
+            self.assertFalse(labels[:, :, -1].any())
             if with_anatomy:
                 self.assertEqual(labels[9, 9, 1], 4)
                 self.assertEqual(labels[10, 9, 1], 3)
                 self.assertEqual(set(np.unique(labels)), {0, 1, 2, 3, 4})
                 self.assertFalse((labels[:, :, 0] == 3).any())
+                self.assertGreater(report['frames'][frame]['terminal_z_cleanup']['removed_foreground_voxels'], 0)
             else:
                 self.assertFalse(labels.any())
                 self.assertEqual(report['frames'][frame]['added_voxels'], 0)
                 self.assertTrue(report['frames'][frame]['missing_predicted_anatomy'])
+        validate_nnunet.verify(subject, run / 'validation_stage01.json')
         return report
 
     def test_native_prediction_to_five_labels_preserves_manual_and_original_files(self):

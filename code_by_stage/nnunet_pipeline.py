@@ -82,10 +82,54 @@ def infer_cases(args, inputs, outputs):
                                  num_processes_preprocessing=1, num_processes_segmentation_export=1)
 
 
+def finalize_stage01_labels(mapped, grown, added, growth_report, original_z_slices):
+    """Clear whole-image terminal slices, retaining the unmodified growth evidence."""
+    if (grown.ndim != 3 or grown.shape != mapped.shape or grown.shape != added.shape or
+            grown.shape[2] < 1 or grown.shape[2] != original_z_slices):
+        raise ValueError('Segmentation and wall mask must match the original image Z stack.')
+    final, retained = grown.copy(), added.copy()
+    indices = sorted({0, original_z_slices - 1})
+    removed = []
+    for z in indices:
+        plane = grown[:, :, z]
+        values, counts = np.unique(plane[plane != 0], return_counts=True)
+        removed.append({'z': z, 'foreground_voxels_removed': int(np.count_nonzero(plane)),
+                        'added_wall_voxels_removed': int(np.count_nonzero(added[:, :, z])),
+                        'removed_label_counts': {str(int(v)): int(n) for v, n in zip(values, counts)}})
+        final[:, :, z] = 0
+        retained[:, :, z] = False
+    report = dict(growth_report)
+    report['growth_before_terminal_z_cleanup'] = growth_report
+    report['terminal_z_cleanup'] = {
+        'method': 'clear_first_and_last_slices_of_whole_original_Z_stack',
+        'original_z_slices': int(original_z_slices), 'slice_indices': indices,
+        'removed_foreground_voxels': sum(row['foreground_voxels_removed'] for row in removed),
+        'removed_added_wall_voxels': sum(row['added_wall_voxels_removed'] for row in removed),
+        'slices': removed, 'intermediate_slices_unchanged': bool(np.array_equal(final[:, :, 1:-1], grown[:, :, 1:-1])),
+        'shape_preserved': final.shape == grown.shape}
+    report['added_voxels'] = int(np.count_nonzero(retained))
+    report['label_counts'] = {str(int(v)): int(n) for v, n in zip(*np.unique(final, return_counts=True))}
+    report['protected_labels_unchanged'] = bool(np.array_equal(final[mapped != 0], mapped[mapped != 0]))
+    interior, original_interior = final[:, :, 1:-1], mapped[:, :, 1:-1]
+    report['nonterminal_protected_labels_unchanged'] = bool(np.array_equal(
+        interior[original_interior != 0], original_interior[original_interior != 0]))
+    report['slices'] = [dict(row) for row in growth_report['slices']]
+    for row in report['slices']:
+        row['terminal_slice_cleared'] = row['z'] in indices
+        if row['terminal_slice_cleared']:
+            row.update({'RV_voxels': 0, 'added_voxels': 0, 'skipped': True,
+                        'max_added_center_distance_mm': None, 'growth_or_RV_touches_image_edge': False})
+    return final, retained, report
+
+
 def stage01(args, subject, run_dir):
     source = subject / args.input_name
     if not source.is_file():
         raise FileNotFoundError(source)
+    source_shape = nib.load(source).shape
+    if len(source_shape) < 3 or source_shape[2] < 1:
+        raise ValueError('The original image must have a nonempty Z stack.')
+    original_z_slices = source_shape[2]
     plans = json.loads((args.nnunet_model_dir / 'plans.json').read_text())
     dataset = json.loads((args.nnunet_model_dir / 'dataset.json').read_text())
     expected = {'background': 0, 'LV blood pool': 1, 'LV myocardium': 2, 'RV blood pool': 3}
@@ -112,6 +156,8 @@ def stage01(args, subject, run_dir):
         data = np.asarray(phase.dataobj, dtype=np.float32)
         if data.ndim != 4 or data.shape[3] != 1:
             raise ValueError('Expected a singleton-time ED/ES image.')
+        if data.shape[2] != original_z_slices:
+            raise ValueError('Preprocessing changed the original image Z slice count: ' + frame)
         image = nib.Nifti1Image(data[..., 0], phase.affine, header=phase.header.copy())
         image.set_data_dtype(np.float32)
         nib.save(image, inputs / (subject.name + '_sax_' + frame + '_0000.nii.gz'))
@@ -132,6 +178,9 @@ def stage01(args, subject, run_dir):
                   '; saving predictions for inspection/manual correction, not inventing missing anatomy.', flush=True)
         final, added, report = expand_rv_myo_xy(mapped, phase.affine, args.rv_wall_radius_mm,
                                                phase.header.get_xyzt_units()[0], args.assume_mm_if_unknown)
+        final, added, report = finalize_stage01_labels(mapped, final, added, report, original_z_slices)
+        print('[nnUNet SAX]', frame, 'terminal Z cleanup:', report['terminal_z_cleanup']['slice_indices'],
+              'removed foreground voxels:', report['terminal_z_cleanup']['removed_foreground_voxels'], flush=True)
         output_dir = subject / 'segs'
         native_dir = output_dir / 'nnunet_native'
         native_dir.mkdir(exist_ok=True)
@@ -144,6 +193,9 @@ def stage01(args, subject, run_dir):
                        'RV_myocardium_is_synthetic': True, 'output': str(final_path),
                        'native_prediction': str(native_dir / ('seg_lvsa_' + frame + '.nii.gz')),
                        'missing_predicted_anatomy': missing,
+                       'missing_final_anatomy': [name for value, name in ((1, 'LV blood pool'), (2, 'LV myocardium'),
+                                                                       (3, 'RV myocardium'), (4, 'RV blood pool'))
+                                                 if not np.any(final == value)],
                        'all_foreground_classes_present': all(np.any(final == value) for value in (1, 2, 3, 4))})
         (output_dir / ('rv_myo_added_' + frame + '_summary.json')).write_text(json.dumps(report, indent=2) + '\n')
         frame_reports[frame] = report
@@ -154,6 +206,7 @@ def stage01(args, subject, run_dir):
               'status': 'success' if ready else 'completed_requires_manual_correction',
               'all_foreground_classes_present': ready,
               'subject': subject.name, 'SAX_only': True, 'configuration': '2d',
+              'original_image_shape': list(source_shape),
               'folds': args.folds, 'checkpoint': args.checkpoint, 'model_dir': str(args.nnunet_model_dir),
               'input_image_sha256': original_hash, 'original_and_manual_inputs_unchanged': True,
               'work_dir': str(work), 'frames': frame_reports}
