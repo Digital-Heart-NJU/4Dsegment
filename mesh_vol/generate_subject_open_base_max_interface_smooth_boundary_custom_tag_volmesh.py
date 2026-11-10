@@ -26,8 +26,8 @@ from typing import Callable, Dict, List, Optional, Sequence, Tuple
 import numpy as np
 import pyvista as pv
 
-from code_explain.tmps import generate_subject_open_base_zrule_volmesh as base, \
-    generate_subject_open_base_bloodpool_cap_volmesh as cap_utils
+from code_explain.tmps import generate_subject_open_base_bloodpool_cap_volmesh as cap_utils, \
+    generate_subject_open_base_zrule_volmesh as base
 from custom_vtk import write_custom_vtk
 
 

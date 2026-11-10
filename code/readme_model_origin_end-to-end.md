@@ -757,7 +757,7 @@ to be replaced. It also retains the first-subject-only decimation limitation.
 preserves the Z stack, orientation, and frames, and robustly scales positive
 intensities to int16 values up to 4095 using their 99.5th percentile.
 It does not center-pad to 512 x 512. It is not imported or called by DMACS.
-The separate input-cropping script under `additional_function/` is likewise
+The separate input-cropping script under `../addi_func` is likewise
 not an automatic model step.
 
 ## 12. How to Inspect Results and Diagnose Differences

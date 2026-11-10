@@ -53,7 +53,7 @@ def phase_image_path(subject, frame):
     raise IOError('Missing phase image {0}; run Stage 01 first.'.format(os.path.join(subject, name)))
 
 
-def validate_segmentations(subjects, manual=False):
+def validate_segmentations(subjects, manual=False, require_foreground=False):
     """Check every subject before any resumed processing or phase restoration."""
     records = []
     for subject in subjects:
@@ -73,8 +73,9 @@ def validate_segmentations(subjects, manual=False):
             labels = np.unique(data)
             if not np.isin(labels, np.arange(5)).all():
                 raise ValueError('Segmentation must contain integer labels 0..4: ' + path)
-            if manual and not np.isin(np.arange(1, 5), labels).all():
-                raise ValueError('Manual input needs labels 1, 2, 3, 4 for ventricular surfaces: ' + path)
+            if (manual or require_foreground) and not np.isin(np.arange(1, 5), labels).all():
+                source = 'Manual' if manual else 'Automatic'
+                raise ValueError(source + ' input needs labels 1, 2, 3, 4 for ventricular surfaces: ' + path)
             records.append({'subject': os.path.basename(subject), 'frame': frame,
                             'segmentation': path, 'phase_image': phase_path,
                             'labels': [int(value) for value in labels]})
@@ -171,11 +172,16 @@ def validate_stage03_outputs(subjects, test_dir):
     require_file(os.path.join(test_dir, 'matchedpointsnew.txt'))
 
 
-def record_stage(subjects, stage, inputs):
+def record_stage(subjects, stage, inputs, seg_manual=None):
     for subject in subjects:
         record = {'stage': stage, 'status': 'success', 'subject': os.path.basename(subject),
                   'input_sha256': dict((path, value) for path, value in inputs.items()
                                        if os.path.dirname(path).startswith(subject + os.sep))}
+        if seg_manual is not None:
+            record.update({'seg_manual': bool(seg_manual),
+                           'segmentation_source': 'manual' if seg_manual else 'automatic',
+                           'segmentation_inputs': {frame: segmentation_path(subject, frame, seg_manual)
+                                                   for frame in FRAMES}})
         path = os.path.join(subject, 'dmacs_' + stage + '_summary.json')
         with open(path, 'w') as handle:
             json.dump(record, handle, indent=2, sort_keys=True)

@@ -2,8 +2,10 @@
 from __future__ import print_function
 
 import imp
+import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -35,6 +37,7 @@ class Flags(object):
     template_PH = '/vtks/2'
     coreNo = 8
     irtk = True
+    seg_manual = True
 
 
 class StageTests(unittest.TestCase):
@@ -114,6 +117,92 @@ class StageTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             stages.validate_segmentations([self.subject], manual=True)
 
+    def run_selected_stage02(self, manual):
+        flags = Flags()
+        flags.test_dir = self.root
+        flags.stage02_surf_only = True
+        flags.seg_manual = manual
+        selected = []
+
+        def refine(*args, **kwargs):
+            self.assertEqual(kwargs['segmentation_suffix'], '_manual' if manual else '')
+            for frame in stages.FRAMES:
+                path = stages.segmentation_path(self.subject, frame, manual)
+                selected.append(path)
+                with mock.patch.object(image_utils.os, 'system', return_value=0):
+                    image_utils.moveVolumes(self.subject, os.path.join(self.subject, 'sizes'), frame,
+                                            segmentation_input=path)
+
+        with mock.patch.object(DMACS, 'multiatlasreg3D', side_effect=refine), \
+                mock.patch.object(DMACS, 'meshCoregstration') as mesh, \
+                mock.patch.object(DMACS, 'raw_surface_inputs', return_value=[]), \
+                mock.patch.object(DMACS, 'deeplearningseg') as inference:
+            DMACS.run_pipeline(flags)
+            inference.assert_not_called()
+            self.assertEqual(mesh.call_args[1], {'mode': 'extract'})
+        for frame, path in zip(stages.FRAMES, selected):
+            archive = os.path.join(self.subject, 'sizes', '2D_segmentation_' + frame + '.nii.gz')
+            self.assertEqual(stages.file_hash(path), stages.file_hash(archive))
+        with open(os.path.join(self.subject, 'dmacs_stage02_surf_only_summary.json')) as handle:
+            record = json.load(handle)
+        self.assertEqual(record['seg_manual'], manual)
+        self.assertEqual(record['segmentation_source'], 'manual' if manual else 'automatic')
+        self.assertEqual(record['segmentation_inputs'], dict(zip(stages.FRAMES, selected)))
+        return record
+
+    def test_stage02_automatic_input_does_not_require_manual_files(self):
+        for frame in stages.FRAMES:
+            os.unlink(stages.segmentation_path(self.subject, frame, True))
+        self.run_selected_stage02(False)
+        for frame in stages.FRAMES:
+            self.assertFalse(os.path.exists(stages.segmentation_path(self.subject, frame, True)))
+
+    def test_stage02_automatic_input_ignores_different_manual_labels(self):
+        for frame in stages.FRAMES:
+            self.save_segmentation(frame, manual=True, labels=self.labels[::-1].copy())
+        self.run_selected_stage02(False)
+
+    def test_stage02_manual_input_ignores_different_automatic_labels(self):
+        for frame in stages.FRAMES:
+            self.save_segmentation(frame, manual=False, labels=self.labels[::-1].copy())
+        self.run_selected_stage02(True)
+
+    def test_stage02_manual_input_does_not_require_automatic_files(self):
+        for frame in stages.FRAMES:
+            os.unlink(stages.segmentation_path(self.subject, frame, False))
+        self.run_selected_stage02(True)
+
+    def test_stage02_selected_source_missing_never_falls_back(self):
+        for manual in (False, True):
+            path = stages.segmentation_path(self.subject, 'ES', manual)
+            os.unlink(path)
+            flags = Flags()
+            flags.test_dir, flags.stage02_surf_only, flags.seg_manual = self.root, True, manual
+            with mock.patch.object(DMACS, 'multiatlasreg3D') as refine, \
+                    mock.patch.object(DMACS, 'meshCoregstration') as mesh:
+                with self.assertRaises(IOError):
+                    DMACS.run_pipeline(flags)
+                refine.assert_not_called()
+                mesh.assert_not_called()
+            self.save_segmentation('ES', manual=manual)
+
+    def test_stage02_automatic_input_requires_all_foreground_classes(self):
+        self.save_segmentation('ES', manual=False, labels=np.zeros_like(self.labels))
+        flags = Flags()
+        flags.test_dir, flags.stage02_surf_only, flags.seg_manual = self.root, True, False
+        with mock.patch.object(DMACS, 'multiatlasreg3D') as refine, \
+                mock.patch.object(DMACS, 'meshCoregstration') as mesh:
+            with self.assertRaises(ValueError):
+                DMACS.run_pipeline(flags)
+            refine.assert_not_called()
+            mesh.assert_not_called()
+
+    def test_legacy_cli_parses_seg_manual_default_true_and_false(self):
+        code = 'import DMACS; print("SEG_MANUAL=" + str(DMACS.FLAGS.seg_manual))'
+        for argument, expected in (([], 'True'), (['--seg_manual=true'], 'True'), (['--seg_manual=false'], 'False')):
+            output = subprocess.check_output([sys.executable, '-B', '-c', code] + argument)
+            self.assertIn('SEG_MANUAL=' + expected, output.decode('utf-8'))
+
     def test_archived_phases_are_validated_then_restored(self):
         sizes = os.path.join(self.subject, 'sizes')
         os.makedirs(sizes)
@@ -173,6 +262,8 @@ class StageTests(unittest.TestCase):
                 elif stage == 'stage02_surf_only':
                     self.assertEqual(calls['multiatlasreg3D'].call_args[1], {'segmentation_suffix': '_manual'})
                     self.assertEqual(calls['meshCoregstration'].call_args[1], {'mode': 'extract'})
+                    self.assertEqual(calls['validate_segmentations'].call_args[1],
+                                     {'manual': True, 'require_foreground': True})
                 elif stage == 'stage03_addi_mot_fit':
                     self.assertEqual(calls['meshCoregstration'].call_args[1], {'mode': 'fit'})
                 self.assertEqual(calls['record_stage'].call_count, 1)

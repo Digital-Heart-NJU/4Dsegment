@@ -1,6 +1,6 @@
 # 4Dsegment Pipeline: Input To Segmentation And Mesh Outputs
 
-This note explains the runtime pipeline in `code/DMACS.py`, from the input cine MRI file to the segmentation and mesh outputs. It focuses on files produced by the original 4Dsegment pipeline, not on the extra experimental volume-mesh scripts in `code_explain/`.
+This note explains the runtime pipeline in `../code/DMACS.py`, from the input cine MRI file to the segmentation and mesh outputs. It focuses on files produced by the original 4Dsegment pipeline, not on the extra experimental volume-mesh scripts in ``.
 
 The active execution order is:
 
@@ -12,7 +12,7 @@ motionTracking
 decimate
 ```
 
-The 2D atlas refinement function `multiatlasreg2D` exists in `code/p1processing.py`, but it is commented out in `DMACS.py`, so it is not part of the default run.
+The 2D atlas refinement function `multiatlasreg2D` exists in `../code/p1processing.py`, but it is commented out in `DMACS.py`, so it is not part of the default run.
 
 ## Runtime And Path Assumptions
 
@@ -26,14 +26,14 @@ Inside Docker, the default paths are:
 
 | Flag | Default path | Meaning |
 |---|---|---|
-| `test_dir` | `/data` | Subject input/output folders. This is usually mounted from local `data/`. |
+| `test_dir` | `/data` | Subject input/output folders. This is usually mounted from local `../data`. |
 | `model_path` | `/model/vgg_RE_network.ckpt-50000` | TensorFlow 1 checkpoint for CNN segmentation. |
 | `atlas_dir` | `/refs` | Atlas segmentations and atlas landmarks used for shape refinement. |
 | `param_dir` | `/par` | Registration parameter files. |
 | `template_dir` | `/vtks/1` | ED/ES static mesh template used by `meshfitting.py`. |
 | `template_PH` | `/vtks/2` | RV motion template used by `motionEstimation.py`. |
 
-For normal running, local `data/`, `code/`, and `model/` are mounted into Docker as `/data`, `/code`, and `/model`.
+For normal running, local `../data`, `code/`, and `model/` are mounted into Docker as `/data`, `/code`, and `/model`.
 
 ## Expected Input Layout
 
@@ -282,7 +282,7 @@ Input:
 /vtks/1/vtk_LV_ES.nii.gz
 ```
 
-At the start of this stage, the code removes existing subject root `*.txt`, clears `vtks/`, and clears `tmps/`.
+At the start of this stage, the code removes existing subject root `*.txt`, clears `vtks/`, and clears `tmps`.
 
 ### 4.1 Binary Mask Extraction From Final Segmentation
 
@@ -605,6 +605,6 @@ For RV motion through the full cine sequence:
 
 - The default pipeline does not calculate Dice, Hausdorff distance, or HD95. It produces segmentations, meshes, motion meshes, volume summaries, and per-vertex scalar feature exports.
 - The final segmentation used for mesh generation is `PHsegmentation_ED.gipl` and `PHsegmentation_ES.gipl`, not the raw CNN outputs in `segs/`.
-- The original pipeline outputs surface meshes in `.vtk` format. The `volmesh/` files under local sample data are from separate later scripts in `code_explain/`, not from the default `DMACS.py` pipeline.
+- The original pipeline outputs surface meshes in `.vtk` format. The `volmesh/` files under local sample data are from separate later scripts in ``, not from the default `DMACS.py` pipeline.
 - The RV output naming is easy to misread: `S_RV_*`, `W_RV_*`, and `C_RV_*` refer to the fitted RV surface; `RVepi_*` and `N_RVepi_*` are the RV outer/wall surface context.
-- Most files in `dofs/` and `tmps/` are registration intermediates. Keep them for debugging, but use `PHsegmentation_*`, `vtks/`, root scalar `.txt` files, and `motion/RV_fr*` for analysis.
+- Most files in `dofs/` and `tmps` are registration intermediates. Keep them for debugging, but use `PHsegmentation_*`, `vtks/`, root scalar `.txt` files, and `motion/RV_fr*` for analysis.

@@ -1,6 +1,6 @@
 # generate_open_volmesh_stable.py Requested Pipeline
 
-This note documents the current pipeline implemented in `model_vol_septum/generate_open_volmesh_stable.py`. It focuses on the path from four input surface meshes to the step-wise open-base surfaces, LV/RV myocardial shells, and optional TetGen volume mesh.
+This note documents the current pipeline implemented in `../model_vol_septum/generate_open_volmesh_stable.py`. It focuses on the path from four input surface meshes to the step-wise open-base surfaces, LV/RV myocardial shells, and optional TetGen volume mesh.
 
 ## Inputs
 

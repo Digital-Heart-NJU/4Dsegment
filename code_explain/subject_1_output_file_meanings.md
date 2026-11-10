@@ -1,6 +1,6 @@
 # Subject 1 Output File Meanings
 
-This note maps the two papers in `code_explain/` to the code and to the files generated for `data/subject_1`.
+This note maps the two papers in `` to the code and to the files generated for `../data/subject_1`.
 
 The short version:
 
@@ -8,7 +8,7 @@ The short version:
 - For final static LV myocardium mesh, use `vtks/S_LVmyo_ED.vtk` and `vtks/S_LVmyo_ES.vtk`.
 - For final static RV surface mesh, use `vtks/S_RV_ED.vtk` and `vtks/S_RV_ES.vtk`.
 - For RV wall context, also inspect `vtks/N_RVepi_ED.vtk`, `vtks/N_RVepi_ES.vtk`, `vtks/W_RV_ED.vtk`, and `vtks/W_RV_ES.vtk`.
-- Ignore most `tmps/`, `dofs/`, and `motion/` files unless debugging registration or RV motion.
+- Ignore most `tmps`, `dofs/`, and `motion/` files unless debugging registration or RV motion.
 
 ## Paper To Code Mapping
 
@@ -20,10 +20,10 @@ The segmentation paper describes a pipeline with:
 
 In this repository, that corresponds to:
 
-- `code/DMACS.py`: main runner.
-- `code/deepseg.py`: CNN segmentation of ED and ES frames.
-- `code/p2processing.py`: 3D atlas shape refinement.
-- `code/meshfitting.py`: mesh extraction, template fitting, scalar calculation.
+- `../code/DMACS.py`: main runner.
+- `../code/deepseg.py`: CNN segmentation of ED and ES frames.
+- `../code/p2processing.py`: 3D atlas shape refinement.
+- `../code/meshfitting.py`: mesh extraction, template fitting, scalar calculation.
 
 The motion/survival paper describes:
 
@@ -34,10 +34,10 @@ The motion/survival paper describes:
 
 In this repository, that corresponds mainly to:
 
-- `code/motionEstimation.py`: RV motion tracking across frames.
-- `code/decimation.py`: lower-resolution RV motion mesh generation.
+- `../code/motionEstimation.py`: RV motion tracking across frames.
+- `../code/decimation.py`: lower-resolution RV motion mesh generation.
 
-The actual execution order is in `code/DMACS.py`:
+The actual execution order is in `../code/DMACS.py`:
 
 ```text
 deeplearningseg
@@ -61,15 +61,15 @@ The mesh code reveals the final segmentation labels:
 
 Important distinction: the code does not output a file named `S_RVmyo`. It outputs RV endocardial/cavity surface as `S_RV_*`, and RV wall/epicardial context through `RVepi_*`, `N_RVepi_*`, and `W_RV_*`.
 
-## Top-Level `data/` Files
+## Top-Level `../data` Files
 
 These files are outside `subject_1`, but generated for the subject:
 
 | File | Meaning |
 |---|---|
-| `data/subjnames.txt` | List of processed subject folder names. Created by `deepseg.py`. |
-| `data/subject_1_ED.txt` | ED volume summary from final `PHsegmentation_ED.gipl`. Values are written in label order: LV cavity, LV myocardium, RV cavity, RV myocardium. Myocardium values are scaled by 1.05 in the code. |
-| `data/subject_1_ES.txt` | Same as above for ES. |
+| `../data/subjnames.txt` | List of processed subject folder names. Created by `deepseg.py`. |
+| `../data/subject_1_ED.txt` | ED volume summary from final `PHsegmentation_ED.gipl`. Values are written in label order: LV cavity, LV myocardium, RV cavity, RV myocardium. Myocardium values are scaled by 1.05 in the code. |
+| `../data/subject_1_ES.txt` | Same as above for ES. |
 
 For current `subject_1`, these are:
 
@@ -78,7 +78,7 @@ subject_1_ED.txt: 79371.9 106739 252175 51436.9
 subject_1_ES.txt: 31284.4 107838 202766 58632.7
 ```
 
-## `data/subject_1/` Root Files
+## `../data/subject_1` Root Files
 
 | File pattern | Stage | Meaning |
 |---|---|---|
@@ -101,7 +101,7 @@ subject_1_ES.txt: 31284.4 107838 202766 58632.7
 | `rv_ed_signeddistances.txt` | mesh scalar export | Per-vertex RV signed distance relative to template at ED, from `vtks/S_RV_ED.vtk`. |
 | `rv_es_signeddistances.txt` | mesh scalar export | Per-vertex RV signed distance relative to template at ES. |
 
-## `data/subject_1/segs/`
+## `../data/subject_1/segs`
 
 | File | Stage | Meaning |
 |---|---|---|
@@ -110,7 +110,7 @@ subject_1_ES.txt: 31284.4 107838 202766 58632.7
 
 These are useful for debugging the network, but they are not the final segmentation.
 
-## `data/subject_1/sizes/`
+## `../data/subject_1/sizes`
 
 | File | Stage | Meaning |
 |---|---|---|
@@ -123,7 +123,7 @@ These are useful for debugging the network, but they are not the final segmentat
 
 The code attempts to archive `2D_segmentation_ED/ES.nii.gz`, but in this run the raw CNN files remained in `segs/` instead.
 
-## `data/subject_1/dofs/`
+## `../data/subject_1/dofs`
 
 These are deformation/registration transform files. They are not meshes or segmentations.
 
@@ -135,7 +135,7 @@ These are deformation/registration transform files. They are not meshes or segme
 
 You can usually ignore `dofs/` unless checking why atlas refinement failed.
 
-## `data/subject_1/tmps/`
+## `../data/subject_1/tmps`
 
 Temporary registration and mesh-extraction workspace. Most files here are intermediates.
 
@@ -154,9 +154,9 @@ Temporary registration and mesh-extraction workspace. Most files here are interm
 | `lvEDfinal.dof.gz`, `lvESfinal.dof.gz` | Final LV mesh fitting transforms. |
 | `rvEDds8.dof.gz`, `rvESds8.dof.gz` | Final RV surface fitting transforms. |
 
-For normal analysis, ignore `tmps/`.
+For normal analysis, ignore `tmps`.
 
-## `data/subject_1/vtks/`
+## `../data/subject_1/vtks`
 
 This is the main mesh folder. Suffixes:
 
@@ -214,7 +214,7 @@ vtks/W_RV_ED.vtk
 vtks/W_RV_ES.vtk
 ```
 
-## `data/subject_1/motion/`
+## `../data/subject_1/motion`
 
 This folder corresponds to the motion/survival paper more than the segmentation paper. It is mostly RV motion tracking.
 

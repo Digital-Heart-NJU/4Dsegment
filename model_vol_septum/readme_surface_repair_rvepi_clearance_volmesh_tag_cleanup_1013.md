@@ -61,8 +61,8 @@ The initial report recorded all six completing and the original VTKS remaining
 unchanged. At that time, stage numbers and the final active stage differed from
 the current ten-stage pipeline.
 
-Evidence: [initial run summary](pipeline_test_20261013_211542/run_summary.json)
-and [initial validation](pipeline_test_20261013_211542/validation_summary.json).
+Evidence: [initial run summary](template_trash/pipeline_test_20261013_211542/run_summary.json)
+and [initial validation](template_trash/pipeline_test_20261013_211542/validation_summary.json).
 
 ### 1.3 Diagnosing incomplete RVepi movement in the former Step 05
 
@@ -93,7 +93,7 @@ cases because of reported input/diagnostic-closure intersections. It was not
 accepted as the final default solver. Later intersection confirmation and the
 signed solver replaced this trial as the validated approach.
 
-Evidence: [triangle trial summary](step05_triangle_trial_20261013_215206/trial_summary.json).
+Evidence: [triangle trial summary](template_trash/step05_triangle_trial_20261013_215206/trial_summary.json).
 The intersection messages in that report are historical diagnostics; they should
 not be confused with the later confirmed-intersection validation results.
 
@@ -110,7 +110,7 @@ basename, routed downstream stages through the cleaned copies, and shifted the
 later active stage numbers by one. RVepi movement consequently became Step 06.
 The confirmed validation covered 24 input surfaces across six subject/frame cases.
 
-Evidence: [confirmed Step 02 validation](step02_meshfix_validation_20261013_220835_confirmed/validation_summary.json).
+Evidence: [confirmed Step 02 validation](template_trash/step02_meshfix_validation_20261013_220835_confirmed/validation_summary.json).
 This historical report used the vertex solver, which was still the default then.
 
 ### 1.5 Fixing RVepi vertices inside RVendo in Step 06
@@ -130,8 +130,8 @@ Implemented the signed triangle-distance solver with a cleaned, closed Step 02
 RVendo as the inside/outside reference. All six saved Step 06 results passed the
 clearance, containment, and self-intersection checks. This became the default.
 
-Evidence: [signed solver runs](step06_signed_validation/run_summary.json) and
-[saved-mesh validation](step06_signed_validation/saved_mesh_validation.json).
+Evidence: [signed solver runs](template_trash/step06_signed_validation/run_summary.json) and
+[saved-mesh validation](template_trash/step06_signed_validation/saved_mesh_validation.json).
 
 ### 1.6 Disabling the old Step 08 point filter
 
@@ -158,7 +158,7 @@ and export path to preserve small intersection triangles. Direct generation stil
 encountered genuine surface intersections in subject 3 ES; four offending triangle
 pairs were recorded. This motivated the following explicit surface-cleaning stage.
 
-Evidence: [subject 3 ES defect record](step08_tetgen_validation/subject_3_ES_input_defect.json).
+Evidence: [subject 3 ES defect record](template_trash/step08_tetgen_validation/subject_3_ES_input_defect.json).
 
 ### 1.8 Making Step 08 clean the combined surface; moving TetGen to Step 09
 
@@ -172,7 +172,7 @@ Step 09 read that exact saved output. The Step 07 source remained unchanged.
 All six cleaned surfaces and generated volumes passed validation; subject 3 ES
 went from four confirmed intersection pairs to zero.
 
-Evidence: [Step 08/09 validation](step08_meshfix_step09_validation/validation_summary.json).
+Evidence: [Step 08/09 validation](template_trash/step08_meshfix_step09_validation/validation_summary.json).
 
 ### 1.9 Adding initial LV/RV tags in Step 10
 
@@ -189,8 +189,8 @@ RV. Mesh coordinates, tetrahedron connectivity, and order are preserved.
 The first implementation reported disconnected groups without changing them.
 All six tagging cases passed, with 24 active regression tests passing at that point.
 
-Evidence: [initial tagging results](step10_tagging_validation/run_summary.json)
-and [initial tagging audit](step10_tagging_validation/validation_summary.json).
+Evidence: [initial tagging results](template_trash/step10_tagging_validation/run_summary.json)
+and [initial tagging audit](template_trash/step10_tagging_validation/validation_summary.json).
 
 ### 1.10 Adding neighborhood cleanup after initial tagging
 
@@ -456,8 +456,8 @@ these cases. Both tags remained present; saved `elemTag` was int32; `tagChanged`
 exactly matched the difference from the saved initial tags. Both tagged files
 preserved Step 09 points, cells, cell types, and ordering. Input hashes were unchanged.
 
-Evidence: [cleanup audit](step10_cleanup_validation/validation_summary.json)
-and [cleanup run log](step10_cleanup_validation/run.log).
+Evidence: [cleanup audit](template_trash/step10_cleanup_validation/validation_summary.json)
+and [cleanup run log](template_trash/step10_cleanup_validation/run.log).
 
 ### 5.2 Earlier validation milestones
 
@@ -502,7 +502,7 @@ reported rather than silently forced into a label.
 | [generate_step09_volume.py](generate_step09_volume.py) | TetGen generation, volume/boundary checks, validated saved untagged output. |
 | [tag_step10_volume.py](tag_step10_volume.py) | Face connectivity, sequential tag cleanup, before/after reports, validated tagged outputs. |
 | [Step 10 tests](tests/test_step10_tagging.py) | Classification, geometry preservation, shared-face adjacency, sequential convergence, thresholds, unsupported groups, saved flags, failure preservation. |
-| [cleanup validation runner](step10_cleanup_validation/run_validation.py) | Six-case Step 10 rerun and saved-artifact audit. |
+| [cleanup validation runner](template_trash/step10_cleanup_validation/run_validation.py) | Six-case Step 10 rerun and saved-artifact audit. |
 
 Other active regression files are listed in the command below. This is a role
 inventory, not a claim that all files were newly created in the latest cleanup edit.
@@ -577,12 +577,12 @@ This was a test expectation issue, not a failure of the six saved meshes.
 
 Exact recorded subject/frame arguments and exit codes are available in:
 
-- [initial six-case commands](pipeline_test_20261013_211542/run_summary.json);
-- [triangle trial commands](step05_triangle_trial_20261013_215206/trial_summary.json),
+- [initial six-case commands](template_trash/pipeline_test_20261013_211542/run_summary.json);
+- [triangle trial commands](template_trash/step05_triangle_trial_20261013_215206/trial_summary.json),
   using `--step5-clearance-method triangle` and `volmesh_pipline_triangle_trial`;
-- [confirmed MeshFix runs](step02_meshfix_validation_20261013_220835_confirmed/run_summary.json);
-- [signed movement commands](step06_signed_validation/run_summary.json);
-- [Step 08/09 runs](step08_meshfix_step09_validation/run_summary.json).
+- [confirmed MeshFix runs](template_trash/step02_meshfix_validation_20261013_220835_confirmed/run_summary.json);
+- [signed movement commands](template_trash/step06_signed_validation/run_summary.json);
+- [Step 08/09 runs](template_trash/step08_meshfix_step09_validation/run_summary.json).
 
 This file records the substantive commands and points to their detailed logs;
 it is not a reconstructed shell transcript of every source inspection command.

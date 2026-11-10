@@ -157,6 +157,29 @@ class LauncherTests(unittest.TestCase):
                                 text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('--rv-wall-radius-mm', result.stdout)
+        self.assertIn('--seg_manual', result.stdout)
+
+    def test_stage02_forwards_manual_selection_to_docker_without_inference(self):
+        for options, expected in (([], True), (['--seg_manual=true'], True),
+                                  (['--seg_manual=false'], False), (['--seg_manual', 'false'], False)):
+            with tempfile.TemporaryDirectory() as root:
+                subject = Path(root) / 'subject_test'
+                subject.mkdir()
+                with mock.patch.object(nnunet_pipeline, 'run_logged') as call, \
+                        mock.patch.object(nnunet_pipeline, 'stage01') as inference:
+                    nnunet_pipeline.main(['--data-dir', root, '--subject', subject.name,
+                                          '--run-dir', str(Path(root) / 'run'),
+                                          '--stage02_surf_only=true'] + options)
+                inference.assert_not_called()
+                self.assertEqual(call.call_count, 1)
+                command = call.call_args[0][0]
+                self.assertIn('--stage02_surf_only=true', command)
+                self.assertIn('--seg_manual=' + str(expected).lower(), command)
+                self.assertFalse(list(subject.rglob('*_manual.nii.gz')))
+
+    def test_invalid_manual_selection_value_is_rejected(self):
+        with self.assertRaises(SystemExit):
+            nnunet_pipeline.main(['--subject', 'unused', '--seg_manual=invalid'])
 
     def test_conflicting_true_flags_rejected(self):
         with self.assertRaises(SystemExit):
@@ -168,9 +191,10 @@ class LauncherTests(unittest.TestCase):
             with mock.patch.object(nnunet_pipeline, 'run_logged') as call:
                 nnunet_pipeline.main(['--data-dir', root, '--subject', 'subject_test',
                                       '--run-dir', str(Path(root) / 'run'),
-                                      '--stage01_seg_only=false', '--stage03_addi_mot_fit=true'])
+                                      '--stage01_seg_only=false', '--stage03_addi_mot_fit=true', '--seg_manual=false'])
             self.assertEqual(call.call_count, 1)
             self.assertIn('--stage03_addi_mot_fit=true', call.call_args[0][0])
+            self.assertFalse(any(item.startswith('--seg_manual=') for item in call.call_args[0][0]))
 
     def test_full_mode_uses_automatic_refinement_without_manual_copies(self):
         with tempfile.TemporaryDirectory() as root:

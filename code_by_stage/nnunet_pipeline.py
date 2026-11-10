@@ -222,6 +222,8 @@ def main(argv=None):
     parser.add_argument('--input-name', default='example.nii')
     for name in ('stage01_seg_only', 'stage02_surf_only', 'stage03_addi_mot_fit'):
         parser.add_argument('--' + name, type=boolean, nargs='?', const=True, default=False)
+    parser.add_argument('--seg_manual', type=boolean, nargs='?', const=True, default=True,
+                        help='Stage 02 only: true selects _manual labels; false selects automatic labels.')
     parser.add_argument('--nnunet-workspace', type=Path, default=REPO / 'model_nnunet/nnunet_workspace')
     parser.add_argument('--nnunet-model-dir', type=Path)
     parser.add_argument('--checkpoint', default='checkpoint_final.pth')
@@ -263,9 +265,11 @@ def main(argv=None):
                                      ['--coreNo', str(args.coreNo), '--irtk', str(args.irtk)])
             run_logged(command, run_dir / 'stage02.log')
             stage = 'stage03_addi_mot_fit'
-        command = docker_command(args, subject, run_dir, 'DMACS.py',
-                                 ['--' + stage + '=true', '--coreNo', str(args.coreNo),
-                                  '--irtk', str(args.irtk), '--model_path', '/must_not_be_loaded'])
+        extra = ['--' + stage + '=true', '--coreNo', str(args.coreNo),
+                 '--irtk', str(args.irtk), '--model_path', '/must_not_be_loaded']
+        if stage == 'stage02_surf_only':
+            extra.append('--seg_manual=' + str(args.seg_manual).lower())
+        command = docker_command(args, subject, run_dir, 'DMACS.py', extra)
         run_logged(command, run_dir / ('stage02.log' if stage == 'stage02_surf_only' else 'stage03.log'))
     print('[nnUNet SAX] Completed in %.3f seconds.' % (time.time() - started), flush=True)
 

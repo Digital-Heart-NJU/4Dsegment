@@ -61,7 +61,8 @@ tf.app.flags.DEFINE_string('template_dir', '/vtks/1', 'Path to the template.')
 tf.app.flags.DEFINE_string('template_PH', '/vtks/2', 'Path to the template.')
 tf.app.flags.DEFINE_boolean('irtk', True, 'use irtk or not')
 tf.app.flags.DEFINE_boolean('stage01_seg_only', False, 'Preprocess and segment ED/ES, then stop.')
-tf.app.flags.DEFINE_boolean('stage02_surf_only', False, 'Refine manual ED/ES segmentations and extract raw surfaces, then stop.')
+tf.app.flags.DEFINE_boolean('stage02_surf_only', False, 'Refine selected ED/ES segmentations and extract raw surfaces, then stop.')
+tf.app.flags.DEFINE_boolean('seg_manual', False, 'Stage 02 input: true selects _manual labels; false selects automatic labels.')
 tf.app.flags.DEFINE_boolean('stage03_addi_mot_fit', False, 'Fit saved raw surfaces, compute measurements and motion, then decimate.')
 tf.app.flags.DEFINE_string('segmentation_backend', 'legacy', 'legacy in Docker, or nnunet through modern host Python.')
 
@@ -83,12 +84,14 @@ def run_pipeline(flags):
         if stage == 'stage01_seg_only':
             validate_segmentations(subjects)
         elif stage == 'stage02_surf_only':
-            records = validate_segmentations(subjects, manual=True)
+            seg_manual = getattr(flags, 'seg_manual', True)
+            records = validate_segmentations(subjects, manual=seg_manual, require_foreground=True)
             for record in records:
-                print('[DMACS stages] Manual refinement input: ' + record['segmentation'])
+                source = 'Manual' if seg_manual else 'Automatic'
+                print('[DMACS stages] ' + source + ' refinement input: ' + record['segmentation'])
             prepare_refinement_inputs(subjects)
             multiatlasreg3D(flags.test_dir, flags.atlas_dir, flags.param_dir,
-                            flags.coreNo, True, flags.irtk, segmentation_suffix='_manual')
+                            flags.coreNo, True, flags.irtk, segmentation_suffix='_manual' if seg_manual else '')
             meshCoregstration(flags.test_dir, flags.param_dir, flags.template_dir,
                              flags.coreNo, True, False, mode='extract')
             raw_surface_inputs(subjects)
@@ -107,7 +110,10 @@ def run_pipeline(flags):
             motionTracking(flags.test_dir, flags.param_dir, flags.template_PH, flags.coreNo, True)
             decimate(flags.test_dir, flags.coreNo, False)
             validate_stage03_outputs(subjects, flags.test_dir)
-    record_stage(subjects, stage, recorded_hashes)
+    if stage == 'stage02_surf_only':
+        record_stage(subjects, stage, recorded_hashes, seg_manual=seg_manual)
+    else:
+        record_stage(subjects, stage, recorded_hashes)
     if stage == 'stage01_seg_only':
         print('[DMACS stages] Stage 01 complete. Save edited labels as segs/seg_lvsa_ED_manual.nii.gz and seg_lvsa_ES_manual.nii.gz.')
     elif stage == 'stage02_surf_only':

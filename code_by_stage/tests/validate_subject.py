@@ -59,7 +59,13 @@ def verify(subject, run_dir, stage, require_manual_copy=False):
     if stage == '02':
         assert actual_vtks == raw_names, 'Stage 02 produced unexpected prefixed surfaces.'
         assert not list((subject / 'motion').glob('RV_fr*.vtk'))
-        assert 'Manual refinement input:' in log
+        seg_manual = stage_inputs.get('seg_manual', True)
+        source = 'Manual' if seg_manual else 'Automatic'
+        assert source + ' refinement input:' in log
+        report['seg_manual'] = seg_manual
+        report['segmentation_source'] = source.lower()
+        if require_manual_copy and not seg_manual:
+            raise ValueError('--require-manual-copy applies only to manual-input Stage 02 runs.')
         files = [subject / 'vtks' / name for name in raw_names]
         files += list((subject / 'tmps').glob('vtk_*.nii.gz'))
         files += list((subject / 'segs').glob('seg_lvsa_*.nii.gz'))
@@ -67,15 +73,20 @@ def verify(subject, run_dir, stage, require_manual_copy=False):
             str(path.relative_to(subject)): digest(path) for path in sorted(files)
         }
         report['no_fitted_surfaces_or_motion'] = True
-        report['manual_test_copies_are_unedited'] = {}
+        if seg_manual:
+            report['manual_test_copies_are_unedited'] = {}
         for frame in frames:
             manual = subject / 'segs' / ('seg_lvsa_' + frame + '_manual.nii.gz')
             automatic = subject / 'segs' / ('seg_lvsa_' + frame + '.nii.gz')
             archive = subject / 'sizes' / ('2D_segmentation_' + frame + '.nii.gz')
-            assert digest(manual) == digest(archive)
-            report['manual_test_copies_are_unedited'][frame] = bool(np.array_equal(
-                np.asarray(nib.load(manual).dataobj), np.asarray(nib.load(automatic).dataobj)))
-        report['manual_inputs_match_archived_2D_segmentations'] = True
+            selected = manual if seg_manual else automatic
+            assert digest(selected) == digest(archive)
+            if seg_manual:
+                report['manual_test_copies_are_unedited'][frame] = bool(np.array_equal(
+                    np.asarray(nib.load(manual).dataobj), np.asarray(nib.load(automatic).dataobj))) if automatic.is_file() else None
+        report['selected_inputs_match_archived_2D_segmentations'] = True
+        if seg_manual:
+            report['manual_inputs_match_archived_2D_segmentations'] = True
         if require_manual_copy:
             provenance = json.loads((run_dir / 'manual_test_fixture.json').read_text())
             assert provenance['subject'] == subject.name

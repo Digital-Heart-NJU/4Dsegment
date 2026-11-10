@@ -23,12 +23,18 @@ legacy Docker environment**, as shown in Section 6.
 | --- | --- | --- |
 | `python DMACS.py` | The complete original automatic pipeline using CNN predictions. Existing manual files are preserved but not selected. | After fitting, measurements, motion tracking, and decimation. |
 | `python DMACS.py --stage01_seg_only=true` | Original cine preprocessing and ED/ES CNN inference. | After saving the two automatic segmentations. |
-| `python DMACS.py --stage02_surf_only=true` | Manual ED/ES labels, original atlas refinement, and original raw surface extraction. | After raw surfaces for both phases have been saved, before any fitting or motion. |
+| `python DMACS.py --stage02_surf_only=true --seg_manual=true` | Manual ED/ES labels, original atlas refinement, and original raw surface extraction. | After raw surfaces for both phases have been saved, before any fitting or motion. |
+| `python DMACS.py --stage02_surf_only=true --seg_manual=false` | Automatic ED/ES labels, with the same atlas refinement and raw surface extraction. | At the same Stage 02 boundary. |
 | `python DMACS.py --stage03_addi_mot_fit=true` | Saved raw surfaces and image masks from Stage 02, followed by the original remaining operations. | After fitting, measurements, motion tracking, and decimation. |
 
 Enable at most one stage flag. All three default to `false`; with no enabled
 flag, the full automatic workflow is used. The shorter proposed names
 `--seg_only` and `--surf_only` are not the implemented flags.
+
+`--seg_manual` defaults to `true` for backward compatibility and selects
+inputs only for an explicit Stage 02 run. It does not change Stage 01,
+Stage 03, or the no-stage-flag full automatic workflow, which still uses
+automatic predictions.
 
 The overall staged workflow is:
 
@@ -93,6 +99,9 @@ The program never automatically creates these manual files. It does not
 rename them over the automatic predictions. The original predictions remain
 available for comparison.
 
+If no manual correction is needed, Stage 02 can instead consume the saved
+automatic files directly with `--seg_manual=false`; no manual copies are needed.
+
 An empty or incomplete but otherwise valid CNN label map can still be saved
 at Stage 01 so that it can be manually corrected. It is not rejected merely
 because one anatomical class is absent.
@@ -103,22 +112,29 @@ segmentation path does. Back up downstream results before rerunning them.
 The `segs` directory is no longer removed wholesale: its manual files and
 other files are retained, while the two automatic predictions are rewritten.
 
-## 3. Stage 02: Manual Labels to Raw Surfaces
+## 3. Stage 02: Selected Labels to Raw Surfaces
 
 ```bash
-python DMACS.py --stage02_surf_only=true --coreNo 8 --irtk True
+# Manual labels (the default):
+python DMACS.py --stage02_surf_only=true --seg_manual=true --coreNo 8 --irtk True
+
+# Automatic labels directly, without creating manual copies:
+python DMACS.py --stage02_surf_only=true --seg_manual=false --coreNo 8 --irtk True
 ```
 
 ### Required inputs
 
 For every subject directory under `test_dir`:
 
-- `segs/seg_lvsa_ED_manual.nii.gz` and `segs/seg_lvsa_ES_manual.nii.gz`.
+- With `--seg_manual=true`: `segs/seg_lvsa_ED_manual.nii.gz` and
+  `segs/seg_lvsa_ES_manual.nii.gz`.
+- With `--seg_manual=false`: `segs/seg_lvsa_ED.nii.gz` and
+  `segs/seg_lvsa_ES.nii.gz`. Manual files are not required or selected.
 - The corresponding preprocessed phase MRI files, either in the subject
   root or archived under `sizes/lvsa_ED.nii.gz` and `sizes/lvsa_ES.nii.gz`.
 - The same atlas and registration resources used by the original pipeline.
 
-Manual inputs may be 3D or 4D with a singleton time dimension. They must
+Selected inputs may be 3D or 4D with a singleton time dimension. They must
 match the original phase image's spatial dimensions and affine geometry.
 Labels must be finite integer values in `0..4`, with all four foreground
 classes present for generation of all ventricular surfaces:
@@ -131,15 +147,17 @@ classes present for generation of all ventricular surfaces:
 | 3 | RV myocardium |
 | 4 | RV blood pool |
 
-All subjects' manual inputs are checked before resuming processing. Missing
-manual files cause an error; there is no fallback to automatic predictions
-and no automatic rerun of the CNN. If phase MRI files were archived by an
+All subjects' selected inputs are checked before resuming processing. Missing
+selected files cause an error; neither mode falls back to the other file
+family or reruns segmentation. Automatic Stage 02 inputs must include all
+four foreground classes too; Stage 01 may still save incomplete predictions
+for correction. If phase MRI files were archived by an
 earlier Stage 02 run, their copies are restored to the working root before
 refinement. Neither the archives nor manual labels are modified.
 
 ### Processing and outputs
 
-The manual filename is passed directly into the existing atlas-selection
+The selected filename is passed directly into the existing atlas-selection
 and refinement functions. Those functions retain the original candidate
 atlases, best-three selection, affine/nonrigid registration, label fusion,
 resampling, and mask-cleanup settings.
@@ -153,7 +171,7 @@ sizes/3D_segmentation_ED.nii.gz
 sizes/3D_segmentation_ES.nii.gz
 ```
 
-`sizes/2D_segmentation_<phase>.nii.gz` archives the **actual manual input**
+`sizes/2D_segmentation_<phase>.nii.gz` archives the **actual selected input**
 used for refinement. The old root-versus-`segs/` backup path inconsistency
 is corrected in this copy of the code. Neither the manual input nor its
 automatic counterpart is deleted after archiving.
@@ -179,7 +197,7 @@ The extraction still uses the same masks and `mcubes ... 120 -blur 2`.
 Stage 02 stops here: it does not create `N_`, `F_`, curvature/measurement
 families, or motion meshes.
 
-**Atlas refinement remains enabled.** Manual labels guide this refinement;
+**Atlas refinement remains enabled.** Selected labels guide this refinement;
 they are not hard boundary constraints that guarantee the final mesh exactly
 follows every manually edited voxel.
 
@@ -218,8 +236,9 @@ The fitting-only function does not execute the raw-extraction cleanup,
 checked before and after the stage, as are existing segmentation files.
 
 This stage does not read the neural checkpoint, run atlas refinement, or
-select new manual labels. If manual labels have changed, rerun Stage 02
-before Stage 03 so the saved raw surfaces correspond to those edits.
+select new labels. If the selected automatic/manual labels have changed,
+rerun Stage 02 with the matching `--seg_manual` setting before Stage 03 so
+the saved raw surfaces correspond to those edits.
 
 The original limitation is retained: motion runs for all valid subjects,
 but the default non-parallel decimation processes only the first valid
@@ -338,7 +357,7 @@ docker run --rm --network none \
 ```
 
 The tests cover flag dispatch, missing manual inputs, label and geometry
-validation, phase restoration, manual-file retention, direct manual-path
+validation, phase restoration, manual-file retention, explicit input-path
 selection, archive correctness, and exact command-list parity between the
 original mesh generator and the extracted/fitting functions combined.
 
@@ -550,11 +569,30 @@ success is not proof of segmentation quality.
 
 ### Stage 02 and Stage 03 compatibility
 
-Stage 02 still requires the two explicitly saved
-`segs/seg_lvsa_ED_manual.nii.gz` / `seg_lvsa_ES_manual.nii.gz` inputs,
-including all foreground classes. It never falls back to automatic or
-native labels. Corrected manual files must use canonical RV blood=4 and
-RV myocardium=3, not the native nnUNet label convention.
+Stage 02 uses the source selected by `--seg_manual` (default `true`).
+With `true`, it requires `segs/seg_lvsa_ED_manual.nii.gz` and
+`seg_lvsa_ES_manual.nii.gz`; with `false`, it reads the two automatic
+`seg_lvsa_ED.nii.gz` / `seg_lvsa_ES.nii.gz` files directly. Both modes require
+all four foreground classes and matching phase geometry. There is no fallback
+between modes and no selection of native prediction files. Corrected manual
+files must use canonical RV blood=4 and RV myocardium=3, not the native
+nnUNet label convention.
+
+For example, from the project root, to resume directly from automatic labels:
+
+```bash
+conda run --no-capture-output -n cme-dt-env python -B -u code_by_stage/DMACS.py \
+  --segmentation_backend=nnunet --subject subject_999 \
+  --stage02_surf_only=true --seg_manual=false
+```
+
+Change the final option to `--seg_manual=true` to use edited/manual inputs.
+The local launcher forwards this choice to the legacy Docker runner. The
+Stage 02 summary records `seg_manual`, `segmentation_source`, and the actual
+ED/ES `segmentation_inputs` paths. Archives always contain the selected source,
+and both automatic and existing manual inputs remain protected. The validator
+reads this source metadata; old summaries without it are treated as manual-mode
+runs for compatibility. `--require-manual-copy` is only valid in manual mode.
 
 The host launcher starts the unchanged atlas/refinement and raw-surface
 operations in `jinmingduan/segmentationmeshmotion:latest`. No nnUNet or old
