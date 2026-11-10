@@ -11,7 +11,8 @@ Active pipeline:
   6. Keep RVendo fixed and move RVepi to at least 3 mm from RVendo, while
      adaptively displacing and smoothing the RVepi opening ring.
   7. Rebuild the LV and RV annuli by directly connecting each open-base epi
-     boundary to its corresponding open-base endo boundary.
+     boundary to its corresponding open-base endo boundary, and save the
+     LVepi/RVepi intersection curve as a separate septum.vtk line dataset.
   8. Clean the saved Step 7 LVRV_surf.vtk with MeshFix and validate the saved surface.
   9. Generate an untagged tetrahedral volume mesh from the cleaned Step 8 surface with TetGen.
  10. Assign LV=1 and RV=0 to tetrahedra using the cleaned Step 2 LVepi reference.
@@ -5613,6 +5614,73 @@ def save_step6_moved_rvepi(
     return paths, summary
 
 
+def save_step7_rvepi_lvepi_interface_curve(
+    stage_dir: Path,
+    subject_id: str,
+    frame: str,
+    lv_epi_path: Path,
+    rv_epi_path: Path,
+    args: argparse.Namespace,
+) -> Tuple[str, Dict[str, object]]:
+    """Export actual open-base epicardial intersections without closing the curves."""
+    tolerance = max(float(args.surface_clean_tolerance), 1e-7)
+    inputs = []
+    for source_path in (lv_epi_path, rv_epi_path):
+        surface = pv.read(source_path).extract_surface().triangulate().clean(
+            tolerance=tolerance, absolute=True,
+        )
+        if not surface.is_all_triangles or not np.all(np.isfinite(surface.points)):
+            raise ValueError(f"Invalid Step 07 interface-curve input: {source_path}")
+        inputs.append(surface)
+
+    intersector = vtk.vtkIntersectionPolyDataFilter()
+    intersector.SetInputData(0, inputs[0])
+    intersector.SetInputData(1, inputs[1])
+    intersector.SetTolerance(tolerance)
+    intersector.SplitFirstOutputOff()
+    intersector.SplitSecondOutputOff()
+    intersector.Update()
+    if intersector.GetStatus() != 1 or intersector.GetErrorCode() != 0:
+        raise RuntimeError(f"{subject_id} {frame}: LVepi/RVepi interface-curve extraction failed.")
+    curve = pv.wrap(intersector.GetOutput()).copy(deep=True)
+    if curve.n_cells != curve.n_lines or not np.all(np.isfinite(curve.points)):
+        raise RuntimeError(f"{subject_id} {frame}: intersection output is not a finite line dataset.")
+    # VTK writes double coordinates with more ASCII precision than float coordinates.
+    curve.points = np.asarray(curve.points, dtype=np.float64)
+
+    stage_dir.mkdir(parents=True, exist_ok=True)
+    path = stage_dir / f"{subject_id}_{frame}_septum.vtk"
+    with TemporaryDirectory(prefix=".step07_curve_", dir=stage_dir) as directory:
+        staged = Path(directory) / path.name
+        curve.save(staged, binary=False)
+        saved = pv.read(staged)
+        if (not isinstance(saved, pv.PolyData) or saved.n_points != curve.n_points
+                or saved.n_lines != curve.n_lines or saved.n_cells != saved.n_lines
+                or not np.array_equal(saved.lines, curve.lines)
+                or not np.allclose(saved.points, curve.points, rtol=0.0, atol=tolerance)):
+            raise RuntimeError(f"Step 07 interface-curve VTK failed read-back validation: {path}")
+        staged.replace(path)
+
+    has_curve = bool(saved.n_lines)
+    components = saved.connectivity() if has_curve else None
+    record = {
+        "path": str(path.resolve()),
+        "writer": "vtk_legacy_ascii_polydata_lines",
+        "input_surfaces": {"LVepi": str(lv_epi_path.resolve()), "RVepi": str(rv_epi_path.resolve())},
+        "intersection_tolerance_mm": tolerance,
+        "status": "intersection_found" if has_curve else "no_intersection",
+        "points": int(saved.n_points),
+        "line_cells": int(saved.n_lines),
+        "connected_components": int(len(np.unique(components.cell_data["RegionId"]))) if has_curve else 0,
+        "length_mm": float(np.sum(saved.compute_cell_sizes(length=True, area=False, volume=False).cell_data["Length"])) if has_curve else 0.0,
+        "surface_patch": False,
+        "surfaces_modified": False,
+    }
+    log_stage(f"{subject_id} {frame}: saved LVepi/RVepi interface curve "
+              f"({saved.n_points} points, {saved.n_lines} line cells) to {path}")
+    return str(path.resolve()), record
+
+
 def save_step7_reconstructed_annuli(
     stage_dir: Path,
     subject_id: str,
@@ -5641,6 +5709,10 @@ def save_step7_reconstructed_annuli(
         path = stage_dir / f"{subject_id}_{frame}_{output_key}.vtk"
         records[output_key] = save_triangle_surface_vtk(path, mesh, elem_tag=tag, double_precision=True)
         paths[output_key] = str(path.resolve())
+    paths["septum"], interface_curve = save_step7_rvepi_lvepi_interface_curve(
+        stage_dir, subject_id, frame,
+        Path(paths["LV_openbase_epi"]), Path(paths["RV_openbase_epi_moved"]), args,
+    )
     summary = {
         "description": "LV/RV open-base annuli reconstructed by directly connecting the current epi and endo boundary loops.",
         "subject": subject_id,
@@ -5650,6 +5722,7 @@ def save_step7_reconstructed_annuli(
         "surfaces": records,
         "LV_annulus_reconstruction": lv_info,
         "RV_annulus_reconstruction": rv_info,
+        "RVepi_LVepi_interface_curve": interface_curve,
         "direct_boundary_connection": True,
         "tetgen_or_downstream_processing": False,
     }

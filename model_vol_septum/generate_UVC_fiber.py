@@ -14,7 +14,12 @@ import logging
 import re
 import shutil
 import json
+import sys
 from pathlib import Path
+
+if not __package__:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    __package__ = "model_vol_septum"
 
 from . import compute_UVC_fiber as UVC
 from . import meshIO
@@ -26,6 +31,7 @@ logger = logging.getLogger('volumetric')
 
 CARP_BIN = None
 OPTS = None
+INPUT_PREFIX = None
 
 
 def get_timeframe_n(filename):
@@ -83,6 +89,61 @@ BIV_OUTPUT_NAMES = ("biv.dat",)
 FIBER_OUTPUT_NAMES = ("subject_mesh_all_fiber.vtk",)
 
 
+def pipeline_frame_paths(subject_dir, frame):
+    """Resolve saved pipeline inputs without copying or renaming source files."""
+    subject_dir = Path(subject_dir).resolve()
+    prefix = f"{INPUT_PREFIX or subject_dir.name}_{frame}"
+    root = subject_dir / "volmesh_pipline"
+    surfaces = root / "step_07_reconstruct_annulus"
+    return {
+        "volume": root / "step_10_final_mesh" / f"{prefix}_volmesh.vtk",
+        "LVendo": surfaces / f"{prefix}_LV_openbase_endo.vtk",
+        "LVepi": surfaces / f"{prefix}_LV_openbase_epi.vtk",
+        "LVannulus": surfaces / f"{prefix}_LV_openbase_annulus_recon.vtk",
+        "RVendo": surfaces / f"{prefix}_RV_openbase_endo.vtk",
+        "RVepi": surfaces / f"{prefix}_RV_openbase_epi_moved.vtk",
+        "RVannulus": surfaces / f"{prefix}_RV_openbase_annulus_recon.vtk",
+        "interface": surfaces / f"{prefix}_septum.vtk",
+        "epi": root / "step_08_LVRV_surf_clean" / f"{prefix}_LVRV_surf.vtk",
+    }
+
+
+def require_frame_paths(paths, names):
+    missing = [str(paths[name]) for name in names
+               if not paths[name].is_file() or not paths[name].stat().st_size]
+    if missing:
+        raise FileNotFoundError(f"Required pipeline inputs do not exist or are empty: {missing}")
+
+
+def prepare_working_mesh(source_volume, frame_output, meshname, meshtoolloc, force=False):
+    """Convert an ASCII working copy; legacy meshtool misreads binary doubles."""
+    working_mesh = frame_output / meshname
+    working_vtk = working_mesh.with_suffix(".vtk")
+    source = pv.read(source_volume)
+    if not isinstance(source, pv.UnstructuredGrid) or not np.all(np.isfinite(source.points)):
+        raise ValueError(f"Invalid UVC volume mesh: {source_volume}")
+    carp_paths = [working_mesh.with_suffix(suffix) for suffix in (".elem", ".pts", ".lon")]
+    converted = force or not all(path.is_file() and path.stat().st_size for path in carp_paths)
+    if not converted:
+        points = np.asarray(meshIO.read_pts(basename=str(working_mesh)), dtype=float)
+        converted = points.shape != source.points.shape or not np.allclose(
+            points, source.points, rtol=0.0, atol=1e-4)
+    if converted or not working_vtk.is_file():
+        source.points = np.asarray(source.points, dtype=np.float64)
+        source.save(working_vtk, binary=False)
+    if converted:
+        if not meshtool.convert_mesh(meshtoolloc, str(working_mesh), str(working_mesh),
+                                     ifmt="vtk", ofmt="carp_txt"):
+            raise RuntimeError(f"meshtool failed to convert the volume mesh: {source_volume}")
+    missing = [str(path) for path in carp_paths if not path.is_file() or not path.stat().st_size]
+    if missing:
+        raise RuntimeError(f"Missing CARP files after VTK conversion: {missing}")
+    points = np.asarray(meshIO.read_pts(basename=str(working_mesh)), dtype=float)
+    if points.shape != source.points.shape or not np.allclose(points, source.points, rtol=0.0, atol=1e-4):
+        raise RuntimeError("Converted CARP coordinates do not match the source volume mesh.")
+    return working_mesh, converted
+
+
 def frame_names(subject_dir, frame=None, frames=None):
     if frame and frames:
         raise ValueError("Use either --frame or --frames, not both.")
@@ -91,10 +152,10 @@ def frame_names(subject_dir, frame=None, frames=None):
     elif frames:
         requested = [value.strip().upper() for value in frames.split(',') if value.strip()]
     else:
-        volume_root = Path(subject_dir) / "volumetric_mesh_outputs"
-        requested = [name for name in ("ED", "ES") if (volume_root / name).is_dir()]
+        requested = [name for name in ("ED", "ES")
+                     if pipeline_frame_paths(subject_dir, name)["volume"].is_file()]
     if not requested:
-        raise RuntimeError(f"No ED/ES volume-mesh directories found under {subject_dir}.")
+        raise RuntimeError(f"No ED/ES tagged meshes found under {subject_dir}/volmesh_pipline/step_10_final_mesh.")
     invalid = [name for name in requested if name not in ("ED", "ES")]
     if invalid:
         raise ValueError(f"Unsupported frame names: {invalid}. Expected ED and/or ES.")
@@ -103,18 +164,9 @@ def frame_names(subject_dir, frame=None, frames=None):
 
 def run_frame_coords_z(subject_id, frame, data_dir, force=False):
     subject_dir = Path(data_dir).resolve() / subject_id
-    volume_dir = subject_dir / "volumetric_mesh_outputs" / frame / f"{subject_id}_mesh_all"
-    volume_candidates = (
-        volume_dir / f"{subject_id}_{frame}_stage11_final_elemTag_volmesh.vtk",
-        volume_dir / f"{subject_id}_{frame}_final_elemTag_volmesh.vtk",
-    )
-    volume_vtk = next((path for path in volume_candidates if path.is_file()), volume_candidates[0])
-    surface_dir = subject_dir / "volumetric_mesh_surf_inputs"
-    lv_annulus = surface_dir / f"{subject_id}_{frame}_LV_openbase_annulus_surface.vtk"
-    rv_annulus = surface_dir / f"{subject_id}_{frame}_RV_openbase_annulus_surface.vtk"
-    for path in (volume_vtk, lv_annulus, rv_annulus):
-        if not path.is_file():
-            raise FileNotFoundError(f"Required COORDS_Z input does not exist: {path}")
+    inputs = pipeline_frame_paths(subject_dir, frame)
+    require_frame_paths(inputs, ("volume", "LVannulus", "RVannulus"))
+    volume_vtk, lv_annulus, rv_annulus = (inputs[name] for name in ("volume", "LVannulus", "RVannulus"))
 
     frame_output = subject_dir / "UVC_fiber_Outputs" / frame
     uvc_dir = frame_output / "UVC_i"
@@ -130,23 +182,7 @@ def run_frame_coords_z(subject_id, frame, data_dir, force=False):
         raise FileNotFoundError(f"meshtool executable does not exist: {meshtoolloc}")
 
     meshname = subject_id + "_mesh_all"
-    working_mesh = frame_output / meshname
-    working_vtk = working_mesh.with_suffix(".vtk")
-    if force or not working_vtk.is_file():
-        shutil.copy2(volume_vtk, working_vtk)
-
-    carp_paths = [working_mesh.with_suffix(suffix) for suffix in (".elem", ".pts", ".lon")]
-    converted = False
-    if not all(path.is_file() for path in carp_paths):
-        logger.info("subject %s, frame %s: converting volume VTK to CARP text", subject_id, frame)
-        if not meshtool.convert_mesh(
-            meshtoolloc, str(working_mesh), str(working_mesh), ifmt="vtk", ofmt="carp_txt"
-        ):
-            raise RuntimeError(f"meshtool failed to convert {volume_vtk} to CARP text files.")
-        converted = True
-    missing = [str(path) for path in carp_paths if not path.is_file() or path.stat().st_size == 0]
-    if missing:
-        raise RuntimeError(f"Missing CARP files after VTK conversion: {missing}")
+    working_mesh, converted = prepare_working_mesh(volume_vtk, frame_output, meshname, meshtoolloc, force)
 
     elements = meshIO.read_elems(basename=str(working_mesh))
     tags = set(np.asarray(elements.iloc[:, 4], dtype=np.int64).tolist())
@@ -185,14 +221,9 @@ def run_frame_coords_z(subject_id, frame, data_dir, force=False):
 def run_frame_biv(subject_id, frame, data_dir, force=False):
     """Generate the nodal LV/RV biventricular coordinate for one frame."""
     subject_dir = Path(data_dir).resolve() / subject_id
-    volume_dir = subject_dir / "volumetric_mesh_outputs" / frame / f"{subject_id}_mesh_all"
-    volume_candidates = (
-        volume_dir / f"{subject_id}_{frame}_stage11_final_elemTag_volmesh.vtk",
-        volume_dir / f"{subject_id}_{frame}_final_elemTag_volmesh.vtk",
-    )
-    source_volume = next((path for path in volume_candidates if path.is_file()), None)
-    if source_volume is None:
-        raise FileNotFoundError(f"No biventricular volume mesh was found under {volume_dir}")
+    inputs = pipeline_frame_paths(subject_dir, frame)
+    require_frame_paths(inputs, ("volume",))
+    source_volume = inputs["volume"]
 
     frame_output = subject_dir / "UVC_fiber_Outputs" / frame
     uvc_dir = frame_output / "UVC_i"
@@ -208,19 +239,7 @@ def run_frame_biv(subject_id, frame, data_dir, force=False):
         raise FileNotFoundError(f"meshtool executable does not exist: {meshtoolloc}")
 
     meshname = subject_id + "_mesh_all"
-    working_mesh = frame_output / meshname
-    working_vtk = working_mesh.with_suffix(".vtk")
-    if force or not working_vtk.is_file():
-        shutil.copy2(source_volume, working_vtk)
-
-    carp_paths = [working_mesh.with_suffix(suffix) for suffix in (".elem", ".pts", ".lon")]
-    converted = False
-    if not all(path.is_file() and path.stat().st_size > 0 for path in carp_paths):
-        if not meshtool.convert_mesh(
-            meshtoolloc, str(working_mesh), str(working_mesh), ifmt="vtk", ofmt="carp_txt"
-        ):
-            raise RuntimeError(f"meshtool failed to convert {source_volume} to CARP text files.")
-        converted = True
+    working_mesh, converted = prepare_working_mesh(source_volume, frame_output, meshname, meshtoolloc, force)
 
     elements = meshIO.read_elems(basename=str(working_mesh))
     tags = set(np.asarray(elements.iloc[:, 4], dtype=np.int64).tolist())
@@ -264,14 +283,9 @@ def run_frame_biv(subject_id, frame, data_dir, force=False):
 def run_frame_fiber(subject_id, frame, data_dir, force=False):
     """Generate LV/RV fibers and merge them into the complete ED/ES mesh."""
     subject_dir = Path(data_dir).resolve() / subject_id
-    volume_dir = subject_dir / "volumetric_mesh_outputs" / frame / f"{subject_id}_mesh_all"
-    volume_candidates = (
-        volume_dir / f"{subject_id}_{frame}_stage11_final_elemTag_volmesh.vtk",
-        volume_dir / f"{subject_id}_{frame}_final_elemTag_volmesh.vtk",
-    )
-    source_volume = next((path for path in volume_candidates if path.is_file()), None)
-    if source_volume is None:
-        raise FileNotFoundError(f"No biventricular volume mesh was found under {volume_dir}")
+    inputs = pipeline_frame_paths(subject_dir, frame)
+    require_frame_paths(inputs, ("volume",))
+    source_volume = inputs["volume"]
 
     frame_output = subject_dir / "UVC_fiber_Outputs" / frame
     uvc_dir = frame_output / "UVC_i"
@@ -292,18 +306,7 @@ def run_frame_fiber(subject_id, frame, data_dir, force=False):
     if not os.path.isfile(meshtoolloc):
         raise FileNotFoundError(f"meshtool executable does not exist: {meshtoolloc}")
 
-    working_mesh = frame_output / meshname
-    working_vtk = working_mesh.with_suffix(".vtk")
-    if force or not working_vtk.is_file():
-        shutil.copy2(source_volume, working_vtk)
-    carp_paths = [working_mesh.with_suffix(suffix) for suffix in (".elem", ".pts", ".lon")]
-    converted = False
-    if not all(path.is_file() and path.stat().st_size > 0 for path in carp_paths):
-        if not meshtool.convert_mesh(
-            meshtoolloc, str(working_mesh), str(working_mesh), ifmt="vtk", ofmt="carp_txt"
-        ):
-            raise RuntimeError(f"meshtool failed to convert {source_volume} to CARP text files.")
-        converted = True
+    working_mesh, converted = prepare_working_mesh(source_volume, frame_output, meshname, meshtoolloc, force)
 
     coords_z_path = uvc_dir / "COORDS_Z.dat"
     pho_path = uvc_dir / "PHO.dat"
@@ -326,7 +329,7 @@ def run_frame_fiber(subject_id, frame, data_dir, force=False):
                 f"{mesh_prefix}.eidx", f"{base_prefix}.surf", apex_name,
             )
         )
-    if not all(path.is_file() and path.stat().st_size > 0 for path in required_work):
+    if force or not all(path.is_file() and path.stat().st_size > 0 for path in required_work):
         phi_work = frame_output / "PHI_work"
         if not all(path.is_file() and path.stat().st_size > 0 for path in (
             phi_work / name for mesh_prefix, base_prefix, apex_name in chamber_inputs.values()
@@ -441,20 +444,45 @@ def run_frame_fiber(subject_id, frame, data_dir, force=False):
     return summary
 
 
+def run_frame_landmarks(subject_id, frame, data_dir, force=False):
+    """Use the Step 07 interface curve with the existing ANT/INF selection rule."""
+    subject_dir = Path(data_dir).resolve() / subject_id
+    inputs = pipeline_frame_paths(subject_dir, frame)
+    require_frame_paths(inputs, ("volume", "LVannulus", "RVannulus", "interface"))
+    output = subject_dir / "UVC_fiber_Outputs" / frame
+    output.mkdir(parents=True, exist_ok=True)
+    ant = output / f"{subject_id}_{frame}_RV_INSERT_ANT.vtk"
+    inf = output / f"{subject_id}_{frame}_RV_INSERT_INF.vtk"
+    if not force and all(path.is_file() and path.stat().st_size for path in (ant, inf)):
+        return {"skipped": True, "outputs": [str(ant), str(inf)]}
+    coords = output / "UVC_i" / "COORDS_Z.dat"
+    if not coords.is_file():
+        run_frame_coords_z(subject_id, frame, data_dir, force=force)
+    details = UVC.find_two_RV_insertion_pts_openbase(
+        str(inputs["volume"]), str(coords), str(inputs["LVannulus"]),
+        str(inputs["RVannulus"]), str(inputs["interface"]), str(ant), str(inf),
+    )
+    for name in ("LV", "RV"):
+        pv.PolyData(np.asarray(details[f"{name.lower()}_centroid"]).reshape(1, 3)).save(
+            output / f"{subject_id}_{frame}_{name}_annulus_centroid.vtk", binary=False,
+        )
+    summary = {"subject": subject_id, "frame": frame,
+               "interface_curve": str(inputs["interface"]), "details": details,
+               "outputs": [str(ant), str(inf)]}
+    (output / f"{subject_id}_{frame}_landmarks_summary.json").write_text(json.dumps(summary, indent=2))
+    return summary
+
+
 def run_frame_phi(subject_id, frame, data_dir, force=False):
     """Generate PHI for an open-base ED/ES mesh using the current surface inputs."""
     subject_dir = Path(data_dir).resolve() / subject_id
-    volume_dir = subject_dir / "volumetric_mesh_outputs" / frame / f"{subject_id}_mesh_all"
-    volume_candidates = (
-        volume_dir / f"{subject_id}_{frame}_stage11_final_elemTag_volmesh.vtk",
-        volume_dir / f"{subject_id}_{frame}_final_elemTag_volmesh.vtk",
-    )
-    volume_vtk = next((path for path in volume_candidates if path.is_file()), volume_candidates[0])
-    surface_dir = subject_dir / "volumetric_mesh_surf_inputs"
-    lv_annulus = surface_dir / f"{subject_id}_{frame}_LV_openbase_annulus_surface.vtk"
-    rv_annulus = surface_dir / f"{subject_id}_{frame}_RV_openbase_annulus_surface.vtk"
+    inputs = pipeline_frame_paths(subject_dir, frame)
+    require_frame_paths(inputs, ("volume", "LVannulus", "RVannulus"))
+    volume_vtk, lv_annulus, rv_annulus = (inputs[name] for name in ("volume", "LVannulus", "RVannulus"))
     ant_landmark = subject_dir / "UVC_fiber_Outputs" / frame / f"{subject_id}_{frame}_RV_INSERT_ANT.vtk"
     inf_landmark = subject_dir / "UVC_fiber_Outputs" / frame / f"{subject_id}_{frame}_RV_INSERT_INF.vtk"
+    if not all(path.is_file() for path in (ant_landmark, inf_landmark)):
+        run_frame_landmarks(subject_id, frame, data_dir, force=force)
     required = (volume_vtk, lv_annulus, rv_annulus, ant_landmark, inf_landmark)
     missing = [str(path) for path in required if not path.is_file()]
     if missing:
@@ -473,18 +501,7 @@ def run_frame_phi(subject_id, frame, data_dir, force=False):
     if not os.path.isfile(meshtoolloc):
         raise FileNotFoundError(f"meshtool executable does not exist: {meshtoolloc}")
     meshname = subject_id + "_mesh_all"
-    working_mesh = frame_output / meshname
-    working_vtk = working_mesh.with_suffix(".vtk")
-    if force or not working_vtk.is_file():
-        shutil.copy2(volume_vtk, working_vtk)
-    carp_paths = [working_mesh.with_suffix(suffix) for suffix in (".elem", ".pts", ".lon")]
-    converted = False
-    if not all(path.is_file() and path.stat().st_size > 0 for path in carp_paths):
-        if not meshtool.convert_mesh(
-            meshtoolloc, str(working_mesh), str(working_mesh), ifmt="vtk", ofmt="carp_txt"
-        ):
-            raise RuntimeError(f"meshtool failed to convert {volume_vtk} to CARP text files.")
-        converted = True
+    working_mesh, converted = prepare_working_mesh(volume_vtk, frame_output, meshname, meshtoolloc, force)
 
     coords_z_path = uvc_dir / "COORDS_Z.dat"
     if not coords_z_path.is_file() or coords_z_path.stat().st_size == 0:
@@ -518,26 +535,10 @@ def run_frame_phi(subject_id, frame, data_dir, force=False):
 def run_frame_pho(subject_id, frame, data_dir, force=False):
     """Generate PHO from the open-base LV/RV surfaces for one ED/ES frame."""
     subject_dir = Path(data_dir).resolve() / subject_id
-    volume_dir = subject_dir / "volumetric_mesh_outputs" / frame / f"{subject_id}_mesh_all"
-    volume_candidates = (
-        volume_dir / f"{subject_id}_{frame}_stage11_final_elemTag_volmesh.vtk",
-        volume_dir / f"{subject_id}_{frame}_final_elemTag_volmesh.vtk",
-    )
-    source_volume = next((path for path in volume_candidates if path.is_file()), None)
-    if source_volume is None:
-        raise FileNotFoundError(f"No PHO volume mesh was found under {volume_dir}")
-
-    surface_dir = subject_dir / "volumetric_mesh_surf_inputs"
-    surface_paths = {
-        "LVendo": surface_dir / f"{subject_id}_{frame}_LVendo_openbase_surface.vtk",
-        "LVannulus": surface_dir / f"{subject_id}_{frame}_LV_openbase_annulus_surface.vtk",
-        "RVendo": surface_dir / f"{subject_id}_{frame}_RVendo_openbase_surface.vtk",
-        "RVannulus": surface_dir / f"{subject_id}_{frame}_RV_openbase_annulus_surface.vtk",
-        "RVepi": surface_dir / f"{subject_id}_{frame}_RVepi_openbase_surface.vtk",
-        "RVseptum": surface_dir / f"{subject_id}_{frame}_RV_septum.vtk",
-        "LVepi": surface_dir / f"{subject_id}_{frame}_LVepi_openbase_surface.vtk",
-        "epi": surface_dir / f"{subject_id}_{frame}_whole_epi_surface.vtk",
-    }
+    inputs = pipeline_frame_paths(subject_dir, frame)
+    source_volume = inputs["volume"]
+    surface_paths = {name: inputs[name] for name in
+                     ("LVendo", "LVannulus", "RVendo", "RVannulus", "RVepi", "LVepi", "epi")}
     missing = [str(path) for path in (source_volume, *surface_paths.values()) if not path.is_file()]
     if missing:
         raise FileNotFoundError(f"Required PHO input does not exist: {missing}")
@@ -560,18 +561,8 @@ def run_frame_pho(subject_id, frame, data_dir, force=False):
             raise FileNotFoundError(f"Required CARP executable does not exist: {executable}")
 
     meshname = subject_id + "_mesh_all"
-    working_mesh = frame_output / meshname
+    working_mesh, converted = prepare_working_mesh(source_volume, frame_output, meshname, meshtoolloc, force)
     working_vtk = working_mesh.with_suffix(".vtk")
-    if force or not working_vtk.is_file():
-        shutil.copy2(source_volume, working_vtk)
-    carp_paths = [working_mesh.with_suffix(suffix) for suffix in (".elem", ".pts", ".lon")]
-    converted = False
-    if not all(path.is_file() and path.stat().st_size > 0 for path in carp_paths):
-        if not meshtool.convert_mesh(
-            meshtoolloc, str(working_mesh), str(working_mesh), ifmt="vtk", ofmt="carp_txt"
-        ):
-            raise RuntimeError(f"meshtool failed to convert the PHO volume mesh: {working_vtk}")
-        converted = True
 
     par_file = str(Path(__file__).resolve().with_name("transmural.par"))
     pho_path, details = UVC.transmural_openbase(
@@ -603,6 +594,31 @@ def run_frame_pho(subject_id, frame, data_dir, force=False):
     summary_path.write_text(json.dumps(summary, indent=2))
     logger.info("subject %s, frame %s: generated PHO", subject_id, frame)
     return summary
+
+
+def run_frame_all(subject_id, frame, data_dir, force=False):
+    """Run the ED/ES coordinate and fiber stages in dependency order."""
+    subject_dir = Path(data_dir).resolve() / subject_id
+    inputs = pipeline_frame_paths(subject_dir, frame)
+    require_frame_paths(inputs, tuple(inputs))
+    initial_directory = Path.cwd()
+    results = {}
+    try:
+        for name, operation in (
+            ("COORDS_Z", run_frame_coords_z), ("landmarks", run_frame_landmarks),
+            ("PHI", run_frame_phi), ("PHO", run_frame_pho),
+            ("biv", run_frame_biv), ("fiber", run_frame_fiber),
+        ):
+            logger.info("subject %s, frame %s: starting %s", subject_id, frame, name)
+            results[name] = operation(subject_id, frame, data_dir, force=force)
+        summary = {"subject": subject_id, "frame": frame,
+                   "inputs": {name: str(path) for name, path in inputs.items()},
+                   "stages": results}
+        output = subject_dir / "UVC_fiber_Outputs" / frame
+        (output / f"{subject_id}_{frame}_UVC_fiber_summary.json").write_text(json.dumps(summary, indent=2))
+        return summary
+    finally:
+        os.chdir(initial_directory)
 
 
 def run_timeframe_uvc(subject_id, timeframe_num, input_dir, mesh_names, par_file, output_dir, output_dir_uvc):
@@ -746,6 +762,7 @@ def main(do_mesh=False, do_uvc=False):
 
     parser.add_argument('--all', '-a', action='store_true', help='process all subjects')
     parser.add_argument('--subject', '-s', action='store', help='subject id to be processed')
+    parser.add_argument('--input-prefix', help='Explicit input filename subject prefix for copied pipeline folders; outputs still use --subject.')
     parser.add_argument('--start', '-S', action='store', type=int, help='index of first subject id to be processed')
     parser.add_argument('--number', '-n', action='store', type=int, help='number of subjects to be processed from first subject id')
     parser.add_argument('--allowlist', '-l', action='store', help='path to subject allowlist')
@@ -763,6 +780,7 @@ def main(do_mesh=False, do_uvc=False):
     parser.add_argument('--pho', action='store_true', help='generate only PHO from open-base LV/RV boundary surfaces')
     parser.add_argument('--biv', action='store_true', help='generate only the nodal LV/RV biv.dat field')
     parser.add_argument('--fiber', action='store_true', help='generate and merge frame-based LV/RV fibers')
+    parser.add_argument('--uvc-fiber', action='store_true', help='run all ED/ES stages directly from volmesh_pipline')
 
     args, _ = parser.parse_known_args()
 
@@ -770,14 +788,16 @@ def main(do_mesh=False, do_uvc=False):
     cfg.read('config.ini')
 
     global CARP_BIN
-    CARP_BIN = args.carp_bin_dir if args.carp_bin_dir else cfg[args.profile]['CarpBinDir']
+    CARP_BIN = str(Path(args.carp_bin_dir if args.carp_bin_dir else cfg[args.profile]['CarpBinDir']).resolve())
+    global INPUT_PREFIX
+    INPUT_PREFIX = args.input_prefix
 
     global OPTS
     OPTS = os.path.abspath('amg_cg_opts')
     if not os.path.isfile(OPTS):
         OPTS = str(Path(__file__).resolve().with_name('amg_cg_opts'))
 
-    data_dir = args.data_dir if args.data_dir else cfg[args.profile]['DataDir']
+    data_dir = str(Path(args.data_dir if args.data_dir else cfg[args.profile]['DataDir']).resolve())
     par_file = os.path.abspath('LVendo_RVseptum_RVendo.par')
     uvc_par_file = os.path.abspath('transmural.par')
 
@@ -811,6 +831,20 @@ def main(do_mesh=False, do_uvc=False):
     logger.addHandler(handler)
 
     np.seterr(all='warn')
+
+    if do_uvc or args.uvc_fiber:
+        results, failures = [], []
+        for subject_id in subject_ids:
+            subject_dir = os.path.join(data_dir, subject_id)
+            for frame in frame_names(subject_dir, args.frame, args.frames):
+                try:
+                    results.append(run_frame_all(subject_id, frame, data_dir, args.force))
+                except Exception as error:
+                    logger.exception("subject %s, frame %s: UVC/fiber generation failed", subject_id, frame)
+                    failures.append({"subject": subject_id, "frame": frame, "error": str(error)})
+        if failures:
+            raise RuntimeError(f"UVC/fiber generation failed for: {failures}")
+        return results
 
     if args.coords_z:
         results = []
@@ -888,33 +922,8 @@ def main(do_mesh=False, do_uvc=False):
 
 
 if __name__ == '__main__':
-
-    parser = argparse.ArgumentParser(allow_abbrev=False)
-    parser.add_argument('--uvc-fiber', action='store_true', help='run UVC and fiber')
-    parser.add_argument('--coords-z', action='store_true', help='run the frame-based COORDS_Z stage')
-    parser.add_argument('--phi', action='store_true', help='run the frame-based PHI stage')
-    parser.add_argument('--pho', action='store_true', help='run the frame-based PHO stage')
-    parser.add_argument('--biv', action='store_true', help='run the frame-based biv.dat stage')
-    parser.add_argument('--fiber', action='store_true', help='run the frame-based fiber stage')
-
-    args, _ = parser.parse_known_args()
-
-    base_dir = os.path.dirname(__file__)
-
     logging.basicConfig(level=logging.DEBUG, format='%(asctime)s | %(name)s | %(levelname)s | %(message)s')
-
-    if args.uvc_fiber:
-        main(False,True)
-    elif args.coords_z:
-        main(False,False)
-    elif args.phi:
-        main(False,False)
-    elif args.pho:
-        main(False,False)
-    elif args.biv:
-        main(False,False)
-    elif args.fiber:
-        main(False,False)
+    main()
 
 # command:
 '''

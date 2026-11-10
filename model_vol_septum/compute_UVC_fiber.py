@@ -578,7 +578,8 @@ def transmural_openbase(
     IGBEXTRACT,
     UVCfolder,
 ):
-    """Generate PHO from the open-base LV/RV boundaries on the full mesh."""
+    """Generate PHO from classified shell boundaries and the internal LVepi."""
+    from .pho_boundaries import build_pho_boundaries
     folder_path = Path(folder).resolve()
     work_root = folder_path / "PHO_work"
     surface_root = work_root / "surfaces"
@@ -593,99 +594,23 @@ def transmural_openbase(
     full_points = np.asarray(meshIO.read_pts(basename=str(full_mesh)), dtype=float)
     volume = pv.read(full_mesh_vtk)
     edge_scale = _tetra_edge_scale(volume)
-    max_distance_mm = max(0.3, min(3.0, 1.5 * edge_scale))
-
-    lv_mesh = str(work_root / "LVmyo_pho")
-    rv_mesh = str(work_root / "RVmyo_pho")
-    if not meshtool.extract_mesh(meshtoolloc, str(full_mesh), "1", lv_mesh):
-        raise RuntimeError("meshtool failed to extract the PHO LV tag-1 submesh.")
-    if not meshtool.extract_mesh(meshtoolloc, str(full_mesh), "0", rv_mesh):
-        raise RuntimeError("meshtool failed to extract the PHO RV tag-0 submesh.")
-    if not meshtool.convert_mesh(
-        meshtoolloc, lv_mesh, lv_mesh, ifmt="carp_txt", ofmt="vtk"
-    ):
-        raise RuntimeError("meshtool failed to convert the PHO LV submesh to VTK.")
-    if not meshtool.convert_mesh(
-        meshtoolloc, rv_mesh, rv_mesh, ifmt="carp_txt", ofmt="vtk"
-    ):
-        raise RuntimeError("meshtool failed to convert the PHO RV submesh to VTK.")
-
-    lv_endo_combined = _merge_openbase_surface_vtks(
-        [surface_paths["LVendo"], surface_paths["LVannulus"]],
-        str(surface_root / "LV_endo_openbase_combined.vtk"),
+    zero_nodes, outer_nodes, boundary_details = build_pho_boundaries(
+        volume, full_points, surface_paths, work_root, edge_scale,
     )
-    rv_endo_combined = _merge_openbase_surface_vtks(
-        [surface_paths["RVendo"], surface_paths["RVannulus"]],
-        str(surface_root / "RV_endo_openbase_combined.vtk"),
-    )
-
-    boundary_specs = (
-        ("LV_endo", lv_endo_combined, lv_mesh, str(work_root / "LV_endo_local")),
-        ("RV_endo", rv_endo_combined, rv_mesh, str(work_root / "RV_endo_local")),
-        ("RV_epi", surface_paths["RVepi"], rv_mesh, str(work_root / "RV_epi_local")),
-        # The septum is an LV/RV interface, so map it against the full mesh.
-        # Mapping it only to the RV tag-0 submesh collapses it onto RV endocardium.
-        ("RV_septum", surface_paths["RVseptum"], str(full_mesh), str(work_root / "RV_septum_local")),
-        ("epi", surface_paths["epi"], str(full_mesh), str(work_root / "epi_local")),
-    )
-    boundary_files = {}
-    boundary_details = {}
-    for name, coarse_surface, fine_mesh, local_prefix in boundary_specs:
-        # The septum source and the full mesh use the original pipeline's
-        # tight 0.3 mm correspondence rule; a broad adaptive band can
-        # capture nearby RV endocardial nodes instead of the septum.
-        selection_distance_mm = 0.3 if name == "RV_septum" else max_distance_mm
-        _extract_openbase_boundary_on_submesh(
-            coarse_surface,
-            fine_mesh + ".vtk",
-            local_prefix,
-            selection_distance_mm,
-        )
-        full_surface = str(surface_root / name)
-        boundary_details[name] = _remap_surface_to_full_mesh(
-            fine_mesh,
-            local_prefix,
-            str(full_mesh),
-            full_surface,
-        )
-        boundary_files[name] = full_surface
-
-    # LVepi may be an internal LV/RV interface after the two chambers are merged.
-    # Do not pass it through external-surface extraction: project its original
-    # open-base surface directly onto the full volume mesh instead.
-    lv_epi_surface = str(surface_root / "LV_epi")
-    boundary_details["LV_epi"] = _project_surface_points_to_full_mesh(
-        surface_paths["LVepi"], full_points, lv_epi_surface
-    )
-    boundary_files["LV_epi"] = lv_epi_surface
-
-    boundary_node_ids = {
-        name: np.unique(
-            np.atleast_1d(meshIO.read_vtx_File(path + ".surf.vtx")).astype(np.int64)
-        )
-        for name, path in boundary_files.items()
-    }
-    septum_nodes = _expand_coincident_node_ids(
-        full_points, boundary_node_ids["RV_septum"], tolerance_mm=1e-6
-    )
-    lv_epi_nodes = boundary_node_ids["LV_epi"]
-    epi_nodes = boundary_node_ids["epi"]
-    outer_nodes = np.unique(np.concatenate((septum_nodes, lv_epi_nodes, epi_nodes)))
-    outer_boundary = str(surface_root / "epi_and_septum")
+    zero_boundary = str(surface_root / "endo_and_annuli_zero")
+    outer_boundary = str(surface_root / "epi_and_internal_LVepi_one")
+    _write_carp_node_surface(zero_boundary, zero_nodes)
     _write_carp_node_surface(outer_boundary, outer_nodes)
 
     sim_id = str(work_root / "transmural_results")
-    # openCARP resolves legacy vtx_file paths relative to the mesh working directory.
-    # Use one unified PHO=1 boundary for the epicardium, LV epicardium,
-    # and the complete septum/interface.
     def solver_surface_path(name):
         return os.path.relpath(name + ".surf", folder_path)
 
     args = (
-        "-num_stim 3 "
-        "-stimulus[0].vtx_file " + solver_surface_path(boundary_files["LV_endo"]) + " "
-        "-stimulus[1].vtx_file " + solver_surface_path(boundary_files["RV_endo"]) + " "
-        "-stimulus[2].vtx_file " + solver_surface_path(outer_boundary) + " "
+        "-num_stim 2 -stimulus[0].stimtype 3 "
+        "-stimulus[0].vtx_file " + solver_surface_path(zero_boundary) + " "
+        "-stimulus[1].stimtype 2 -stimulus[1].strength 1 -stimulus[1].duration 1 "
+        "-stimulus[1].vtx_file " + solver_surface_path(outer_boundary) + " "
     )
     if not carpfunc.Laplace_solver(
         MPIEXEC, OPTS, CARP, parfile, str(full_mesh), sim_id, args
@@ -698,10 +623,12 @@ def transmural_openbase(
             f"{len(full_points)} finite nodal values."
         )
 
-    # Enforce the requested surface value in the exported nodal field as well.
-    # Every septum/epicardial triangle vertex is included in outer_nodes, so the
-    # complete represented surface is exactly PHO=1 rather than only its seed set.
+    raw_error = max(float(np.max(np.abs(pho_values[outer_nodes] - 1.0))),
+                    float(np.max(np.abs(pho_values[zero_nodes]))))
+    if raw_error > 1e-3:
+        raise RuntimeError(f"PHO solver did not enforce its boundary conditions: error {raw_error:.6g}.")
     pho_values[outer_nodes] = 1.0
+    pho_values[zero_nodes] = 0.0
     surface_error = float(np.max(np.abs(pho_values[outer_nodes] - 1.0)))
     if surface_error > 1e-12:
         raise RuntimeError(
@@ -726,16 +653,15 @@ def transmural_openbase(
     if missing:
         raise RuntimeError(f"PHO generation did not create valid outputs: {missing}")
     return pho_path, {
-        "method": "openbase_unified_epi_lv_epi_septum_full_mesh_projection_hard_boundary_laplace",
+        "method": "classified_pipeline_shell_plus_internal_LVepi_disjoint_boundary_laplace",
         "mesh_point_count": int(len(full_points)),
-        "septum_node_count": int(len(septum_nodes)),
-        "lv_epi_node_count": int(len(lv_epi_nodes)),
-        "epicardium_node_count": int(len(epi_nodes)),
+        "lv_epi_node_count": boundary_details["LVepi_node_count"],
+        "zero_boundary_node_count": int(len(zero_nodes)),
         "unified_outer_boundary_node_count": int(len(outer_nodes)),
         "unified_outer_boundary_max_abs_error": surface_error,
+        "solver_boundary_max_abs_error_before_export": raw_error,
         "median_tetra_edge_length_mm": float(edge_scale),
-        "surface_selection_max_distance_mm": float(max_distance_mm),
-        "boundary_files": boundary_files,
+        "boundary_files": {"zero": zero_boundary, "one": outer_boundary},
         "boundary_details": boundary_details,
         "PHO_range": [float(np.min(pho_values)), float(np.max(pho_values))],
         "outputs": [str(path) for path in expected],
