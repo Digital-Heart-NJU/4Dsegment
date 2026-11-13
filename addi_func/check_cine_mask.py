@@ -195,7 +195,7 @@ if __name__ == "__main__":
 
     # 指定 NIfTI 文件路径
 
-    cine_path = r"/home/mengao/Code/4Dsegment/data/subject_12/example.nii"
-    mask_path = r"/home/mengao/Code/4Dsegment/data/subject_12/segs/seg_lvsa_ED.nii.gz"
+    cine_path = r"/home/mengao/Code/4Dsegment/data/subject_18/example.nii"
+    mask_path = r"/home/mengao/Code/4Dsegment/data/subject_18/segs/seg_lvsa_ED.nii.gz"
     # check_cine_mask(cine_path, mask_path)
     check_cine_mask_all_slices_auto(cine_path, mask_path)

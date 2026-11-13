@@ -17,12 +17,12 @@ conda run --no-capture-output -n cme-dt-env \
   --segmentation_backend=nnunet --subject subject_11 \
   --stage02_surf_only=true --seg_manual=false
 
-actual_command in generate_open_volmesh_stable.py:
+actual_command in generate_open_volmesh.py:
 conda run --no-capture-output -n cme-dt-env python -B -u \
-  model_vol_septum/generate_open_volmesh_stable.py \
+  model_vol_septum/generate_open_volmesh.py \
   --subject-dir data/subject_11 \
   --frames ED,ES \
-  --step6-clearance-method signed
+  --overwrite
 """
 
 import argparse
@@ -37,7 +37,7 @@ CONDA_ENV = "cme-dt-env"
 STAGE_ARGS = {
     "segment": ["--stage01_seg_only=true", "--overwrite"],
     "raw_surface": ["--stage02_surf_only=true", "--seg_manual=false"],
-    "volumetric": ["--frames", "ED,ES", "--step6-clearance-method", "signed"],
+    "volumetric": ["--frames", "ED,ES", "--overwrite"],
 }
 
 # --request all runs these stages in this order for each subject.
@@ -68,7 +68,7 @@ def main(argv=None):
     scripts = {
         "segment": dmacs,
         "raw_surface": dmacs,
-        "volumetric": root / "model_vol_septum" / "generate_open_volmesh_stable.py",
+        "volumetric": root / "model_vol_septum" / "generate_open_volmesh.py",
     }
     output_folders = {"segment": "segs", "raw_surface": "vtks", "volumetric": "volmesh_pipline"}
     conda = shutil.which("conda")
