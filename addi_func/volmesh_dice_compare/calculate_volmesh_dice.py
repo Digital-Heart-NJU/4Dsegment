@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
-"""Compare tetrahedral volumes after rigid alignment and anatomical basal clipping.
+"""Compare complete tetrahedral volumes after rigid ICP or landmark registration.
 
 Example (from addi_func):
     conda run --no-capture-output -n cme-dt-env python \
         volmesh_dice_compare/calculate_volmesh_dice.py --case-dir volmesh_dice_compare/1
 
-The source has additional basal/valve anatomy; the reference defines the comparison
-frame. Auto clipping detects large, planar, supporting caps on the REFERENCE only.
+The source is the moving volume; the reference defines the fixed comparison frame.
+Landmark mode moves subject_11 to subject0081, fixes the LV endo apex exactly, and
+jointly minimizes squared mitral/tricuspid landmark errors using rotation only.
+Landmark sidecars define registration coordinates, never the Dice volumes.
+Auto clipping detects large, planar, supporting caps on the REFERENCE only.
 It never deletes source tissue because it fails to overlap the reference. Automatic
 cap detection is a geometric hypothesis, not semantic valve segmentation: inspect
 comparison.png and basal_planes.vtp before interpreting the conditional Dice.
@@ -22,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import itertools
 import json
 import os
@@ -322,6 +326,202 @@ def register(source_data, target_data, fraction, planes=()):
                     "rotation_determinant": float(np.linalg.det(matrix[:3, :3]))}
 
 
+LANDMARK_NAMES = ["lv_endo_apex", "lv_mitral_point", "rv_tricuspid_point"]
+LANDMARK_FILES = {
+    "fixed_lv_endo": "Mesh_LV_endo_timeframe001.vtk",
+    "fixed_aorta_valve": "Mesh_aorta_valve_timeframe001.vtk",
+    "fixed_tricuspid": "Mesh_tricuspid_valve_timeframe001.vtk",
+    "moving_apex": "subject_11_ED_apex_point.vtk",
+    "moving_lv_rim": "subject_11_ED_LV_opening_rim.vtk",
+    "moving_rv_rim": "subject_11_ED_RV_opening_rim.vtk",
+}
+
+
+def referenced_surface(mesh):
+    """Compact only polygon-referenced points; named VTK surfaces can share a full point table."""
+    if not isinstance(mesh, pv.PolyData):
+        raise ValueError("Landmark surfaces must be PolyData")
+    triangulated = mesh.triangulate()
+    if not len(triangulated.faces):
+        raise ValueError("Landmark surface has no polygon faces")
+    faces = triangulated.faces.reshape(-1, 4)[:, 1:]
+    ids, inverse = np.unique(faces, return_inverse=True)
+    points = np.asarray(triangulated.points, dtype=float)[ids]
+    if not np.isfinite(points).all():
+        raise ValueError("Landmark surface has nonfinite referenced points")
+    compact_faces = np.column_stack([np.full(len(faces), 3), inverse.reshape(-1, 3)])
+    surface = pv.PolyData(points, compact_faces.ravel())
+    return surface, ids
+
+
+def valve_centroid(mesh):
+    surface, ids = referenced_surface(mesh)
+    triangles = surface.points[surface.faces.reshape(-1, 4)[:, 1:]]
+    area = np.linalg.norm(np.cross(triangles[:, 1] - triangles[:, 0],
+                                   triangles[:, 2] - triangles[:, 0]), axis=1) / 2
+    if not np.isfinite(area).all() or area.sum() <= 1e-12:
+        raise ValueError("Valve surface has no positive area")
+    center = np.average(triangles.mean(axis=1), axis=0, weights=area)
+    return center, {"method": "triangle_area_weighted_centroid", "area_mm2": float(area.sum()),
+                    "stored_points": mesh.n_points, "referenced_vertices": len(ids)}
+
+
+def rim_centroid(mesh):
+    if not isinstance(mesh, pv.PolyData):
+        raise ValueError("Opening rim must be PolyData with line connectivity")
+    connectivity = mesh.lines
+    segments, offset = [], 0
+    while offset < len(connectivity):
+        count = int(connectivity[offset])
+        ids = connectivity[offset + 1:offset + count + 1]
+        if count >= 2:
+            segments.extend(zip(ids[:-1], ids[1:]))
+        offset += count + 1
+    if not segments:
+        raise ValueError("Opening rim has no line segments")
+    segments = np.asarray(segments, dtype=int)
+    endpoints = np.asarray(mesh.points, dtype=float)[segments]
+    if not np.isfinite(endpoints).all():
+        raise ValueError("Opening rim contains nonfinite referenced points")
+    length = np.linalg.norm(endpoints[:, 1] - endpoints[:, 0], axis=1)
+    if length.sum() <= 1e-12:
+        raise ValueError("Opening rim has zero length")
+    center = np.average(endpoints.mean(axis=1), axis=0, weights=length)
+    return center, {"method": "arc_length_weighted_centroid", "length_mm": float(length.sum()),
+                    "stored_points": mesh.n_points, "referenced_vertices": len(np.unique(segments))}
+
+
+def endo_apex(endo_mesh, aorta_mesh):
+    endo, original_ids = referenced_surface(endo_mesh)
+    valve, _ = referenced_surface(aorta_mesh)
+    _, closest = valve.find_closest_cell(endo.points, return_closest_point=True)
+    distances = np.linalg.norm(endo.points - closest, axis=1)
+    index = int(np.argmax(distances))
+    return np.asarray(endo.points[index]), {
+        "method": "referenced_LV_endo_vertex_maximizing_minimum_distance_to_aorta_triangles",
+        "original_point_id": int(original_ids[index]), "distance_to_valve_surface_mm": float(distances[index]),
+        "closest_valve_surface_point_mm": np.asarray(closest[index]).tolist(),
+        "stored_points": endo_mesh.n_points, "referenced_vertices": endo.n_points,
+    }
+
+
+def extract_landmarks(directory):
+    paths = {key: (directory / filename).resolve() for key, filename in LANDMARK_FILES.items()}
+    meshes = {key: pv.read(path) for key, path in paths.items()}
+    apex_mesh = meshes["moving_apex"]
+    if apex_mesh.n_points != 1 or not np.isfinite(apex_mesh.points).all():
+        raise ValueError("apex_point must contain exactly one finite point")
+    fixed_apex, apex_info = endo_apex(meshes["fixed_lv_endo"], meshes["fixed_aorta_valve"])
+    fixed_mitral, mitral_info = valve_centroid(meshes["fixed_aorta_valve"])
+    fixed_tricuspid, tricuspid_info = valve_centroid(meshes["fixed_tricuspid"])
+    moving_mitral, lv_info = rim_centroid(meshes["moving_lv_rim"])
+    moving_tricuspid, rv_info = rim_centroid(meshes["moving_rv_rim"])
+    moving = np.vstack([apex_mesh.points[0], moving_mitral, moving_tricuspid]).astype(float)
+    fixed = np.vstack([fixed_apex, fixed_mitral, fixed_tricuspid]).astype(float)
+    metadata = {"names": LANDMARK_NAMES, "moving_subject": "subject_11", "fixed_subject": "subject0081",
+                "files": {key: str(path) for key, path in paths.items()},
+                "moving_points_mm": moving.tolist(), "fixed_points_mm": fixed.tolist(),
+                "extraction": {"fixed_lv_endo_apex": apex_info, "fixed_lv_mitral_point": mitral_info,
+                               "fixed_rv_tricuspid_point": tricuspid_info,
+                               "moving_lv_endo_apex": {"method": "apex_point_coordinate"},
+                               "moving_lv_mitral_point": lv_info, "moving_rv_tricuspid_point": rv_info},
+                "lv_mitral_definition": "Fixed point is the aorta_valve centroid as explicitly requested."}
+    return moving, fixed, metadata
+
+
+def register_anchored_landmarks(moving, fixed):
+    """Solve min_R sum_i ||R(p_i-apex_m)-(q_i-apex_f)||^2, with no centering/scaling."""
+    moving, fixed = np.asarray(moving, dtype=float), np.asarray(fixed, dtype=float)
+    if moving.shape != (3, 3) or fixed.shape != (3, 3) or not np.isfinite([moving, fixed]).all():
+        raise ValueError("Expected three finite landmark pairs in order: apex, mitral, tricuspid")
+    relative_moving, relative_fixed = moving[1:] - moving[0], fixed[1:] - fixed[0]
+    for vectors in (relative_moving, relative_fixed):
+        lengths = np.linalg.norm(vectors, axis=1)
+        if (np.any(lengths < 1e-8)
+                or np.linalg.norm(np.cross(*vectors)) / np.prod(lengths) < 1e-6):
+            raise ValueError("Apex and valve landmarks must be distinct and non-collinear")
+    u, singular_values, vt = np.linalg.svd(relative_moving.T @ relative_fixed)
+    correction = np.eye(3)
+    correction[-1, -1] = np.linalg.det(vt.T @ u.T)
+    rotation = vt.T @ correction @ u.T
+    matrix = np.eye(4)
+    matrix[:3, :3] = rotation
+    matrix[:3, 3] = fixed[0] - rotation @ moving[0]
+    validate_rigid(matrix)
+    aligned = transform_points(moving, matrix)
+    errors = np.linalg.norm(aligned - fixed, axis=1)
+    if errors[0] > 1e-6:
+        raise ValueError("Hard LV endo-apex coincidence was not satisfied")
+    pairs = [(0, 1), (0, 2), (1, 2)]
+    report = {"method": "apex_fixed_rigid_landmark_SVD", "landmark_names": LANDMARK_NAMES,
+              "apex_is_hard_constraint": True, "apex_tolerance_mm": 1e-6,
+              "objective": "squared_mitral_error + squared_tricuspid_error with equal weights",
+              "weights": {"lv_mitral_point": 1.0, "rv_tricuspid_point": 1.0},
+              "icp_refinement": False, "moving_points_mm": moving.tolist(),
+              "fixed_points_mm": fixed.tolist(), "aligned_moving_points_mm": aligned.tolist(),
+              "errors_before_mm": dict(zip(LANDMARK_NAMES, np.linalg.norm(moving - fixed, axis=1).tolist())),
+              "errors_after_mm": dict(zip(LANDMARK_NAMES, errors.tolist())),
+              "valve_squared_error_sum_mm2": float(np.sum(errors[1:] ** 2)),
+              "valve_rms_error_mm": float(np.sqrt(np.mean(errors[1:] ** 2))),
+              "rotation_determinant": float(np.linalg.det(rotation)),
+              "orthogonality_max_error": float(np.max(np.abs(rotation.T @ rotation - np.eye(3)))),
+              "cross_covariance_singular_values": singular_values.tolist(),
+              "landmark_pair_distances_mm": [
+                  {"pair": [LANDMARK_NAMES[i], LANDMARK_NAMES[j]],
+                   "moving": float(np.linalg.norm(moving[i] - moving[j])),
+                   "fixed": float(np.linalg.norm(fixed[i] - fixed[j]))} for i, j in pairs]}
+    return matrix, report
+
+
+def associate_landmarks_with_volume(points, mesh, mesh_path):
+    """Record geometric association without snapping centroids or changing the given definitions."""
+    bounds = np.asarray(mesh.bounds).reshape(3, 2)
+    if np.any(points < bounds[:, 0] - 1.0) or np.any(points > bounds[:, 1] + 1.0):
+        raise ValueError(f"Landmarks fall outside {mesh_path.name}'s bounds; check coordinate frames")
+    surface = mesh.extract_surface().triangulate()
+    cell_ids, closest = surface.find_closest_cell(points, return_closest_point=True)
+    vertex_distances, vertex_ids = cKDTree(mesh.points).query(points)
+    parent_ids = np.asarray(surface.cell_data["original_cell_id"])[cell_ids]
+    return {"volume_mesh": str(mesh_path), "coordinates_are_in_volume_native_frame": True,
+            "coordinates_snapped": False,
+            "note": "Centroids are geometric reference points and need not lie on material; nearest geometry is diagnostic only.",
+            "landmarks": [
+                {"name": name, "coordinate_mm": np.asarray(point).tolist(),
+                 "nearest_surface_point_mm": np.asarray(q).tolist(),
+                 "distance_to_surface_mm": float(np.linalg.norm(point - q)),
+                 "nearest_original_volume_cell_id": int(cell_id),
+                 "nearest_volume_vertex_id": int(vertex_id), "distance_to_vertex_mm": float(vertex_distance)}
+                for name, point, q, cell_id, vertex_id, vertex_distance
+                in zip(LANDMARK_NAMES, points, closest, parent_ids, vertex_ids, vertex_distances)]}
+
+
+def save_landmark_artifacts(output, moving, fixed, matrix, metadata):
+    aligned = transform_points(moving, matrix)
+    for filename, points in [("moving_landmarks_original.vtp", moving),
+                             ("moving_landmarks_aligned.vtp", aligned), ("fixed_landmarks.vtp", fixed)]:
+        cloud = pv.PolyData(points)
+        cloud.point_data["landmark_id"] = np.arange(3)
+        cloud.point_data["landmark_name"] = np.asarray(LANDMARK_NAMES)
+        cloud.save(output / filename)
+    lines = np.array([[2, i, i + 3] for i in range(3)]).ravel()
+    residuals = pv.PolyData(np.vstack([aligned, fixed]), lines=lines)
+    residuals.cell_data["landmark_name"] = np.asarray(LANDMARK_NAMES)
+    residuals.cell_data["error_mm"] = np.linalg.norm(aligned - fixed, axis=1)
+    residuals.save(output / "landmark_residuals.vtp")
+    (output / "landmarks.json").write_text(json.dumps(metadata, indent=2, allow_nan=False) + "\n")
+
+
+def hash_files(paths):
+    result = {}
+    for path in paths:
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for block in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(block)
+        result[str(path)] = digest.hexdigest()
+    return result
+
+
 def clip_volume(mesh, planes):
     retained = mesh
     removed_parts = []
@@ -403,7 +603,7 @@ def dice_rows(source, reference, tag_codes, spacing, stage):
     return rows
 
 
-def preview(source_data, target_data, matrix, planes, output):
+def preview(source_data, target_data, matrix, planes, output, landmarks=None):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -419,17 +619,38 @@ def preview(source_data, target_data, matrix, planes, output):
         axes[0, col].scatter(b[:, i], b[:, j], s=.6, alpha=.25, c="#176ea3", label="Reference")
         axes[0, col].scatter(a[:, i], a[:, j], s=.6, alpha=.25, c="#e89b23", label="Aligned source")
         ax = axes[1, col]
-        ax.scatter(b[retained_b, i], b[retained_b, j], s=.6, alpha=.25, c="#176ea3", label="Reference retained")
-        ax.scatter(a[retained_a, i], a[retained_a, j], s=.6, alpha=.25, c="#e89b23", label="Source retained")
-        ax.scatter(a[~retained_a, i], a[~retained_a, j], s=1, alpha=.45, c="#cf3434", label="Source removed")
+        if planes:
+            ax.scatter(b[retained_b, i], b[retained_b, j], s=.6, alpha=.25, c="#176ea3", label="Reference retained")
+            ax.scatter(a[retained_a, i], a[retained_a, j], s=.6, alpha=.25, c="#e89b23", label="Source retained")
+            ax.scatter(a[~retained_a, i], a[~retained_a, j], s=1, alpha=.45, c="#cf3434", label="Source removed")
+        else:
+            original = source_data[0]
+            ax.scatter(b[:, i], b[:, j], s=.6, alpha=.25, c="#176ea3", label="Fixed volume")
+            ax.scatter(original[:, i], original[:, j], s=.6, alpha=.25, c="#e89b23", label="Moving volume before alignment")
         for row in range(2):
             axes[row, col].set_aspect("equal")
             axes[row, col].set_xlabel("XYZ"[i] + " (mm)")
             axes[row, col].set_ylabel("XYZ"[j] + " (mm)")
-            axes[row, col].set_title("Aligned full surfaces" if row == 0 else "Shared basal clipping; red = removed")
+            axes[row, col].set_title("Aligned full surfaces" if row == 0 else (
+                "Shared basal clipping; red = removed" if planes else "Before alignment (native coordinates)"))
+            if landmarks is not None:
+                moving, fixed = landmarks
+                moved = transform_points(moving, matrix) if row == 0 or planes else moving
+                current = axes[row, col]
+                current.scatter(fixed[:, i], fixed[:, j], marker="*", s=110, c="#176ea3", edgecolors="black", linewidths=.5, zorder=5)
+                current.scatter(moved[:, i], moved[:, j], marker="o", s=45, c="#e89b23", edgecolors="black", linewidths=.5, zorder=5)
+                for label, p, q in zip(["A", "M", "T"], moved, fixed):
+                    current.plot([p[i], q[i]], [p[j], q[j]], "k--", linewidth=.9, alpha=.7)
+                    current.annotate(label + " fixed", (q[i], q[j]), xytext=(5, 5), textcoords="offset points", fontsize=8)
+                    current.annotate(label + " moving", (p[i], p[j]), xytext=(5, -11), textcoords="offset points", fontsize=8)
         axes[0, col].legend(markerscale=4, loc="best")
         ax.legend(markerscale=4, loc="best")
-    fig.suptitle("Blue: reference; orange: source. Inspect the alignment and inferred basal boundary.")
+    title = "Blue: fixed reference; orange: moving volume."
+    if landmarks is not None:
+        title += " A = LV endo apex; M = specified LV mitral point; T = RV tricuspid point."
+    elif planes:
+        title += " Inspect the inferred basal boundary."
+    fig.suptitle(title)
     fig.tight_layout()
     fig.savefig(output / "comparison.png", dpi=160)
     plt.close(fig)
@@ -453,9 +674,12 @@ def save_planes(planes, reference, output):
 def parser():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--case-dir", type=Path, default=Path(__file__).resolve().parent / "1")
-    p.add_argument("--source", type=Path, help="Mesh with additional valve anatomy")
-    p.add_argument("--reference", type=Path, help="Fixed mesh without valves")
+    p.add_argument("--source", type=Path, help="Moving tetrahedral volume")
+    p.add_argument("--reference", type=Path, help="Fixed tetrahedral volume")
     p.add_argument("--output-dir", type=Path)
+    p.add_argument("--registration-method", choices=["icp", "landmarks"], default="icp",
+                   help="landmarks moves subject_11 to subject0081 with exact LV apex coincidence; default icp")
+    p.add_argument("--landmarks-dir", type=Path, help="Directory containing the six anatomical sidecars; default --case-dir")
     p.add_argument("--label-array", default="elemTag")
     p.add_argument("--label-map", action="append", default=[], metavar="SOURCE:REFERENCE", help="Explicit source tag correspondence; repeat as needed")
     p.add_argument("--spacing", nargs="+", type=float, default=[1.0, 0.5], help="Shared grid spacings in mm; default 1.0 0.5")
@@ -480,12 +704,23 @@ def run(args):
         raise ValueError("Invalid spacing, sample count, trimming fraction, plane offset, or convergence tolerance")
     if args.no_trim and args.plane:
         raise ValueError("--no-trim and --plane cannot be used together")
-    source_path = (args.source or args.case_dir / "subject0081_mesh_all.vtk").resolve()
-    reference_path = (args.reference or args.case_dir / "subject_11_volmesh.vtk").resolve()
-    output = (args.output_dir or args.case_dir / "dice_results").resolve()
+    landmark_mode = args.registration_method == "landmarks"
+    if landmark_mode and args.transform_in:
+        raise ValueError("Landmark fitting and --transform-in are mutually exclusive")
+    source_name = "subject_11_volmesh.vtk" if landmark_mode else "subject0081_mesh_all.vtk"
+    reference_name = "subject0081_mesh_all.vtk" if landmark_mode else "subject_11_volmesh.vtk"
+    source_path = (args.source or args.case_dir / source_name).resolve()
+    reference_path = (args.reference or args.case_dir / reference_name).resolve()
+    output_name = "dice_results_landmarks" if landmark_mode else "dice_results"
+    output = (args.output_dir or args.case_dir / output_name).resolve()
     if output.exists() and any(output.iterdir()) and not args.overwrite:
         raise ValueError(f"Output directory is not empty: {output}. Use a new directory or --overwrite.")
     output.mkdir(parents=True, exist_ok=True)
+    input_paths = [source_path, reference_path]
+    if landmark_mode:
+        landmark_directory = args.landmarks_dir or args.case_dir
+        input_paths.extend((landmark_directory / name).resolve() for name in LANDMARK_FILES.values())
+    input_hashes = hash_files(input_paths)
     log("Reading tetrahedral volumes ...")
     source, reference = read_volume(source_path, args.label_array), read_volume(reference_path, args.label_array)
     original_source_tags = sorted(int(t) for t in np.unique(source["elemTag"]))
@@ -501,7 +736,8 @@ def run(args):
     if set(mapping.values()) != set(reference_tags):
         raise ValueError("Source/reference tag sets differ. Supply --label-map to establish anatomical correspondence.")
     source_stats, reference_stats = volume_stats(source), volume_stats(reference)
-    planes = [] if args.no_trim else ([normalized_plane(v) for v in args.plane] if args.plane else detect_basal_planes(reference))
+    no_trim = args.no_trim or (landmark_mode and not args.plane)
+    planes = [] if no_trim else ([normalized_plane(v) for v in args.plane] if args.plane else detect_basal_planes(reference))
     registration_planes = [dict(plane) for plane in planes]
     for plane in planes:
         plane["offset_mm"] += args.plane_offset_mm
@@ -509,7 +745,19 @@ def run(args):
     log(f"Basal clipping planes: {len(planes)}; sampling boundary surfaces ...")
     source_data = sample_surface(source, args.samples, args.seed)
     target_data = sample_surface(reference, args.samples, args.seed + 1, registration_planes)
-    if args.transform_in:
+    landmarks, landmark_metadata = None, None
+    if landmark_mode:
+        log("Extracting anatomical landmarks and associating them with the full volumes ...")
+        moving_landmarks, fixed_landmarks, landmark_metadata = extract_landmarks(landmark_directory)
+        landmark_metadata["moving_volume_association"] = associate_landmarks_with_volume(moving_landmarks, source, source_path)
+        landmark_metadata["fixed_volume_association"] = associate_landmarks_with_volume(fixed_landmarks, reference, reference_path)
+        matrix, registration = register_anchored_landmarks(moving_landmarks, fixed_landmarks)
+        landmark_metadata["registration"] = registration
+        landmark_metadata["source_to_reference"] = matrix.tolist()
+        landmarks = (moving_landmarks, fixed_landmarks)
+        save_landmark_artifacts(output, moving_landmarks, fixed_landmarks, matrix, landmark_metadata)
+        log(f"Landmark errors after fitting (mm): {registration['errors_after_mm']}")
+    elif args.transform_in:
         data = json.loads(args.transform_in.read_text())
         matrix = validate_rigid(data["source_to_reference"] if isinstance(data, dict) else data)
         registration = {"method": "provided_rigid_transform", "transform_file": str(args.transform_in.resolve())}
@@ -523,6 +771,11 @@ def run(args):
                                                           "planes": planes}, indent=2) + "\n")
     aligned = source.copy(deep=True)
     aligned.points = transform_points(source.points, matrix)
+    aligned_stats = volume_stats(aligned)
+    if not np.isclose(aligned_stats["volume_mm3"], source_stats["volume_mm3"], rtol=1e-8, atol=1e-6):
+        raise ValueError("Rigid alignment failed native-volume preservation")
+    if not np.array_equal(aligned.cells, source.cells):
+        raise ValueError("Rigid alignment changed volume connectivity")
     log("Clipping tetrahedral volumes at shared anatomical boundaries ...")
     retained_a, removed_a = clip_volume(aligned, planes)
     retained_b, removed_b = clip_volume(reference, planes)
@@ -543,7 +796,7 @@ def run(args):
     save_planes(planes, reference, output)
     if not planes and (output / "basal_planes.vtp").exists():
         (output / "basal_planes.vtp").unlink()
-    preview(source_data, target_data, matrix, planes, output)
+    preview(source_data, target_data, matrix, planes, output, landmarks)
     log(f"Source removed: {100 * removed_stats_a['volume_mm3'] / source_stats['volume_mm3']:.3f}% of native volume")
     tag_codes = {t: i + 1 for i, t in enumerate(reference_tags)}
     probe_a, probe_b = encode_volume(aligned, tag_codes), encode_volume(reference, tag_codes)
@@ -592,7 +845,15 @@ def run(args):
     warnings.append("Scores quantify shape overlap after rigid registration; subject identity and cardiac phase are not inferred.")
     if not convergence["checked"] or convergence["within_tolerance"] is not True:
         warnings.append("Voxel-spacing convergence is unconfirmed; run at a finer spacing before interpreting small differences.")
+    inputs_unchanged = hash_files(input_paths) == input_hashes
+    if not inputs_unchanged:
+        raise ValueError("An input file changed during the run")
     report = {"source": str(source_path), "reference": str(reference_path), "units_assumed": "mm",
+              "dice_input_volumes": {"moving": str(source_path), "fixed": str(reference_path),
+                                     "landmark_sidecars_used_for_dice": False},
+              "input_sha256": input_hashes, "inputs_unchanged": inputs_unchanged,
+              "rigid_volume_check": {"original_mm3": source_stats["volume_mm3"],
+                                     "aligned_mm3": aligned_stats["volume_mm3"], "connectivity_preserved": True},
               "source_tag_mapping": mapping, "mask_code_to_reference_tag": {v: k for k, v in tag_codes.items()},
               "mask_background_code": 0, "registration": registration, "source_to_reference": matrix.tolist(),
               "clipping": {"planes": planes, "source_full": source_stats, "reference_full": reference_stats,
@@ -602,6 +863,8 @@ def run(args):
                            "reference_removed_fraction": removed_stats_b["volume_mm3"] / reference_stats["volume_mm3"]},
               "grids": grids, "dice": rows, "convergence": convergence, "warnings": warnings,
               "finest_spacing_mm": finest, "elapsed_seconds": time.monotonic() - started}
+    if landmark_metadata is not None:
+        report["landmarks"] = landmark_metadata
     (output / "results.json").write_text(json.dumps(report, indent=2, allow_nan=False) + "\n")
     with (output / "dice_scores.csv").open("w", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(rows[0]))

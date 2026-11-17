@@ -2,7 +2,7 @@
 
 Requested record date suffix: **1013**. Written on **2026-10-14**, Asia/Shanghai.
 
-Main pipeline: [generate_open_volmesh_stable.py](generate_open_volmesh_stable.py).
+Main pipeline: [generate_open_volmesh_stable.py](trash_for_generate_open_mesh/generate_open_volmesh_stable.py).
 
 ## Scope and reliability of this record
 
@@ -493,7 +493,7 @@ reported rather than silently forced into a label.
 
 | File | Role in this session's final workflow |
 | --- | --- |
-| [generate_open_volmesh_stable.py](generate_open_volmesh_stable.py) | Active stage orchestration, numbering, input preparation, movement selection, double-precision export, Steps 08–10 integration and options. |
+| [generate_open_volmesh_stable.py](trash_for_generate_open_mesh/generate_open_volmesh_stable.py) | Active stage orchestration, numbering, input preparation, movement selection, double-precision export, Steps 08–10 integration and options. |
 | [fill_step01_surface_holes.py](fill_step01_surface_holes.py) | Conditional hole-filling helper and topology checks. |
 | [clean_step02_surfaces.py](clean_step02_surfaces.py) | Shared MeshFix repair and validation for Steps 02/08. |
 | [mesh_intersections.py](mesh_intersections.py) | Confirm candidate intersections using FCL double precision. |

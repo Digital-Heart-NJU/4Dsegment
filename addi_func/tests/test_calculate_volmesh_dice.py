@@ -120,5 +120,73 @@ class TestVolumeDice(unittest.TestCase):
                 dice.validate_rigid(matrix)
 
 
+class TestLandmarkRegistration(unittest.TestCase):
+    def test_valve_centroid_excludes_unused_global_points(self):
+        points = np.array([[0., 0, 0], [4, 0, 0], [4, 1, 0], [0, 1, 0], [900, 800, 700]])
+        valve = pv.PolyData(points, np.array([3, 0, 1, 2, 3, 0, 2, 3]))
+        center, info = dice.valve_centroid(valve)
+        np.testing.assert_allclose(center, [2, .5, 0])
+        self.assertEqual(info["referenced_vertices"], 4)
+        self.assertEqual(info["stored_points"], 5)
+
+    def test_rim_centroid_is_weighted_by_length_and_excludes_unused_points(self):
+        points = np.array([[0., 0, 0], [4, 0, 0], [4, 1, 0], [900, 800, 700]])
+        rim = pv.PolyData(points, lines=np.array([3, 0, 1, 2]))
+        center, info = dice.rim_centroid(rim)
+        np.testing.assert_allclose(center, [2.4, .1, 0])
+        self.assertEqual(info["referenced_vertices"], 3)
+        self.assertEqual(info["length_mm"], 5)
+
+    def test_apex_uses_only_endo_vertices_and_actual_valve_triangles(self):
+        valve = pv.PolyData(np.array([[-10., -10, 0], [10, -10, 0], [0, 10, 0], [999, 999, 999]]),
+                            np.array([3, 0, 1, 2]))
+        endo = pv.PolyData(np.array([[0., 0, 5], [0, 0, 2], [1, 0, 2], [1000, 1000, 1000]]),
+                           np.array([3, 0, 1, 2]))
+        apex, info = dice.endo_apex(endo, valve)
+        np.testing.assert_allclose(apex, [0, 0, 5])
+        self.assertAlmostEqual(info["distance_to_valve_surface_mm"], 5)
+        np.testing.assert_allclose(info["closest_valve_surface_point_mm"], [0, 0, 0], atol=1e-12)
+        self.assertEqual(info["original_point_id"], 0)
+
+    def test_anchored_fit_recovers_known_rigid_transform(self):
+        moving = np.array([[2., -3, 4], [3, 2, 10], [-3, 4, 7]])
+        expected = np.eye(4)
+        expected[:3, :3] = Rotation.from_rotvec([.4, -.7, .2]).as_matrix()
+        expected[:3, 3] = [17, -42, 31]
+        fixed = dice.transform_points(moving, expected)
+        actual, report = dice.register_anchored_landmarks(moving, fixed)
+        np.testing.assert_allclose(actual, expected, atol=1e-12)
+        self.assertLess(report["errors_after_mm"]["lv_endo_apex"], 1e-12)
+        self.assertFalse(report["icp_refinement"])
+
+    def test_mismatched_valves_never_move_apex_or_scale_the_mesh(self):
+        moving = np.array([[0., 0, 0], [4, 0, 0], [0, 3, 0]])
+        fixed = np.array([[100., 200, 300], [104, 200, 300], [100, 206, 300]])
+        matrix, report = dice.register_anchored_landmarks(moving, fixed)
+        np.testing.assert_allclose(dice.transform_points(moving[:1], matrix)[0], fixed[0], atol=1e-12)
+        np.testing.assert_allclose(matrix[:3, :3], np.eye(3), atol=1e-12)
+        self.assertAlmostEqual(report["errors_after_mm"]["rv_tricuspid_point"], 3)
+        self.assertAlmostEqual(report["valve_squared_error_sum_mm2"], 9)
+        mesh = box()
+        transformed = mesh.copy()
+        transformed.points = dice.transform_points(mesh.points, matrix)
+        self.assertAlmostEqual(dice.volume_stats(mesh)["volume_mm3"], dice.volume_stats(transformed)["volume_mm3"])
+        np.testing.assert_array_equal(mesh.cells, transformed.cells)
+
+    def test_collinear_landmarks_are_rejected(self):
+        points = np.array([[0., 0, 0], [1, 0, 0], [2, 0, 0]])
+        with self.assertRaisesRegex(ValueError, "non-collinear"):
+            dice.register_anchored_landmarks(points, points)
+
+    def test_landmark_association_keeps_geometric_centroid_definition(self):
+        mesh = box()
+        mesh.cell_data["original_cell_id"] = np.arange(mesh.n_cells)
+        points = np.array([[1., 1, 1], [0, 0, 0], [2, 2, 2]])
+        association = dice.associate_landmarks_with_volume(points, mesh, Path("volume.vtk"))
+        self.assertFalse(association["coordinates_snapped"])
+        np.testing.assert_allclose(association["landmarks"][0]["coordinate_mm"], [1, 1, 1])
+        self.assertAlmostEqual(association["landmarks"][0]["distance_to_surface_mm"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()

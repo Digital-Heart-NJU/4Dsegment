@@ -18,6 +18,58 @@ Use `--source`, `--reference`, and `--output-dir` for other paths. Existing outp
 directories require `--overwrite`. Dependencies are NumPy, SciPy, PyVista/VTK,
 and Matplotlib, available in `cme-dt-env`; a GUI is not required.
 
+## Registration using anatomical landmarks with a fixed LV apex
+
+For folder 4, use:
+
+```bash
+conda run --no-capture-output -n cme-dt-env python \
+  volmesh_dice_compare/calculate_volmesh_dice.py \
+  --case-dir volmesh_dice_compare/4 --registration-method landmarks --no-trim
+```
+
+In this mode the moving volume defaults to `subject_11_volmesh.vtk`, the fixed
+volume defaults to `subject0081_mesh_all.vtk`, and outputs default to
+`4/dice_results_landmarks`. The existing ICP mode keeps its previous direction and
+defaults. Override volume paths with `--source` and `--reference` if necessary;
+`--landmarks-dir` selects the sidecar directory (default: `--case-dir`).
+
+The following files define three corresponding landmarks in each volume's native
+coordinate frame:
+
+| Landmark | Fixed subject0081 | Moving subject 11 |
+|---|---|---|
+| LV endo apex | Referenced vertex of `Mesh_LV_endo_timeframe001.vtk` maximizing its minimum distance to the aorta-valve triangles | Coordinate in `subject_11_ED_apex_point.vtk` |
+| LV mitral point | Area-weighted surface centroid of `Mesh_aorta_valve_timeframe001.vtk`, as explicitly requested | Length-weighted curve centroid of `subject_11_ED_LV_opening_rim.vtk` |
+| RV tricuspid point | Area-weighted surface centroid of `Mesh_tricuspid_valve_timeframe001.vtk` | Length-weighted curve centroid of `subject_11_ED_RV_opening_rim.vtk` |
+
+The fixed endocardial and valve files share a 5,810-point table containing unused
+points. Only vertices referenced by the named surface's faces participate in apex
+selection or centroid computation. Triangle-interior distances, rather than
+nearest-vertex or centroid distances, define the fixed apex.
+
+The entire moving volume is transformed by
+`T(x) = fixed_apex + R @ (x - moving_apex)`. A proper rotation `R` minimizes the
+sum of squared mitral and tricuspid errors with equal weights. The SVD fit uses
+the two apex-relative valve vectors without centering them. Apex coincidence is
+a hard constraint (tolerance 1e-6 mm); scaling and subsequent ICP are excluded.
+Different landmark-triangle dimensions can leave nonzero valve errors, which are
+reported individually along with the objective and pairwise landmark distances.
+
+`landmarks.json` associates each reference point with its full volume, recording
+nearby boundary points, original volume-cell IDs, and volume-vertex IDs. These
+nearest locations are diagnostic: geometric centroids retain their definitions
+and are not snapped to arbitrary wall points. Landmark VTP files and residual
+lines can be displayed together with the aligned volume in ParaView. The preview
+marks apex (A), mitral (M), and tricuspid (T), before and after registration.
+
+Dice still uses **both complete tetrahedral volumes** on the common grid; the six
+sidecars are used only to estimate registration. Landmark mode defaults to no
+trimming unless explicit `--plane` boundaries are supplied. `source_aligned.vtu`
+is the full subject 11 volume in subject0081's coordinate system. The report checks
+native-volume and connectivity preservation and verifies input-file SHA-256 hashes
+before/after execution. Input meshes and sidecars are read only.
+
 ## Alignment and trimming
 
 Boundary triangles are sampled by area. The script tests 25 rigid initial

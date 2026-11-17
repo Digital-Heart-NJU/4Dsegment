@@ -3,7 +3,7 @@
 Date: 2026-10-09
 
 This file records the main commands, pipeline changes, experiments, and output
-locations used today for `generate_open_volmesh_stable.py`.
+locations used today for `trash_for_generate_open_mesh/generate_open_volmesh_stable.py`.
 
 ## Main source file
 
@@ -306,5 +306,5 @@ For Subject 1 ED, the latest validation reported:
   triangle surfaces.
 - No old moved-RVendo files are used by the current Step 5 path.
 - All modifications described above are contained in
-  `generate_open_volmesh_stable.py`.
+  `trash_for_generate_open_mesh/generate_open_volmesh_stable.py`.
 

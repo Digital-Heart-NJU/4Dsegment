@@ -10,7 +10,7 @@ import pyvista as pv
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
-from model_vol_septum import generate_open_volmesh_stable as pipeline
+from model_vol_septum.trash_for_generate_open_mesh import generate_open_volmesh_stable as pipeline
 from model_vol_septum.tag_step10_volume import shared_face_neighbors, tag_components
 from model_vol_septum.generate_step09_volume import signed_volumes
 

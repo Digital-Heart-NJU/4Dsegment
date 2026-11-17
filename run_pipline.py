@@ -3,13 +3,17 @@
 python run_pipline.py --request segment --subject 11
 python run_pipline.py --request raw_surface --subject 11
 python run_pipline.py --request volumetric --subject 11
+python run_pipline.py --request uvc_fiber --subject 11
 
 python run_pipline.py --request all --subject 11-18
 
 Requires Conda and cme-dt-env; DMACS stages also require running Docker.
 Batch jobs run sequentially.
-Existing generated outputs are replaced. raw_surface also clears subject-root
-*.txt files through the original Stage 02 routine. Inputs/manual files are retained.
+Segmentation, raw-surface, and volumetric stages replace generated outputs.
+uvc_fiber resumes completed coordinate/fiber stages and writes UVC_fiber_Outputs.
+With --request all, it regenerates them after volumetric meshing.
+raw_surface also clears subject-root *.txt files through the original Stage 02
+routine. Inputs/manual files are retained.
 
 actual_command in DMACS.py:
 conda run --no-capture-output -n cme-dt-env \
@@ -23,6 +27,12 @@ conda run --no-capture-output -n cme-dt-env python -B -u \
   --subject-dir data/subject_11 \
   --frames ED,ES \
   --overwrite
+
+actual_command in generate_UVC_fiber.py:
+conda run --no-capture-output -n cme-dt-env python -B -u \
+  model_vol_septum/generate_UVC_fiber.py \
+  --data-dir data --subject subject_11 --frames ED,ES \
+  --carp-bin-dir /opt/openCARP/usr/bin --uvc-fiber
 """
 
 import argparse
@@ -38,10 +48,12 @@ STAGE_ARGS = {
     "segment": ["--stage01_seg_only=true", "--overwrite"],
     "raw_surface": ["--stage02_surf_only=true", "--seg_manual=false"],
     "volumetric": ["--frames", "ED,ES", "--overwrite"],
+    "uvc_fiber": ["--uvc-fiber", "--frames", "ED,ES",
+                  "--carp-bin-dir", "/opt/openCARP/usr/bin"],
 }
 
 # --request all runs these stages in this order for each subject.
-REQUEST_ORDER = ["segment", "raw_surface", "volumetric"]
+REQUEST_ORDER = ["segment", "raw_surface", "volumetric", "uvc_fiber"]
 
 
 def subject_range(value):
@@ -69,8 +81,10 @@ def main(argv=None):
         "segment": dmacs,
         "raw_surface": dmacs,
         "volumetric": root / "model_vol_septum" / "generate_open_volmesh.py",
+        "uvc_fiber": root / "model_vol_septum" / "generate_UVC_fiber.py",
     }
-    output_folders = {"segment": "segs", "raw_surface": "vtks", "volumetric": "volmesh_pipline"}
+    output_folders = {"segment": "segs", "raw_surface": "vtks", "volumetric": "volmesh_pipline",
+                      "uvc_fiber": "UVC_fiber_Outputs"}
     conda = shutil.which("conda")
     if not conda:
         raise SystemExit("Conda was not found. Run this from a terminal with Conda available.")
@@ -99,6 +113,10 @@ def main(argv=None):
                 command = python_command + [str(scripts[request])]
                 if request == "volumetric":
                     command += ["--subject-dir", str(subject_dir)]
+                elif request == "uvc_fiber":
+                    command += ["--data-dir", str(root / "data"), "--subject", subject]
+                    if "volumetric" in requests:
+                        command += ["--force"]
                 else:
                     command += ["--segmentation_backend=nnunet",
                                 "--data-dir", str(root / "data"), "--subject", subject]

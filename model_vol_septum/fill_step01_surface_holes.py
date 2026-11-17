@@ -108,7 +108,7 @@ def fill_surface(source: pv.PolyData, tag: int, max_radius: float | None) -> pv.
 
 
 def main() -> None:
-    from generate_open_volmesh_stable import write_custom_surface_vtk
+    from model_vol_septum.trash_for_generate_open_mesh.generate_open_volmesh_stable import write_custom_surface_vtk
 
     args = parse_args()
     subject_id = args.subject_dir.resolve().name

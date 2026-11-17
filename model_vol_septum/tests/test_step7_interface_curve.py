@@ -12,7 +12,7 @@ import numpy as np
 import pyvista as pv
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from model_vol_septum import generate_open_volmesh_stable as pipeline
+from model_vol_septum.trash_for_generate_open_mesh import generate_open_volmesh_stable as pipeline
 
 
 class Step7InterfaceCurveTests(unittest.TestCase):

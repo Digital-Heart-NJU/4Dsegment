@@ -14,6 +14,7 @@ import glob
 import math
 import random
 import shutil
+import json
 import vtk
 import pyvista as pv
 import logging
@@ -234,6 +235,175 @@ def _annulus_high_z_boundary_loop(vtk_path: str) -> Tuple[np.ndarray, Dict[str, 
     }
 
 
+def _opening_rim_loop(vtk_path: str) -> Tuple[np.ndarray, Dict[str, object]]:
+    """Read one supplied closed opening ring without choosing a boundary by Z."""
+    rim = pv.read(vtk_path)
+    if not isinstance(rim, pv.PolyData):
+        raise RuntimeError(f"Opening rim must be a PolyData curve: {vtk_path}")
+    rim = rim.clean(tolerance=0.0)
+    if rim.n_lines == 0 or rim.n_cells != rim.n_lines:
+        raise RuntimeError(f"Opening rim must contain only line cells: {vtk_path}")
+    if not np.all(np.isfinite(rim.points)):
+        raise RuntimeError(f"Opening rim contains non-finite coordinates: {vtk_path}")
+
+    segments = []
+    lines = np.asarray(rim.lines, dtype=np.int64)
+    offset = 0
+    while offset < len(lines):
+        count = int(lines[offset])
+        ids = lines[offset + 1:offset + 1 + count]
+        if count < 2 or len(ids) != count:
+            raise RuntimeError(f"Invalid opening-rim line cell: {vtk_path}")
+        segments.extend(zip(ids[:-1], ids[1:]))
+        offset += count + 1
+    edges = np.asarray(segments, dtype=np.int64)
+    used, degree = np.unique(edges, return_counts=True)
+    regions = np.unique(rim.connectivity().cell_data["RegionId"])
+    if (len(regions) != 1 or len(used) < 3 or np.any(degree != 2)
+            or np.any(edges[:, 0] == edges[:, 1])):
+        raise RuntimeError(f"Opening rim must be exactly one connected closed ring: {vtk_path}")
+    points = np.asarray(rim.points, dtype=float)[used]
+    lengths = np.linalg.norm(rim.points[edges[:, 0]] - rim.points[edges[:, 1]], axis=1)
+    return points, {
+        "source": str(Path(vtk_path).resolve()),
+        "selection": "single_closed_opening_rim_used_directly",
+        "point_count": int(len(points)),
+        "segment_count": int(len(edges)),
+        "length_mm": float(lengths.sum()),
+        "length_weighted_centroid": np.average(
+            rim.points[edges].mean(axis=1), axis=0, weights=lengths
+        ).tolist(),
+    }
+
+
+def _curve_enclosed_area(curve):
+    """Measure a closed line network in its least-squares best-fit plane."""
+    from shapely.geometry import LineString
+    from shapely.ops import polygonize, unary_union
+
+    lines = np.asarray(curve.lines, dtype=np.int64)
+    if (curve.n_points < 3 or curve.n_cells != curve.n_lines or not len(lines)
+            or len(lines) % 3 or np.any(lines.reshape(-1, 3)[:, 0] != 2)
+            or not np.all(np.isfinite(curve.points))):
+        raise RuntimeError("Interface curve must contain finite two-node line segments.")
+    edges = lines.reshape(-1, 3)[:, 1:]
+    degree = np.bincount(edges.ravel(), minlength=curve.n_points)
+    if np.any(degree < 2) or np.any(degree % 2) or np.any(edges[:, 0] == edges[:, 1]):
+        raise RuntimeError("Interface curve has an open boundary; enclosed area is undefined.")
+    points = np.asarray(curve.points, dtype=float)
+    origin = points.mean(axis=0)
+    centered = points - origin
+    _, _, axes = np.linalg.svd(centered, full_matrices=False)
+    projected = centered @ axes[:2].T
+    # Polygonization also handles small loops attached at a shared boundary node.
+    # No endpoint connections or convex hulls are introduced to invent an area.
+    segments = unary_union([LineString(projected[edge]) for edge in edges])
+    polygons = list(polygonize(segments))
+    area = float(unary_union(polygons).area)
+    if not np.isfinite(area) or area <= np.finfo(float).eps:
+        raise RuntimeError("Interface curve has no positive enclosed projected area.")
+    deviation = centered @ axes[2]
+    return {
+        "enclosed_area_mm2": area,
+        "area_method": "union_of_enclosed_polygons_in_best_fit_plane",
+        "best_fit_plane_origin": origin.tolist(),
+        "best_fit_plane_normal": axes[2].tolist(),
+        "out_of_plane_rms_mm": float(np.sqrt(np.mean(deviation ** 2))),
+        "out_of_plane_max_mm": float(np.max(np.abs(deviation))),
+        "junction_node_count": int(np.count_nonzero(degree > 2)),
+        "projected_polygon_count": len(polygons),
+        "point_count": int(curve.n_points),
+        "segment_count": int(curve.n_lines),
+    }
+
+
+def extract_tag_interface_curve(volume_vtk, output_dir):
+    """Extract the tag-0/tag-1 boundary curve, selecting by enclosed area."""
+    from .tag_step10_volume import shared_face_neighbors
+
+    output_dir = Path(output_dir).resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    volume = pv.read(volume_vtk)
+    if (not isinstance(volume, pv.UnstructuredGrid) or not volume.n_cells
+            or not np.all(volume.celltypes == pv.CellType.TETRA)
+            or not np.all(np.isfinite(volume.points))):
+        raise RuntimeError("PHI interface extraction requires a finite tetrahedral volume.")
+    if "elemTag" not in volume.cell_data:
+        raise RuntimeError("PHI interface extraction requires the elemTag cell array.")
+    tags = np.asarray(volume.cell_data["elemTag"])
+    if set(np.unique(tags).tolist()) != {0, 1}:
+        raise RuntimeError("PHI interface extraction requires exactly tag 0 and tag 1.")
+    a, b, shared_faces = shared_face_neighbors(volume.cells_dict[pv.CellType.TETRA])
+    between = tags[a] != tags[b]
+    triangles = shared_faces[between]
+    if not len(triangles):
+        raise RuntimeError("Tag 0 and tag 1 do not share any complete triangular faces.")
+    node_ids, local = np.unique(triangles, return_inverse=True)
+    faces = np.column_stack((np.full(len(triangles), 3), local.reshape(-1, 3)))
+    interface = pv.PolyData(volume.points[node_ids].copy(), faces=faces.ravel())
+    interface.point_data["volumeNodeId"] = node_ids
+    interface.cell_data["tag0CellId"] = np.where(tags[a[between]] == 0, a[between], b[between])
+    interface.cell_data["tag1CellId"] = np.where(tags[a[between]] == 1, a[between], b[between])
+    interface_path = output_dir / "tag_interface_surface.vtk"
+    interface.save(interface_path, binary=True)
+
+    triangle_edges = np.sort(np.vstack((
+        triangles[:, [0, 1]], triangles[:, [1, 2]], triangles[:, [2, 0]],
+    )), axis=1)
+    edges, incidence = np.unique(triangle_edges, axis=0, return_counts=True)
+    # At a nonmanifold interface junction, three incident triangles leave one
+    # boundary edge after cancellation. Dropping these edges opens real curves.
+    boundary_edges = edges[incidence % 2 == 1]
+    if not len(boundary_edges):
+        raise RuntimeError("The tag-0/tag-1 interface has no boundary curves.")
+    boundary_ids, local = np.unique(boundary_edges, return_inverse=True)
+    boundary = pv.PolyData(volume.points[boundary_ids].copy(), lines=np.column_stack((
+        np.full(len(boundary_edges), 2), local.reshape(-1, 2),
+    )).ravel())
+    boundary.point_data["volumeNodeId"] = boundary_ids
+    boundary.cell_data["interfaceTriangleIncidence"] = incidence[incidence % 2 == 1]
+    boundary_path = output_dir / "tag_interface_boundary_curves.vtk"
+    boundary.save(boundary_path, binary=True)
+    connected = boundary.connectivity()
+    region_ids = np.asarray(connected.cell_data["RegionId"], dtype=np.int64)
+    candidates, curves = [], []
+    for region_id in np.unique(region_ids):
+        curve = connected.extract_cells(np.flatnonzero(region_ids == region_id)).extract_surface()
+        record = _curve_enclosed_area(curve)
+        record["region_id"] = int(region_id)
+        path = output_dir / f"tag_interface_curve_candidate_{region_id}.vtk"
+        curve.field_data["enclosed_area_mm2"] = np.array([record["enclosed_area_mm2"]])
+        curve.save(path, binary=True)
+        record["path"] = str(path)
+        candidates.append(record)
+        curves.append(curve)
+    if len(curves) not in (1, 2):
+        raise RuntimeError(
+            f"Expected one or two tag-interface boundary curves, found {len(curves)}. "
+            f"Inspect {boundary_path}."
+        )
+    selected = max(range(len(curves)), key=lambda index: candidates[index]["enclosed_area_mm2"])
+    selected_path = output_dir / "tag_interface_curve.vtk"
+    curves[selected].save(selected_path, binary=True)
+    summary = {
+        "source_volume": str(Path(volume_vtk).resolve()),
+        "method": "shared_tag_0_tag_1_faces_then_boundary_curves",
+        "selection": "largest_enclosed_area" if len(curves) == 2 else "only_interface_curve",
+        "interface_surface": str(interface_path),
+        "interface_triangle_count": int(len(triangles)),
+        "boundary_curves": str(boundary_path),
+        "odd_nonmanifold_boundary_edge_count": int(np.count_nonzero(incidence[incidence % 2 == 1] > 1)),
+        "curve_count": len(curves),
+        "candidates": candidates,
+        "selected_region_id": candidates[selected]["region_id"],
+        "selected_enclosed_area_mm2": candidates[selected]["enclosed_area_mm2"],
+        "selected_curve": str(selected_path),
+        "source_volume_modified": False,
+    }
+    (output_dir / "tag_interface_curve_summary.json").write_text(json.dumps(summary, indent=2))
+    return str(selected_path), summary
+
+
 def _tetra_edge_scale(volume: pv.UnstructuredGrid) -> float:
     tetrahedra = volume.cells_dict.get(vtk.VTK_TETRA)
     if tetrahedra is None or not len(tetrahedra):
@@ -366,7 +536,7 @@ def coord_z_openbase_annuli(
     surfloc: str,
     UVCfolder: str,
 ) -> Tuple[str, Dict[str, object]]:
-    """Generate COORDS_Z from the high-Z LV/RV open-base annulus loops."""
+    """Generate COORDS_Z using the complete supplied LV/RV opening rings."""
     folder_path = Path(folder).resolve()
     surface_root = folder_path / surfloc / "biv_i"
     uvc_root = Path(UVCfolder).resolve()
@@ -379,8 +549,8 @@ def coord_z_openbase_annuli(
         raise RuntimeError(f"COORDS_Z volume input is not an unstructured grid: {volume_vtk}")
     edge_scale = _tetra_edge_scale(volume)
 
-    lv_loop, lv_loop_info = _annulus_high_z_boundary_loop(lv_annulus_vtk)
-    rv_loop, rv_loop_info = _annulus_high_z_boundary_loop(rv_annulus_vtk)
+    lv_loop, lv_loop_info = _opening_rim_loop(lv_annulus_vtk)
+    rv_loop, rv_loop_info = _opening_rim_loop(rv_annulus_vtk)
 
     lv_meshname = "LV_all"
     if not meshtool.extract_mesh(meshtoolloc, meshname, "1", lv_meshname):
@@ -389,7 +559,7 @@ def coord_z_openbase_annuli(
     lv_points = np.asarray(meshIO.read_pts(basename=lv_meshname), dtype=float)
 
     lv_base_ids, lv_base_map = _map_contour_to_mesh_nodes(
-        lv_loop, lv_points, edge_scale, "LV high-Z annulus loop to LV mesh"
+        lv_loop, lv_points, edge_scale, "LV opening rim to LV mesh"
     )
     lv_base = str(surface_root / "lv_base")
     _write_carp_node_surface(lv_base, lv_base_ids)
@@ -419,12 +589,14 @@ def coord_z_openbase_annuli(
     _write_carp_node_surface(apex_surface, np.array([int(apex_full_id)], dtype=np.int64))
 
     lv_full_ids, lv_full_map = _map_contour_to_mesh_nodes(
-        lv_loop, full_points, edge_scale, "LV high-Z annulus loop to biventricular mesh"
+        lv_loop, full_points, edge_scale, "LV opening rim to biventricular mesh"
     )
     rv_full_ids, rv_full_map = _map_contour_to_mesh_nodes(
-        rv_loop, full_points, edge_scale, "RV high-Z annulus loop to biventricular mesh"
+        rv_loop, full_points, edge_scale, "RV opening rim to biventricular mesh"
     )
     combined_base_ids = np.unique(np.concatenate((lv_full_ids, rv_full_ids)))
+    if int(apex_full_id) in combined_base_ids:
+        raise RuntimeError("The selected LV apex is also an opening-rim base node.")
     comprehensive_base = str(surface_root / "base_i")
     _write_carp_node_surface(comprehensive_base, combined_base_ids)
 
@@ -438,6 +610,15 @@ def coord_z_openbase_annuli(
         raise RuntimeError("COORDS_Z.dat has an invalid size or non-finite values.")
     if float(np.ptp(coords_z)) <= 0.0:
         raise RuntimeError("COORDS_Z.dat has a zero coordinate range.")
+    apex_error = float(abs(coords_z[int(apex_full_id)]))
+    base_error = float(np.max(np.abs(coords_z[combined_base_ids] - 1.0)))
+    if apex_error > 1e-6 or base_error > 1e-6:
+        raise RuntimeError(
+            f"COORDS_Z does not enforce apex=0 and opening rims=1: "
+            f"apex error {apex_error:.6g}, base error {base_error:.6g}."
+        )
+    if float(np.min(coords_z)) < -1e-6 or float(np.max(coords_z)) > 1.0 + 1e-6:
+        raise RuntimeError("COORDS_Z values are outside the relative-distance range [0, 1].")
 
     output_basename = str(uvc_root / "COORDS_Z")
     if not meshtool.collect_nodal(
@@ -445,8 +626,11 @@ def coord_z_openbase_annuli(
     ):
         raise RuntimeError("meshtool failed to create the COORDS_Z visualization files.")
 
+    volume.point_data["COORDS_Z"] = coords_z
+    volume.save(uvc_root / "COORDS_Z.vtk", binary=True)
+
     return output_filename, {
-        "method": "high_z_openbase_annulus_loops_to_apex_base_distancefield",
+        "method": "single_opening_rims_to_apex_base_distancefield",
         "volume_vtk": str(Path(volume_vtk).resolve()),
         "mesh_point_count": int(len(full_points)),
         "median_tetra_edge_length_mm": edge_scale,
@@ -460,6 +644,8 @@ def coord_z_openbase_annuli(
         "apex_full_mesh_node_id": int(apex_full_id),
         "apex_coordinate": [float(value) for value in apex_coordinate],
         "apex_mapping_distance_mm": float(apex_distance),
+        "apex_zero_max_abs_error": apex_error,
+        "base_one_max_abs_error": base_error,
         "COORDS_Z_min": float(np.min(coords_z)),
         "COORDS_Z_max": float(np.max(coords_z)),
     }
@@ -578,7 +764,7 @@ def transmural_openbase(
     IGBEXTRACT,
     UVCfolder,
 ):
-    """Generate PHO from classified shell boundaries and the internal LVepi."""
+    """Solve PHO with mapped LVepi and extracted junction=1, protecting LVendo=0."""
     from .pho_boundaries import build_pho_boundaries
     folder_path = Path(folder).resolve()
     work_root = folder_path / "PHO_work"
@@ -598,19 +784,27 @@ def transmural_openbase(
         volume, full_points, surface_paths, work_root, edge_scale,
     )
     zero_boundary = str(surface_root / "endo_and_annuli_zero")
-    outer_boundary = str(surface_root / "epi_and_internal_LVepi_one")
+    outer_boundary = str(surface_root / "combined_epicardium_and_LVepi_one")
     _write_carp_node_surface(zero_boundary, zero_nodes)
     _write_carp_node_surface(outer_boundary, outer_nodes)
 
-    sim_id = str(work_root / "transmural_results")
-    def solver_surface_path(name):
-        return os.path.relpath(name + ".surf", folder_path)
+    # A single spatially varying Dirichlet electrode avoids interactions between
+    # separate ground/clamp electrodes in the legacy openCARP RHS assembly.
+    dirichlet_file = surface_root / "pho_dirichlet.vtx"
+    boundary_nodes = np.concatenate((zero_nodes, outer_nodes))
+    boundary_values = np.concatenate((np.zeros(len(zero_nodes)), np.ones(len(outer_nodes))))
+    with dirichlet_file.open("w") as stream:
+        stream.write(f"{len(boundary_nodes)}\nextra\n")
+        np.savetxt(stream, np.column_stack((boundary_nodes, boundary_values)), fmt=["%d", "%.17g"])
 
+    sim_id = str(work_root / "transmural_results")
+    solver_boundary = os.path.relpath(dirichlet_file.with_suffix(""), folder_path)
     args = (
-        "-num_stim 2 -stimulus[0].stimtype 3 "
-        "-stimulus[0].vtx_file " + solver_surface_path(zero_boundary) + " "
-        "-stimulus[1].stimtype 2 -stimulus[1].strength 1 -stimulus[1].duration 1 "
-        "-stimulus[1].vtx_file " + solver_surface_path(outer_boundary) + " "
+        "-cg_tol_ellip 1e-12 "
+        "-gregion[0].num_IDs 2 -gregion[0].ID[0] 0 -gregion[0].ID[1] 1 "
+        "-gregion[0].g_in 1 -gregion[0].g_en 1 "
+        "-num_stim 1 -stimulus[0].stimtype 2 -stimulus[0].strength 1 -stimulus[0].duration 1 "
+        "-stimulus[0].vtx_fcn 1 -stimulus[0].vtx_file " + solver_boundary + " "
     )
     if not carpfunc.Laplace_solver(
         MPIEXEC, OPTS, CARP, parfile, str(full_mesh), sim_id, args
@@ -625,8 +819,23 @@ def transmural_openbase(
 
     raw_error = max(float(np.max(np.abs(pho_values[outer_nodes] - 1.0))),
                     float(np.max(np.abs(pho_values[zero_nodes]))))
-    if raw_error > 1e-3:
+    if raw_error > 1e-6:
         raise RuntimeError(f"PHO solver did not enforce its boundary conditions: error {raw_error:.6g}.")
+    solver_range = [float(np.min(pho_values)), float(np.max(pho_values))]
+    # Finite-element solutions on this mesh can overshoot between prescribed
+    # boundaries. Preserve the unmodified solve for inspection before exporting
+    # the normalized coordinate used for fiber-angle interpolation.
+    raw_values = pho_values.copy()
+    raw_path = uvc_root / "PHO_raw.dat"
+    np.savetxt(raw_path, raw_values, fmt="%.17g")
+    clipped_node_count = int(np.count_nonzero((pho_values < 0.0) | (pho_values > 1.0)))
+    clipped_ids = np.flatnonzero((pho_values < 0.0) | (pho_values > 1.0))
+    clipped_cloud = pv.PolyData(volume.points[clipped_ids].copy())
+    clipped_cloud.point_data["volumeNodeId"] = clipped_ids
+    clipped_cloud.point_data["PHO_raw"] = raw_values[clipped_ids]
+    clipped_cloud.point_data["PHO"] = np.clip(raw_values[clipped_ids], 0.0, 1.0)
+    clipped_cloud.save(work_root / "PHO_clipped_nodes.vtk", binary=True)
+    pho_values = np.clip(pho_values, 0.0, 1.0)
     pho_values[outer_nodes] = 1.0
     pho_values[zero_nodes] = 0.0
     surface_error = float(np.max(np.abs(pho_values[outer_nodes] - 1.0)))
@@ -636,16 +845,20 @@ def transmural_openbase(
         )
 
     pho_path = str(uvc_root / "PHO.dat")
-    meshIO.write_data(dataFilename=pho_path, data=pho_values)
+    np.savetxt(pho_path, pho_values, fmt="%.17g")
     pho_basename = str(uvc_root / "PHO")
     if not meshtool.collect_nodal(
         meshtoolloc, str(full_mesh), "carp_txt", pho_basename, "", pho_path
     ):
         raise RuntimeError("meshtool failed to create the PHO visualization files.")
 
+    volume.point_data["PHO"] = pho_values
+    volume.point_data["PHO_raw"] = raw_values
+    volume.save(uvc_root / "PHO.vtk", binary=True)
+
     expected = [
         uvc_root / name for name in (
-            "PHO.case", "PHO.dat", "PHO.fiber.ens", "PHO.geo",
+            "PHO.case", "PHO.dat", "PHO_raw.dat", "PHO.vtk", "PHO.fiber.ens", "PHO.geo",
             "PHO.tags.ens", "PHO_PHO.ens"
         )
     ]
@@ -653,15 +866,27 @@ def transmural_openbase(
     if missing:
         raise RuntimeError(f"PHO generation did not create valid outputs: {missing}")
     return pho_path, {
-        "method": "classified_pipeline_shell_plus_internal_LVepi_disjoint_boundary_laplace",
+        "method": "mapped_LVepi_and_extracted_interface_one_LVendo_zero_laplace",
         "mesh_point_count": int(len(full_points)),
-        "lv_epi_node_count": boundary_details["LVepi_node_count"],
+        "epicardial_node_count": int(len(outer_nodes)),
+        "LVepi_node_count": boundary_details["LVepi_node_count"],
+        "LVepi_internal_node_count": boundary_details["LVepi_mapping"]["internal_node_count"],
+        "LVepi_mapped_face_count": boundary_details["LVepi_mapping"]["mapped_face_count"],
+        "LVepi_interface_face_count": boundary_details["LVepi_mapping"]["interface_face_count"],
         "zero_boundary_node_count": int(len(zero_nodes)),
         "unified_outer_boundary_node_count": int(len(outer_nodes)),
         "unified_outer_boundary_max_abs_error": surface_error,
         "solver_boundary_max_abs_error_before_export": raw_error,
+        "solver_PHO_range_before_export": solver_range,
+        "raw_solution_dat": str(raw_path),
+        "normalization": "clip_to_unit_interval_with_unmodified_raw_solution_preserved",
+        "normalization_clipped_node_count": clipped_node_count,
+        "normalization_clipped_node_fraction": float(clipped_node_count / len(raw_values)),
+        "normalization_maximum_adjustment": float(np.max(np.abs(raw_values - pho_values))),
+        "isotropic_conductivity_tags": [0, 1],
         "median_tetra_edge_length_mm": float(edge_scale),
-        "boundary_files": {"zero": zero_boundary, "one": outer_boundary},
+        "boundary_files": {"zero": zero_boundary, "one": outer_boundary,
+                           "nodal_dirichlet": str(dirichlet_file)},
         "boundary_details": boundary_details,
         "PHO_range": [float(np.min(pho_values)), float(np.max(pho_values))],
         "outputs": [str(path) for path in expected],
@@ -774,25 +999,7 @@ def find_two_RV_insertion_pts_openbase(
     inf_output_vtk,
     coord_z_tolerance=0.01,
 ):
-    """Find RV ANT/INF landmarks on opposite sides of the epicardial interface."""
-
-    def area_centroid(mesh, name):
-        surface = mesh.extract_surface().triangulate().clean(tolerance=0.0)
-        packed_faces = np.asarray(surface.faces, dtype=np.int64)
-        if not len(packed_faces) or len(packed_faces) % 4 != 0:
-            raise RuntimeError(f"{name} has no valid triangular faces.")
-        faces = packed_faces.reshape(-1, 4)
-        if np.any(faces[:, 0] != 3):
-            raise RuntimeError(f"{name} contains non-triangular cells.")
-        triangles = np.asarray(surface.points, dtype=float)[faces[:, 1:]]
-        areas = 0.5 * np.linalg.norm(
-            np.cross(triangles[:, 1] - triangles[:, 0], triangles[:, 2] - triangles[:, 0]),
-            axis=1,
-        )
-        valid = np.isfinite(areas) & (areas > np.finfo(float).eps)
-        if not np.any(valid):
-            raise RuntimeError(f"{name} has no non-degenerate triangular area.")
-        return np.average(np.mean(triangles[valid], axis=1), axis=0, weights=areas[valid])
+    """Find ANT/INF on the selected tag-interface curve using opening-rim centers."""
 
     def write_landmark(
         path,
@@ -826,11 +1033,13 @@ def find_two_RV_insertion_pts_openbase(
     if len(coords_z) != len(volume_points) or not np.all(np.isfinite(coords_z)):
         raise RuntimeError("COORDS_Z does not match the volume-mesh points.")
 
-    lv_centroid = area_centroid(pv.read(lv_annulus_vtk), "LV annulus")
-    rv_centroid = area_centroid(pv.read(rv_annulus_vtk), "RV annulus")
+    _, lv_rim = _opening_rim_loop(lv_annulus_vtk)
+    _, rv_rim = _opening_rim_loop(rv_annulus_vtk)
+    lv_centroid = np.asarray(lv_rim["length_weighted_centroid"])
+    rv_centroid = np.asarray(rv_rim["length_weighted_centroid"])
     interface_points = np.asarray(pv.read(rv_epi_interface_vtk).points, dtype=float)
     if len(interface_points) < 3 or not np.all(np.isfinite(interface_points)):
-        raise RuntimeError("RVepi interface boundary has fewer than three valid points.")
+        raise RuntimeError("Selected tag-interface curve has fewer than three valid points.")
 
     edge_scale = _tetra_edge_scale(volume)
     mapping_distances, mapped_ids = cKDTree(volume_points).query(interface_points, k=1)
@@ -937,6 +1146,7 @@ def find_two_RV_insertion_pts_openbase(
         inf_angle_degrees,
     )
     return {
+        "centroid_method": "opening_rim_segment_length_weighted_midpoints",
         "lv_centroid": lv_centroid.tolist(),
         "rv_centroid": rv_centroid.tolist(),
         "ant_direction": ant_direction,
@@ -1541,9 +1751,9 @@ def compute_phi_openbase_annuli(
 
     def prepare_chamber(name, mesh_basename, tag, annulus_path, full_coords_z, edge_scale):
         points = np.asarray(meshIO.read_pts(basename=mesh_basename), dtype=float)
-        loop, loop_info = _annulus_high_z_boundary_loop(annulus_path)
+        loop, loop_info = _opening_rim_loop(annulus_path)
         base_ids, base_mapping = _map_contour_to_mesh_nodes(
-            loop, points, edge_scale, f"{name} annulus loop to {name} mesh"
+            loop, points, edge_scale, f"{name} opening rim to {name} mesh"
         )
         base = str(work_root / f"{name}_base")
         _write_carp_node_surface(base, base_ids)
@@ -1664,6 +1874,8 @@ def compute_phi_openbase_annuli(
     phi[interface_ids] = inserted_lv[interface_ids]
     if not np.all(np.isfinite(phi)):
         raise RuntimeError("Merged PHI contains non-finite values.")
+    if float(np.min(phi)) < -np.pi - 1e-6 or float(np.max(phi)) > np.pi + 1e-6:
+        raise RuntimeError("Merged PHI is outside the expected range [-pi, pi].")
     phi_path = str(uvc_root / "PHI.dat")
     meshIO.write_data(phi_path, phi)
     if not meshtool.collect_nodal(
@@ -1671,9 +1883,13 @@ def compute_phi_openbase_annuli(
     ):
         raise RuntimeError("meshtool failed to create the PHI visualization files.")
 
+    volume.point_data["PHI"] = phi
+    volume.point_data["COORDS_Z"] = full_coords_z
+    volume.save(uvc_root / "PHI.vtk", binary=True)
+
     expected = [
         uvc_root / name for name in (
-            "PHI.case", "PHI.dat", "PHI.fiber.ens", "PHI.geo",
+            "PHI.case", "PHI.dat", "PHI.vtk", "PHI.fiber.ens", "PHI.geo",
             "PHI.tags.ens", "PHI_PHI.ens"
         )
     ]
@@ -1701,6 +1917,8 @@ def compute_phi_openbase_annuli(
         "RV_landmark_mapping_distances_mm": rv_distances.tolist(),
         "LV_landmark_mapping_tolerance_mm": float(lv_tolerance),
         "RV_landmark_mapping_tolerance_mm": float(rv_tolerance),
+        "angular_convention": "ANT=+pi/2_INF=-pi/2_historical_argument_order_preserved",
+        "interface_merge_rule": "LV_priority",
         "LV_PHI_range": [float(np.min(lv_phi)), float(np.max(lv_phi))],
         "RV_PHI_range": [float(np.min(rv_phi)), float(np.max(rv_phi))],
         "PHI_range": [float(np.min(phi)), float(np.max(phi))],
@@ -1756,6 +1974,145 @@ def _repair_degenerate_vectors(vectors, centroids, min_norm=1e-8, neighbors=8):
         scale = float(np.average(neighbor_norms, weights=weights))
         vectors[element_id] = candidate / candidate_norm * scale
     return vectors, int(len(repaired))
+
+
+BIV_RULE_VERSION = 'step09_elemTag_LV_minus1_RV_plus1_LV_priority_v1'
+FIBER_RULE_VERSION = 'step09_tagwise_P1_gradients_six_column_fiber_sheet_v2'
+FIBER_ANGLES_DEG = {'alpha_endo': 60., 'alpha_epi': -60., 'beta_endo': -65., 'beta_epi': 25.}
+
+
+def biv_openbase(volume):
+    """Derive nodal chamber labels directly from Step 09, with LV priority."""
+    if (not isinstance(volume, pv.UnstructuredGrid) or not volume.n_cells
+            or not np.all(volume.celltypes == pv.CellType.TETRA)
+            or not np.isfinite(volume.points).all() or 'elemTag' not in volume.cell_data):
+        raise ValueError('biv requires a finite tetrahedral mesh with elemTag cell labels.')
+    tags = np.asarray(volume.cell_data['elemTag'])
+    if set(np.unique(tags)) != {0, 1}:
+        raise ValueError('biv requires exactly RV tag 0 and LV tag 1.')
+    cells = np.asarray(volume.cells_dict[pv.CellType.TETRA])
+    lv = np.unique(cells[tags == 1])
+    rv = np.unique(cells[tags == 0])
+    if len(np.union1d(lv, rv)) != volume.n_points:
+        raise ValueError('biv cannot label orphan points outside every tetrahedron.')
+    shared = np.intersect1d(lv, rv)
+    values = np.ones(volume.n_points, dtype=np.int32)
+    values[lv] = -1
+    return values, {
+        'method': BIV_RULE_VERSION, 'LV_tag': 1, 'RV_tag': 0,
+        'LV_value': -1, 'RV_value': 1, 'shared_node_rule': 'LV_minus_one_priority',
+        'lv_nodes': int(np.count_nonzero(values == -1)),
+        'rv_nodes': int(np.count_nonzero(values == 1)),
+        'shared_interface_nodes': int(len(shared)),
+        'LV_element_count': int(np.count_nonzero(tags == 1)),
+        'RV_element_count': int(np.count_nonzero(tags == 0)),
+    }
+
+
+def _tetra_nodal_gradient(points, cells, values):
+    """Exact element gradients of the piecewise-linear nodal field."""
+    points = np.asarray(points, dtype=float)
+    values = np.asarray(values, dtype=float)
+    if values.shape != (len(points),) or not np.isfinite(values).all():
+        raise ValueError('The nodal field must have one finite value per volume point.')
+    corners = points[cells]
+    sampled = values[cells]
+    try:
+        gradient = np.linalg.solve(corners[:, 1:] - corners[:, :1],
+                                   (sampled[:, 1:] - sampled[:, :1])[..., None])[..., 0]
+    except np.linalg.LinAlgError as error:
+        raise ValueError('Fiber generation encountered a singular tetrahedron.') from error
+    if not np.isfinite(gradient).all():
+        raise ValueError('The tetrahedral coordinate gradients are not finite.')
+    return gradient
+
+
+def fiber_openbase(volume, coords_z, pho, angles=None):
+    """Build unit fiber/sheet directions in original element order, separately per tag."""
+    biv_openbase(volume)
+    angles = dict(FIBER_ANGLES_DEG if angles is None else angles)
+    cells = np.asarray(volume.cells_dict[pv.CellType.TETRA])
+    tags = np.asarray(volume.cell_data['elemTag'])
+    coords_z, pho = np.asarray(coords_z, dtype=float), np.asarray(pho, dtype=float)
+    for name, values in (('COORDS_Z', coords_z), ('PHO', pho)):
+        if values.shape != (volume.n_points,) or not np.isfinite(values).all():
+            raise ValueError(f'{name} must contain one finite value per volume point.')
+        if values.min() < -1e-6 or values.max() > 1 + 1e-6:
+            raise ValueError(f'{name} must be a normalized coordinate in [0, 1].')
+    grad_z = _tetra_nodal_gradient(volume.points, cells, coords_z)
+    grad_pho = _tetra_nodal_gradient(volume.points, cells, pho)
+    centroids = np.asarray(volume.points, dtype=float)[cells].mean(axis=1)
+    repair_mask = np.zeros(volume.n_cells, dtype=np.uint8)
+    circ = np.empty_like(grad_z)
+    radial = np.empty_like(grad_pho)
+    repairs = {}
+    for tag, chamber in ((1, 'LV'), (0, 'RV')):
+        ids = np.flatnonzero(tags == tag)
+        center = centroids[ids]
+        local_z, local_pho = grad_z[ids].copy(), grad_pho[ids].copy()
+        bad_z = np.linalg.norm(local_z, axis=1) <= 1e-8
+        bad_pho = np.linalg.norm(local_pho, axis=1) <= 1e-8
+        try:
+            local_z, nz = _repair_degenerate_vectors(local_z, center)
+            local_pho, nr = _repair_degenerate_vectors(local_pho, center)
+            n = local_pho / np.linalg.norm(local_pho, axis=1)[:, None]
+            c = np.cross(n, -local_z)
+            bad_circ = np.linalg.norm(c, axis=1) <= 1e-8
+            c, nc = _repair_degenerate_vectors(c, center)
+        except RuntimeError as error:
+            raise RuntimeError(f'{chamber} cannot build a coordinate frame: {error}') from error
+        # A borrowed circumferential vector must be tangent to this element's
+        # radial direction. Record the rare deterministic fallback separately.
+        c -= n * np.einsum('ij,ij->i', c, n)[:, None]
+        fallback = np.linalg.norm(c, axis=1) <= 1e-8
+        if np.any(fallback):
+            reference = np.eye(3)[np.argmin(np.abs(n[fallback]), axis=1)]
+            c[fallback] = np.cross(n[fallback], reference)
+        c /= np.linalg.norm(c, axis=1)[:, None]
+        circ[ids], radial[ids] = c, n
+        repair_mask[ids[bad_pho]] |= 1
+        repair_mask[ids[bad_z]] |= 2
+        repair_mask[ids[bad_circ]] |= 4
+        repair_mask[ids[fallback]] |= 8
+        repairs[chamber] = {'elements': int(len(ids)), 'PHO_gradient': nr,
+                            'COORDS_Z_gradient': nz, 'circumferential': nc,
+                            'tangent_axis_fallback': int(np.count_nonzero(fallback)),
+                            'any_repair': int(np.count_nonzero(repair_mask[ids]))}
+    mean_pho = pho[cells].mean(axis=1)
+    alpha = (1 - mean_pho) * angles['alpha_endo'] + mean_pho * angles['alpha_epi']
+    beta = (1 - mean_pho) * angles['beta_endo'] + mean_pho * angles['beta_epi']
+    a, b = np.deg2rad(alpha)[:, None], np.deg2rad(beta)[:, None]
+    # Preserve the historical angle convention: helix about radial, then sheet
+    # about the resulting fiber. Use independent arrays for the two directions.
+    fibers = np.cos(a) * circ + np.sin(a) * np.cross(radial, circ)
+    fibers /= np.linalg.norm(fibers, axis=1)[:, None]
+    sheets = np.cos(b) * radial + np.sin(b) * np.cross(fibers, radial)
+    sheets -= fibers * np.einsum('ij,ij->i', fibers, sheets)[:, None]
+    sheets /= np.linalg.norm(sheets, axis=1)[:, None]
+    sheet_normals = np.cross(fibers, sheets)
+    lon = np.column_stack((fibers, sheets))
+    unit_error = max(float(np.abs(np.linalg.norm(fibers, axis=1) - 1).max()),
+                     float(np.abs(np.linalg.norm(sheets, axis=1) - 1).max()))
+    dot_error = float(np.abs(np.einsum('ij,ij->i', fibers, sheets)).max())
+    if not np.isfinite(lon).all() or unit_error > 1e-10 or dot_error > 1e-10:
+        raise RuntimeError('Fiber and sheet directions must be finite, unit length, and perpendicular.')
+    arrays = {'fiber': fibers, 'sheet': sheets, 'sheet_normal': sheet_normals,
+              'helix_angle_deg': alpha, 'sheet_angle_deg': beta, 'fiber_repair_mask': repair_mask,
+              'PHO_gradient_magnitude': np.linalg.norm(grad_pho, axis=1),
+              'COORDS_Z_gradient_magnitude': np.linalg.norm(grad_z, axis=1)}
+    return lon, arrays, {
+        'method': FIBER_RULE_VERSION, 'angles_deg': angles,
+        'orientation_fields': ['COORDS_Z', 'PHO'],
+        'gradient_method': 'piecewise_linear_tetrahedral_element_gradient',
+        'repair_rule': 'nearest_valid_directions_within_the_same_ventricle_only',
+        'repair_mask_bits': {'1': 'PHO_gradient', '2': 'COORDS_Z_gradient',
+                             '4': 'circumferential', '8': 'tangent_axis_fallback'},
+        'repairs': repairs, 'repaired_element_count': int(np.count_nonzero(repair_mask)),
+        'maximum_unit_norm_error': unit_error, 'maximum_fiber_sheet_abs_dot': dot_error,
+        'longitudinal_norm_range': [float(np.linalg.norm(fibers, axis=1).min()), float(np.linalg.norm(fibers, axis=1).max())],
+        'sheet_norm_range': [float(np.linalg.norm(sheets, axis=1).min()), float(np.linalg.norm(sheets, axis=1).max())],
+        'lon_format': 'header_2_then_six_columns_fiber_xyz_sheet_xyz',
+    }
 
 
 # This function is a modified version of the original by Martin Bishop

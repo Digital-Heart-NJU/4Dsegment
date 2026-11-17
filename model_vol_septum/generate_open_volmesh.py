@@ -2069,7 +2069,7 @@ def main(argv=None):
     parser.add_argument("--base-samples", type=int, default=160)
     parser.add_argument("--basal-search-fraction", type=float, default=.30,
                         help="Basal fraction used for Step 07 plane search and Step 08 directional-thickness samples.")
-    parser.add_argument("--island-volume-percent", type=float, default=.1,
+    parser.add_argument("--island-volume-percent", type=float, default=1,
                         help="Step 09 island limit as percent of initial main same-tag volume; 0.1 means 0.1%%.")
     parser.add_argument("--overwrite", action="store_true", help="Back up and replace existing outputs of selected steps.")
     args = parser.parse_args(argv)
