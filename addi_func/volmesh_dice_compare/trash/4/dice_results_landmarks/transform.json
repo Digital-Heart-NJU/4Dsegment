@@ -1,0 +1,142 @@
+{
+  "source": "/home/mengao/Code/4Dsegment/addi_func/volmesh_dice_compare/4/subject_11_volmesh.vtk",
+  "reference": "/home/mengao/Code/4Dsegment/addi_func/volmesh_dice_compare/4/subject0081_mesh_all.vtk",
+  "source_to_reference": [
+    [
+      0.523390627397028,
+      0.07385937115198915,
+      -0.8488857664291342,
+      67.43737632601572
+    ],
+    [
+      0.43367990298249265,
+      0.8344610609412355,
+      0.3399948227869414,
+      -19.563196713513197
+    ],
+    [
+      0.7334739210783445,
+      -0.5460948004384042,
+      0.4047177733088802,
+      44.733632763018036
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "registration": {
+    "method": "apex_fixed_rigid_landmark_SVD",
+    "landmark_names": [
+      "lv_endo_apex",
+      "lv_mitral_point",
+      "rv_tricuspid_point"
+    ],
+    "apex_is_hard_constraint": true,
+    "apex_tolerance_mm": 1e-06,
+    "objective": "squared_mitral_error + squared_tricuspid_error with equal weights",
+    "weights": {
+      "lv_mitral_point": 1.0,
+      "rv_tricuspid_point": 1.0
+    },
+    "icp_refinement": false,
+    "moving_points_mm": [
+      [
+        -8.75,
+        -3.75,
+        -39.84368515
+      ],
+      [
+        1.23712574247943,
+        1.5988489326446227,
+        41.69944826241457
+      ],
+      [
+        -48.15093923900626,
+        -6.178709236692826,
+        40.570390463902385
+      ]
+    ],
+    "fixed_points_mm": [
+      [
+        96.40347290039062,
+        -40.03377151489258,
+        24.238143920898438
+      ],
+      [
+        5.245169703204566,
+        -1.8408404587486678,
+        62.220072534172076
+      ],
+      [
+        1.8462182969004237,
+        -21.195157091746573,
+        40.680406411433346
+      ]
+    ],
+    "aligned_moving_points_mm": [
+      [
+        96.40347290039062,
+        -40.03377151489258,
+        24.23814392089844
+      ],
+      [
+        32.80489822336139,
+        -3.514906442625307,
+        61.644416992390944
+      ],
+      [
+        7.339643445923933,
+        -31.807460919927934,
+        29.20989363418009
+      ]
+    ],
+    "errors_before_mm": {
+      "lv_endo_apex": 128.3754094654812,
+      "lv_mitral_point": 21.189428968308984,
+      "rv_tricuspid_point": 52.20365477016461
+    },
+    "errors_after_mm": {
+      "lv_endo_apex": 3.552713678800501e-15,
+      "lv_mitral_point": 27.616526072732277,
+      "rv_tricuspid_point": 16.564159374465305
+    },
+    "valve_squared_error_sum_mm2": 1037.0438881085886,
+    "valve_rms_error_mm": 22.771076919072016,
+    "rotation_determinant": 1.0000000000000004,
+    "orthogonality_max_error": 4.440892098500626e-16,
+    "cross_covariance_singular_values": [
+      16578.296127373535,
+      693.1172203221855,
+      7.365272044945236e-14
+    ],
+    "landmark_pair_distances_mm": [
+      {
+        "pair": [
+          "lv_endo_apex",
+          "lv_mitral_point"
+        ],
+        "moving": 82.32639596274811,
+        "fixed": 105.88278011855034
+      },
+      {
+        "pair": [
+          "lv_endo_apex",
+          "rv_tricuspid_point"
+        ],
+        "moving": 89.58100355717539,
+        "fixed": 97.80754463404594
+      },
+      {
+        "pair": [
+          "lv_mitral_point",
+          "rv_tricuspid_point"
+        ],
+        "moving": 50.009460557031225,
+        "fixed": 29.156468573402623
+      }
+    ]
+  }
+}

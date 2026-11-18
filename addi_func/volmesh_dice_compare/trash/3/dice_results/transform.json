@@ -1,0 +1,175 @@
+{
+  "source": "/home/mengao/Code/4Dsegment/addi_func/volmesh_dice_compare/3/subject0081_mesh_all.vtk",
+  "reference": "/home/mengao/Code/4Dsegment/addi_func/volmesh_dice_compare/3/subject_11_volmesh.vtk",
+  "source_to_reference": [
+    [
+      0.44834408225289574,
+      0.8926551213010141,
+      -0.046415712036884924,
+      -14.204343842293659
+    ],
+    [
+      0.7484091373597203,
+      -0.4032743802749093,
+      -0.5265487036641253,
+      -18.33751640403441
+    ],
+    [
+      -0.4887446644468802,
+      0.2013370523002753,
+      -0.8488769312130822,
+      80.0759129687242
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "registration": {
+    "method": "25_initializations_symmetric_tag_constrained_trimmed_ICP_then_Huber_point_to_plane",
+    "trim_fraction_for_alignment_only": 0.85,
+    "source_registration_region": "full surface",
+    "normal_compatibility_in_refinement": "dot(source_normal, reference_normal) > 0.25",
+    "mean_trimmed_symmetric_surface_distance_mm": 3.7566161955914152,
+    "selected_initialization": 1,
+    "coarse_candidates": [
+      {
+        "initialization": 11,
+        "distance_mm": 4.88876757352008
+      },
+      {
+        "initialization": 4,
+        "distance_mm": 4.907582677868479
+      },
+      {
+        "initialization": 24,
+        "distance_mm": 4.917094804830954
+      },
+      {
+        "initialization": 1,
+        "distance_mm": 5.30716628167104
+      },
+      {
+        "initialization": 10,
+        "distance_mm": 5.366290092678702
+      },
+      {
+        "initialization": 0,
+        "distance_mm": 5.376306551497389
+      },
+      {
+        "initialization": 17,
+        "distance_mm": 5.693651630866683
+      },
+      {
+        "initialization": 16,
+        "distance_mm": 6.0246612318330675
+      },
+      {
+        "initialization": 5,
+        "distance_mm": 6.163913855016787
+      },
+      {
+        "initialization": 23,
+        "distance_mm": 6.172894600746677
+      },
+      {
+        "initialization": 15,
+        "distance_mm": 6.232770198701512
+      },
+      {
+        "initialization": 21,
+        "distance_mm": 6.304844403057351
+      },
+      {
+        "initialization": 8,
+        "distance_mm": 6.52007385268016
+      },
+      {
+        "initialization": 19,
+        "distance_mm": 6.541446987636836
+      },
+      {
+        "initialization": 7,
+        "distance_mm": 6.70104884747268
+      },
+      {
+        "initialization": 20,
+        "distance_mm": 6.7592361582046445
+      },
+      {
+        "initialization": 14,
+        "distance_mm": 6.843284446896419
+      },
+      {
+        "initialization": 13,
+        "distance_mm": 6.884544474682138
+      },
+      {
+        "initialization": 22,
+        "distance_mm": 7.256699680386067
+      },
+      {
+        "initialization": 6,
+        "distance_mm": 7.32316120037187
+      },
+      {
+        "initialization": 18,
+        "distance_mm": 7.361841562086011
+      },
+      {
+        "initialization": 9,
+        "distance_mm": 7.64154551524274
+      },
+      {
+        "initialization": 2,
+        "distance_mm": 7.825849086115956
+      },
+      {
+        "initialization": 12,
+        "distance_mm": 8.887164632328549
+      },
+      {
+        "initialization": 3,
+        "distance_mm": 10.205373573832837
+      }
+    ],
+    "refined_candidates": [
+      {
+        "initialization": 1,
+        "distance_mm": 3.7566161955914152
+      },
+      {
+        "initialization": 0,
+        "distance_mm": 3.8603059286597414
+      },
+      {
+        "initialization": 4,
+        "distance_mm": 3.862468446155682
+      },
+      {
+        "initialization": 24,
+        "distance_mm": 3.86250643303683
+      },
+      {
+        "initialization": 11,
+        "distance_mm": 4.020097525057614
+      },
+      {
+        "initialization": 16,
+        "distance_mm": 4.2063188855804245
+      },
+      {
+        "initialization": 17,
+        "distance_mm": 4.207176544696155
+      },
+      {
+        "initialization": 10,
+        "distance_mm": 4.909300124780692
+      }
+    ],
+    "rotation_determinant": 1.0000000000000058
+  }
+}

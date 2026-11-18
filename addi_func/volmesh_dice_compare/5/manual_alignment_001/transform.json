@@ -1,0 +1,49 @@
+{
+  "source": "/home/mengao/Code/4Dsegment/addi_func/volmesh_dice_compare/5/subject_11_volmesh.vtk",
+  "reference": "/home/mengao/Code/4Dsegment/addi_func/volmesh_dice_compare/5/subject0081_mesh_all.vtk",
+  "source_to_reference": [
+    [
+      0.4399872311036085,
+      0.4233156999161381,
+      -0.7919690995678372,
+      64.3352602007931
+    ],
+    [
+      0.8098997514983552,
+      0.1939029498418388,
+      0.553591942287401,
+      -13.191016784966436
+    ],
+    [
+      -0.38790930510711374,
+      0.884988962782669,
+      0.2575284581636999,
+      38.1368790887287
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "convention": "p_fixed = A @ p_original_moving + t (column vectors); A is orthogonal",
+  "coordinate_units": "mm",
+  "saved_at_utc": "2026-11-18T11:03:17.982212+00:00",
+  "registration": {
+    "method": "manual_rigid_with_reflection",
+    "has_reflection": true
+  },
+  "validation": {
+    "points": 75659,
+    "tetrahedra": 358279,
+    "absolute_volume": 153618.89569553488,
+    "max_signed_cell_volume_error": 1.2323475573339238e-13,
+    "linear_determinant": -1.0000000000000016,
+    "has_reflection": true,
+    "tetra_local_vertex_swap": [
+      0,
+      1
+    ]
+  }
+}

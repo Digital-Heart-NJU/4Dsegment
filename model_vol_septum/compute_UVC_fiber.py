@@ -318,7 +318,7 @@ def _curve_enclosed_area(curve):
 
 
 def extract_tag_interface_curve(volume_vtk, output_dir):
-    """Extract the tag-0/tag-1 boundary curve, selecting by enclosed area."""
+    """Select the largest-area curve from any number of tag-interface curves."""
     from .tag_step10_volume import shared_face_neighbors
 
     output_dir = Path(output_dir).resolve()
@@ -377,9 +377,9 @@ def extract_tag_interface_curve(volume_vtk, output_dir):
         record["path"] = str(path)
         candidates.append(record)
         curves.append(curve)
-    if len(curves) not in (1, 2):
+    if not curves:
         raise RuntimeError(
-            f"Expected one or two tag-interface boundary curves, found {len(curves)}. "
+            "No tag-interface boundary curves were found. "
             f"Inspect {boundary_path}."
         )
     selected = max(range(len(curves)), key=lambda index: candidates[index]["enclosed_area_mm2"])
@@ -388,7 +388,7 @@ def extract_tag_interface_curve(volume_vtk, output_dir):
     summary = {
         "source_volume": str(Path(volume_vtk).resolve()),
         "method": "shared_tag_0_tag_1_faces_then_boundary_curves",
-        "selection": "largest_enclosed_area" if len(curves) == 2 else "only_interface_curve",
+        "selection": "largest_enclosed_area" if len(curves) > 1 else "only_interface_curve",
         "interface_surface": str(interface_path),
         "interface_triangle_count": int(len(triangles)),
         "boundary_curves": str(boundary_path),

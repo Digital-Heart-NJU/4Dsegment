@@ -1,0 +1,4 @@
+{
+  "keep_rule": "all dot(normal,x) <= offset_mm in reference coordinates",
+  "planes": []
+}

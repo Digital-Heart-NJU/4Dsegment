@@ -1,0 +1,22 @@
+{
+  "keep_rule": "all dot(normal,x) <= offset_mm in reference coordinates",
+  "planes": [
+    {
+      "normal": [
+        0.09171024808707777,
+        -0.055108651444685214,
+        0.9942596577010229
+      ],
+      "offset_mm": 28.49694252705736,
+      "origin_mm": [
+        2.6134616688796273,
+        -1.570428072962831,
+        28.333360322477773
+      ],
+      "reference_patch_area_mm2": 2466.048698228049,
+      "reference_surface_area_fraction": 0.05468823022162566,
+      "planarity_max_error_mm": 9.048500580186946e-14,
+      "method": "reference_planar_support_patch"
+    }
+  ]
+}

@@ -1,5 +1,6 @@
 """PHI tag-interface extraction and area-based curve selection."""
 import hashlib
+import json
 import sys
 import tempfile
 import unittest
@@ -58,6 +59,36 @@ class TagInterfaceTests(unittest.TestCase):
             self.assertEqual(info["curve_count"], 1)
             self.assertEqual(info["selection"], "only_interface_curve")
             self.assertTrue(Path(selected).is_file())
+
+    def test_four_or_more_curves_select_largest_and_preserve_volume(self):
+        for component_count in (2, 3):
+            with self.subTest(curve_count=2 * component_count), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                path, template = self.volume(root, .75)
+                source = template.copy()
+                for index in range(1, component_count):
+                    component = template.copy()
+                    component.points = component.points * (index + 1) + [20. * index, 0., 0.]
+                    source = source.merge(component, merge_points=False)
+                source.save(path)
+                before = hashlib.sha256(path.read_bytes()).hexdigest()
+
+                selected, info = extract_tag_interface_curve(path, root / "work")
+
+                self.assertEqual(info["curve_count"], 2 * component_count)
+                self.assertEqual(info["selection"], "largest_enclosed_area")
+                areas = [candidate["enclosed_area_mm2"] for candidate in info["candidates"]]
+                self.assertAlmostEqual(info["selected_enclosed_area_mm2"], max(areas))
+                curve = pv.read(selected)
+                ids = np.asarray(curve.point_data["volumeNodeId"], dtype=int)
+                np.testing.assert_array_equal(curve.points, source.points[ids])
+                radii = np.linalg.norm(curve.points[:, :2] - [20. * (component_count - 1), 0.], axis=1)
+                np.testing.assert_allclose(radii, 2. * component_count, rtol=1e-6)
+                self.assertTrue(all(Path(candidate["path"]).is_file() for candidate in info["candidates"]))
+                saved = json.loads((root / "work/tag_interface_curve_summary.json").read_text())
+                self.assertEqual(saved["selection"], "largest_enclosed_area")
+                self.assertEqual(saved["curve_count"], 2 * component_count)
+                self.assertEqual(before, hashlib.sha256(path.read_bytes()).hexdigest())
 
     def test_vertex_contact_is_not_a_tag_interface(self):
         with tempfile.TemporaryDirectory() as temporary:

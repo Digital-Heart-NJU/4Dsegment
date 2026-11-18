@@ -1,0 +1,491 @@
+{
+  "source": "/home/mengao/Code/4Dsegment/addi_func/volmesh_dice_compare/1/subject0081_mesh_all.vtk",
+  "reference": "/home/mengao/Code/4Dsegment/addi_func/volmesh_dice_compare/1/subject_11_volmesh.vtk",
+  "units_assumed": "mm",
+  "source_tag_mapping": {
+    "0": 0,
+    "1": 1
+  },
+  "mask_code_to_reference_tag": {
+    "1": 0,
+    "2": 1
+  },
+  "mask_background_code": 0,
+  "registration": {
+    "method": "25_initializations_symmetric_tag_constrained_trimmed_ICP_then_Huber_point_to_plane",
+    "trim_fraction_for_alignment_only": 0.85,
+    "source_registration_region": "reference basal halfspaces plus 2 mm margin",
+    "normal_compatibility_in_refinement": "dot(source_normal, reference_normal) > 0.25",
+    "mean_trimmed_symmetric_surface_distance_mm": 2.6201256473136865,
+    "selected_initialization": 11,
+    "coarse_candidates": [
+      {
+        "initialization": 11,
+        "distance_mm": 5.333805253761191
+      },
+      {
+        "initialization": 1,
+        "distance_mm": 5.408579273349891
+      },
+      {
+        "initialization": 24,
+        "distance_mm": 5.7412722423413705
+      },
+      {
+        "initialization": 0,
+        "distance_mm": 6.138050291706048
+      },
+      {
+        "initialization": 10,
+        "distance_mm": 6.151805288733576
+      },
+      {
+        "initialization": 16,
+        "distance_mm": 6.260555485917368
+      },
+      {
+        "initialization": 23,
+        "distance_mm": 6.330404808357428
+      },
+      {
+        "initialization": 4,
+        "distance_mm": 6.496012469102667
+      },
+      {
+        "initialization": 5,
+        "distance_mm": 6.659998039931897
+      },
+      {
+        "initialization": 19,
+        "distance_mm": 6.830553599535074
+      },
+      {
+        "initialization": 21,
+        "distance_mm": 6.873649681279102
+      },
+      {
+        "initialization": 15,
+        "distance_mm": 6.884638948194428
+      },
+      {
+        "initialization": 8,
+        "distance_mm": 6.921065570404935
+      },
+      {
+        "initialization": 6,
+        "distance_mm": 6.923531592975222
+      },
+      {
+        "initialization": 14,
+        "distance_mm": 6.938993984477071
+      },
+      {
+        "initialization": 7,
+        "distance_mm": 7.277152843356647
+      },
+      {
+        "initialization": 13,
+        "distance_mm": 7.348563838332603
+      },
+      {
+        "initialization": 20,
+        "distance_mm": 7.5735375750701985
+      },
+      {
+        "initialization": 17,
+        "distance_mm": 7.692814884925055
+      },
+      {
+        "initialization": 22,
+        "distance_mm": 7.935589551111517
+      },
+      {
+        "initialization": 3,
+        "distance_mm": 7.952967567581976
+      },
+      {
+        "initialization": 9,
+        "distance_mm": 8.15455625828067
+      },
+      {
+        "initialization": 18,
+        "distance_mm": 8.524063711294671
+      },
+      {
+        "initialization": 2,
+        "distance_mm": 8.557289420333472
+      },
+      {
+        "initialization": 12,
+        "distance_mm": 10.15149620594359
+      }
+    ],
+    "refined_candidates": [
+      {
+        "initialization": 11,
+        "distance_mm": 2.6201256473136865
+      },
+      {
+        "initialization": 0,
+        "distance_mm": 2.6240119878930424
+      },
+      {
+        "initialization": 24,
+        "distance_mm": 2.624207989423554
+      },
+      {
+        "initialization": 4,
+        "distance_mm": 2.6243097800572666
+      },
+      {
+        "initialization": 1,
+        "distance_mm": 3.485459183715154
+      },
+      {
+        "initialization": 23,
+        "distance_mm": 3.554040038602862
+      },
+      {
+        "initialization": 10,
+        "distance_mm": 3.8225309387251847
+      },
+      {
+        "initialization": 16,
+        "distance_mm": 4.022301195445439
+      }
+    ],
+    "rotation_determinant": 0.9999999999999999
+  },
+  "source_to_reference": [
+    [
+      0.7641847854174544,
+      0.37193411891580463,
+      0.5269597944082661,
+      -67.5903676370024
+    ],
+    [
+      0.018233818631153722,
+      0.8042113662079456,
+      -0.5940636382746184,
+      44.204056736181094
+    ],
+    [
+      -0.644739592079317,
+      0.46358288325635016,
+      0.60778431104885,
+      28.556113968806446
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "clipping": {
+    "planes": [
+      {
+        "normal": [
+          0.09171024808707777,
+          -0.055108651444685214,
+          0.9942596577010229
+        ],
+        "offset_mm": 28.49694252705736,
+        "origin_mm": [
+          2.6134616688796273,
+          -1.570428072962831,
+          28.333360322477773
+        ],
+        "reference_patch_area_mm2": 2466.048698228049,
+        "reference_surface_area_fraction": 0.05468823022162566,
+        "planarity_max_error_mm": 9.048500580186946e-14,
+        "method": "reference_planar_support_patch"
+      }
+    ],
+    "source_full": {
+      "cells": 2508448,
+      "points": 511934,
+      "bounds_mm": [
+        -20.125900268554688,
+        102.76200103759766,
+        -74.18589782714844,
+        45.8046989440918,
+        6.791950225830078,
+        105.65499877929688
+      ],
+      "volume_mm3": 161001.1115238546,
+      "tag_volumes_mm3": {
+        "0": 40339.15824363875,
+        "1": 120661.95328021592
+      }
+    },
+    "reference_full": {
+      "cells": 308067,
+      "points": 67312,
+      "bounds_mm": [
+        -76.674679079,
+        39.114042076,
+        -44.287194067332564,
+        42.020104148,
+        -43.692402537,
+        36.15356580107853
+      ],
+      "volume_mm3": 132549.77286970254,
+      "tag_volumes_mm3": {
+        "0": 31822.239005320233,
+        "1": 100727.53386438229
+      }
+    },
+    "source_retained": {
+      "cells": 1729058,
+      "points": 358623,
+      "bounds_mm": [
+        -80.11752540020233,
+        36.26140859006895,
+        -49.91462549316334,
+        61.343884185743036,
+        -43.940083371553214,
+        35.28506777437611
+      ],
+      "volume_mm3": 109787.29809018454,
+      "tag_volumes_mm3": {
+        "0": 21975.9359881228,
+        "1": 87811.36210206176
+      }
+    },
+    "reference_retained": {
+      "cells": 308067,
+      "points": 67312,
+      "bounds_mm": [
+        -76.674679079,
+        39.114042076,
+        -44.287194067332564,
+        42.020104148,
+        -43.692402537,
+        36.15356580107853
+      ],
+      "volume_mm3": 132549.77286970254,
+      "tag_volumes_mm3": {
+        "0": 31822.239005320233,
+        "1": 100727.53386438229
+      }
+    },
+    "source_removed": {
+      "cells": 871462,
+      "points": 188283,
+      "bounds_mm": [
+        -80.28104957844918,
+        36.1575936824772,
+        -53.91216522237888,
+        61.41010882957855,
+        25.27418610903312,
+        82.52422087633266
+      ],
+      "volume_mm3": 51213.813433670046,
+      "tag_volumes_mm3": {
+        "0": 18363.22225551593,
+        "1": 32850.59117815411
+      }
+    },
+    "reference_removed": {
+      "cells": 0,
+      "volume_mm3": 0.0,
+      "tag_volumes_mm3": {}
+    },
+    "source_removed_fraction": 0.3180960239897598,
+    "reference_removed_fraction": 0.0
+  },
+  "grids": [
+    {
+      "spacing_mm": 1.0,
+      "lower_corner_mm": [
+        -82.0,
+        -55.0,
+        -45.0
+      ],
+      "dimensions_voxels": [
+        123,
+        118,
+        129
+      ],
+      "sample_rule": "tetrahedral containment at voxel centers; x varies fastest"
+    },
+    {
+      "spacing_mm": 0.5,
+      "lower_corner_mm": [
+        -81.0,
+        -54.5,
+        -44.5
+      ],
+      "dimensions_voxels": [
+        242,
+        233,
+        256
+      ],
+      "sample_rule": "tetrahedral containment at voxel centers; x varies fastest"
+    }
+  ],
+  "dice": [
+    {
+      "stage": "aligned_full",
+      "spacing_mm": 1.0,
+      "region": "all_tissue",
+      "dice": 0.3943458613843854,
+      "source_volume_mm3": 161077.0,
+      "reference_volume_mm3": 132584.0,
+      "intersection_volume_mm3": 57902.0,
+      "source_voxels": 161077,
+      "reference_voxels": 132584,
+      "intersection_voxels": 57902
+    },
+    {
+      "stage": "aligned_full",
+      "spacing_mm": 1.0,
+      "region": "tag_0",
+      "dice": 0.22516207679946806,
+      "source_volume_mm3": 40382.0,
+      "reference_volume_mm3": 31806.0,
+      "intersection_volume_mm3": 8127.0,
+      "source_voxels": 40382,
+      "reference_voxels": 31806,
+      "intersection_voxels": 8127
+    },
+    {
+      "stage": "aligned_full",
+      "spacing_mm": 1.0,
+      "region": "tag_1",
+      "dice": 0.416529328631481,
+      "source_volume_mm3": 120695.0,
+      "reference_volume_mm3": 100778.0,
+      "intersection_volume_mm3": 46125.0,
+      "source_voxels": 120695,
+      "reference_voxels": 100778,
+      "intersection_voxels": 46125
+    },
+    {
+      "stage": "basal_trimmed",
+      "spacing_mm": 1.0,
+      "region": "all_tissue",
+      "dice": 0.4776640240230331,
+      "source_volume_mm3": 109852.0,
+      "reference_volume_mm3": 132582.0,
+      "intersection_volume_mm3": 57901.0,
+      "source_voxels": 109852,
+      "reference_voxels": 132582,
+      "intersection_voxels": 57901
+    },
+    {
+      "stage": "basal_trimmed",
+      "spacing_mm": 1.0,
+      "region": "tag_0",
+      "dice": 0.30197863446353923,
+      "source_volume_mm3": 22019.0,
+      "reference_volume_mm3": 31806.0,
+      "intersection_volume_mm3": 8127.0,
+      "source_voxels": 22019,
+      "reference_voxels": 31806,
+      "intersection_voxels": 8127
+    },
+    {
+      "stage": "basal_trimmed",
+      "spacing_mm": 1.0,
+      "region": "tag_1",
+      "dice": 0.4890964906234591,
+      "source_volume_mm3": 87833.0,
+      "reference_volume_mm3": 100776.0,
+      "intersection_volume_mm3": 46124.0,
+      "source_voxels": 87833,
+      "reference_voxels": 100776,
+      "intersection_voxels": 46124
+    },
+    {
+      "stage": "aligned_full",
+      "spacing_mm": 0.5,
+      "region": "all_tissue",
+      "dice": 0.394829323144746,
+      "source_volume_mm3": 161069.5,
+      "reference_volume_mm3": 132625.125,
+      "intersection_volume_mm3": 57979.625,
+      "source_voxels": 1288556,
+      "reference_voxels": 1061001,
+      "intersection_voxels": 463837
+    },
+    {
+      "stage": "aligned_full",
+      "spacing_mm": 0.5,
+      "region": "tag_0",
+      "dice": 0.22609071947240422,
+      "source_volume_mm3": 40362.5,
+      "reference_volume_mm3": 31851.875,
+      "intersection_volume_mm3": 8163.5,
+      "source_voxels": 322900,
+      "reference_voxels": 254815,
+      "intersection_voxels": 65308
+    },
+    {
+      "stage": "aligned_full",
+      "spacing_mm": 0.5,
+      "region": "tag_1",
+      "dice": 0.41712635776779194,
+      "source_volume_mm3": 120707.0,
+      "reference_volume_mm3": 100773.25,
+      "intersection_volume_mm3": 46192.625,
+      "source_voxels": 965656,
+      "reference_voxels": 806186,
+      "intersection_voxels": 369541
+    },
+    {
+      "stage": "basal_trimmed",
+      "spacing_mm": 0.5,
+      "region": "all_tissue",
+      "dice": 0.47829007847692584,
+      "source_volume_mm3": 109820.75,
+      "reference_volume_mm3": 132623.125,
+      "intersection_volume_mm3": 57979.25,
+      "source_voxels": 878566,
+      "reference_voxels": 1060985,
+      "intersection_voxels": 463834
+    },
+    {
+      "stage": "basal_trimmed",
+      "spacing_mm": 0.5,
+      "region": "tag_0",
+      "dice": 0.3032555850162292,
+      "source_volume_mm3": 21986.75,
+      "reference_volume_mm3": 31851.5,
+      "intersection_volume_mm3": 8163.375,
+      "source_voxels": 175894,
+      "reference_voxels": 254812,
+      "intersection_voxels": 65307
+    },
+    {
+      "stage": "basal_trimmed",
+      "spacing_mm": 0.5,
+      "region": "tag_1",
+      "dice": 0.4898316261776392,
+      "source_volume_mm3": 87834.0,
+      "reference_volume_mm3": 100771.625,
+      "intersection_volume_mm3": 46192.5,
+      "source_voxels": 702672,
+      "reference_voxels": 806173,
+      "intersection_voxels": 369540
+    }
+  ],
+  "convergence": {
+    "checked": true,
+    "tolerance": 0.005,
+    "max_absolute_dice_change": 0.0012769505526899483,
+    "within_tolerance": true,
+    "compared_spacings_mm": [
+      0.5,
+      1.0
+    ]
+  },
+  "warnings": [
+    "Automatic basal clipping is geometric, not semantic valve identification; inspect the saved overlay and plane.",
+    "Tags correspond by numeric value unless explicitly mapped; anatomical LV/RV meanings are not inferred.",
+    "Scores quantify shape overlap after rigid registration; subject identity and cardiac phase are not inferred."
+  ],
+  "finest_spacing_mm": 0.5,
+  "elapsed_seconds": 53.660237541014794
+}

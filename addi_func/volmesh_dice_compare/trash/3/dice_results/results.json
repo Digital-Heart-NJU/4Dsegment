@@ -1,0 +1,388 @@
+{
+  "source": "/home/mengao/Code/4Dsegment/addi_func/volmesh_dice_compare/3/subject0081_mesh_all.vtk",
+  "reference": "/home/mengao/Code/4Dsegment/addi_func/volmesh_dice_compare/3/subject_11_volmesh.vtk",
+  "units_assumed": "mm",
+  "source_tag_mapping": {
+    "0": 0,
+    "1": 1
+  },
+  "mask_code_to_reference_tag": {
+    "1": 0,
+    "2": 1
+  },
+  "mask_background_code": 0,
+  "registration": {
+    "method": "25_initializations_symmetric_tag_constrained_trimmed_ICP_then_Huber_point_to_plane",
+    "trim_fraction_for_alignment_only": 0.85,
+    "source_registration_region": "full surface",
+    "normal_compatibility_in_refinement": "dot(source_normal, reference_normal) > 0.25",
+    "mean_trimmed_symmetric_surface_distance_mm": 3.7566161955914152,
+    "selected_initialization": 1,
+    "coarse_candidates": [
+      {
+        "initialization": 11,
+        "distance_mm": 4.88876757352008
+      },
+      {
+        "initialization": 4,
+        "distance_mm": 4.907582677868479
+      },
+      {
+        "initialization": 24,
+        "distance_mm": 4.917094804830954
+      },
+      {
+        "initialization": 1,
+        "distance_mm": 5.30716628167104
+      },
+      {
+        "initialization": 10,
+        "distance_mm": 5.366290092678702
+      },
+      {
+        "initialization": 0,
+        "distance_mm": 5.376306551497389
+      },
+      {
+        "initialization": 17,
+        "distance_mm": 5.693651630866683
+      },
+      {
+        "initialization": 16,
+        "distance_mm": 6.0246612318330675
+      },
+      {
+        "initialization": 5,
+        "distance_mm": 6.163913855016787
+      },
+      {
+        "initialization": 23,
+        "distance_mm": 6.172894600746677
+      },
+      {
+        "initialization": 15,
+        "distance_mm": 6.232770198701512
+      },
+      {
+        "initialization": 21,
+        "distance_mm": 6.304844403057351
+      },
+      {
+        "initialization": 8,
+        "distance_mm": 6.52007385268016
+      },
+      {
+        "initialization": 19,
+        "distance_mm": 6.541446987636836
+      },
+      {
+        "initialization": 7,
+        "distance_mm": 6.70104884747268
+      },
+      {
+        "initialization": 20,
+        "distance_mm": 6.7592361582046445
+      },
+      {
+        "initialization": 14,
+        "distance_mm": 6.843284446896419
+      },
+      {
+        "initialization": 13,
+        "distance_mm": 6.884544474682138
+      },
+      {
+        "initialization": 22,
+        "distance_mm": 7.256699680386067
+      },
+      {
+        "initialization": 6,
+        "distance_mm": 7.32316120037187
+      },
+      {
+        "initialization": 18,
+        "distance_mm": 7.361841562086011
+      },
+      {
+        "initialization": 9,
+        "distance_mm": 7.64154551524274
+      },
+      {
+        "initialization": 2,
+        "distance_mm": 7.825849086115956
+      },
+      {
+        "initialization": 12,
+        "distance_mm": 8.887164632328549
+      },
+      {
+        "initialization": 3,
+        "distance_mm": 10.205373573832837
+      }
+    ],
+    "refined_candidates": [
+      {
+        "initialization": 1,
+        "distance_mm": 3.7566161955914152
+      },
+      {
+        "initialization": 0,
+        "distance_mm": 3.8603059286597414
+      },
+      {
+        "initialization": 4,
+        "distance_mm": 3.862468446155682
+      },
+      {
+        "initialization": 24,
+        "distance_mm": 3.86250643303683
+      },
+      {
+        "initialization": 11,
+        "distance_mm": 4.020097525057614
+      },
+      {
+        "initialization": 16,
+        "distance_mm": 4.2063188855804245
+      },
+      {
+        "initialization": 17,
+        "distance_mm": 4.207176544696155
+      },
+      {
+        "initialization": 10,
+        "distance_mm": 4.909300124780692
+      }
+    ],
+    "rotation_determinant": 1.0000000000000058
+  },
+  "source_to_reference": [
+    [
+      0.44834408225289574,
+      0.8926551213010141,
+      -0.046415712036884924,
+      -14.204343842293659
+    ],
+    [
+      0.7484091373597203,
+      -0.4032743802749093,
+      -0.5265487036641253,
+      -18.33751640403441
+    ],
+    [
+      -0.4887446644468802,
+      0.2013370523002753,
+      -0.8488769312130822,
+      80.0759129687242
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "clipping": {
+    "planes": [],
+    "source_full": {
+      "cells": 2508448,
+      "points": 511934,
+      "bounds_mm": [
+        -20.125900268554688,
+        102.76200103759766,
+        -74.18589782714844,
+        45.8046989440918,
+        6.791950225830078,
+        105.65499877929688
+      ],
+      "volume_mm3": 161001.1115238546,
+      "tag_volumes_mm3": {
+        "0": 40339.15824363875,
+        "1": 120661.95328021592
+      }
+    },
+    "reference_full": {
+      "cells": 358279,
+      "points": 75659,
+      "bounds_mm": [
+        -76.674679079,
+        39.114042076,
+        -44.289667612,
+        42.020104148,
+        -43.692402537,
+        44.120584307
+      ],
+      "volume_mm3": 153618.89569553465,
+      "tag_volumes_mm3": {
+        "0": 35762.95364190902,
+        "1": 117855.94205362561
+      }
+    },
+    "source_retained": {
+      "cells": 2508448,
+      "points": 511934,
+      "bounds_mm": [
+        -77.28848429463524,
+        44.58220528434889,
+        -65.85410837251038,
+        63.013245048917305,
+        -29.556699097133503,
+        57.81347086723497
+      ],
+      "volume_mm3": 161001.11152385554,
+      "tag_volumes_mm3": {
+        "0": 40339.158243638965,
+        "1": 120661.95328021667
+      }
+    },
+    "reference_retained": {
+      "cells": 358279,
+      "points": 75659,
+      "bounds_mm": [
+        -76.674679079,
+        39.114042076,
+        -44.289667612,
+        42.020104148,
+        -43.692402537,
+        44.120584307
+      ],
+      "volume_mm3": 153618.89569553465,
+      "tag_volumes_mm3": {
+        "0": 35762.95364190902,
+        "1": 117855.94205362561
+      }
+    },
+    "source_removed": {
+      "cells": 0,
+      "volume_mm3": 0.0,
+      "tag_volumes_mm3": {}
+    },
+    "reference_removed": {
+      "cells": 0,
+      "volume_mm3": 0.0,
+      "tag_volumes_mm3": {}
+    },
+    "source_removed_fraction": 0.0,
+    "reference_removed_fraction": 0.0
+  },
+  "grids": [
+    {
+      "spacing_mm": 1.0,
+      "lower_corner_mm": [
+        -79.0,
+        -67.0,
+        -45.0
+      ],
+      "dimensions_voxels": [
+        125,
+        132,
+        104
+      ],
+      "sample_rule": "tetrahedral containment at voxel centers; x varies fastest"
+    },
+    {
+      "spacing_mm": 0.5,
+      "lower_corner_mm": [
+        -78.0,
+        -66.5,
+        -44.5
+      ],
+      "dimensions_voxels": [
+        247,
+        261,
+        206
+      ],
+      "sample_rule": "tetrahedral containment at voxel centers; x varies fastest"
+    }
+  ],
+  "dice": [
+    {
+      "stage": "aligned_full",
+      "spacing_mm": 1.0,
+      "region": "all_tissue",
+      "dice": 0.29464577990077834,
+      "source_volume_mm3": 160962.0,
+      "reference_volume_mm3": 153687.0,
+      "intersection_volume_mm3": 46355.0,
+      "source_voxels": 160962,
+      "reference_voxels": 153687,
+      "intersection_voxels": 46355
+    },
+    {
+      "stage": "aligned_full",
+      "spacing_mm": 1.0,
+      "region": "tag_0",
+      "dice": 0.25784676805084966,
+      "source_volume_mm3": 40359.0,
+      "reference_volume_mm3": 35787.0,
+      "intersection_volume_mm3": 9817.0,
+      "source_voxels": 40359,
+      "reference_voxels": 35787,
+      "intersection_voxels": 9817
+    },
+    {
+      "stage": "aligned_full",
+      "spacing_mm": 1.0,
+      "region": "tag_1",
+      "dice": 0.2741097596256651,
+      "source_volume_mm3": 120603.0,
+      "reference_volume_mm3": 117900.0,
+      "intersection_volume_mm3": 32688.0,
+      "source_voxels": 120603,
+      "reference_voxels": 117900,
+      "intersection_voxels": 32688
+    },
+    {
+      "stage": "aligned_full",
+      "spacing_mm": 0.5,
+      "region": "all_tissue",
+      "dice": 0.29468967190647843,
+      "source_volume_mm3": 161061.125,
+      "reference_volume_mm3": 153700.5,
+      "intersection_volume_mm3": 46378.5,
+      "source_voxels": 1288489,
+      "reference_voxels": 1229604,
+      "intersection_voxels": 371028
+    },
+    {
+      "stage": "aligned_full",
+      "spacing_mm": 0.5,
+      "region": "tag_0",
+      "dice": 0.25782891281512604,
+      "source_volume_mm3": 40359.125,
+      "reference_volume_mm3": 35800.875,
+      "intersection_volume_mm3": 9818.125,
+      "source_voxels": 322873,
+      "reference_voxels": 286407,
+      "intersection_voxels": 78545
+    },
+    {
+      "stage": "aligned_full",
+      "spacing_mm": 0.5,
+      "region": "tag_1",
+      "dice": 0.2742908812963868,
+      "source_volume_mm3": 120702.0,
+      "reference_volume_mm3": 117899.625,
+      "intersection_volume_mm3": 32723.125,
+      "source_voxels": 965616,
+      "reference_voxels": 943197,
+      "intersection_voxels": 261785
+    }
+  ],
+  "convergence": {
+    "checked": true,
+    "tolerance": 0.005,
+    "max_absolute_dice_change": 0.0001811216707217067,
+    "within_tolerance": true,
+    "compared_spacings_mm": [
+      0.5,
+      1.0
+    ]
+  },
+  "warnings": [
+    "Tags correspond by numeric value unless explicitly mapped; anatomical LV/RV meanings are not inferred.",
+    "Scores quantify shape overlap after rigid registration; subject identity and cardiac phase are not inferred."
+  ],
+  "finest_spacing_mm": 0.5,
+  "elapsed_seconds": 46.9546714060707
+}
