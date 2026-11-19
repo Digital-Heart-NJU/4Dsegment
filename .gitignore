@@ -1,10 +1,16 @@
-
-/data/
-/run_subjects_4_5/
-/model_nnunet
 /addi_func/volmesh_dice_compare/5
 /addi_func/volmesh_dice_compare/trash
 /addi_func/tests
+/code_by_stage_backup
+/code_explain/tmps
+/data/
+/model_nnunet
+/model_vol_septum/template_trash
+/model_vol_septum/tests
+/model_vol_septum/tmps
+/model_vol_septum/trash_for_generate_open_mesh
+/run_subjects_4_5/
+
 
 #*/
 *.nii.gz
@@ -13,4 +19,5 @@
 *.face
 *.node
 *.vtk
+*.vtu
 
