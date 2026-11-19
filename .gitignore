@@ -2,6 +2,9 @@
 /data/
 /run_subjects_4_5/
 /model_nnunet
+/addi_func/volmesh_dice_compare/5
+/addi_func/volmesh_dice_compare/trash
+/addi_func/tests
 
 #*/
 *.nii.gz
