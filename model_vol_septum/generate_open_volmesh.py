@@ -9,7 +9,7 @@ Step 05: MeshFix-clean the combined surface, retaining both blood-pool cavities.
 Step 06: TetGen mesh of the connected myocardium, then LVepi-based LV/RV tags.
 Step 07: detect the subject base and save common cutting-plane previews.
 Step 08: build the basal-open myocardial shell, then remesh it with TetGen.
-Step 09: absorb small label islands by ordered tag 0 / tag 1 region growth.
+Step 09: grow tag 1 by 10 mm, then remaining tag 0 by 12 mm, without changing geometry.
 
 Example:
     python model_vol_septum/generate_open_volmesh.py \
@@ -27,6 +27,7 @@ Output: SUBJECT/volmesh_pipline/step_01_load_surf/SUBJECT_FRAME_SURFACE.vtk
         SUBJECT/volmesh_pipline/step_07_base_detection/SUBJECT_FRAME_base_plane.vtk
         SUBJECT/volmesh_pipline/step_08_LV_RV_openbase/SUBJECT_FRAME_openbase_volmesh.vtk
         SUBJECT/volmesh_pipline/step_09_final_mesh/SUBJECT_FRAME_final_volmesh.vtk
+
 Step 04 also saves LVRV_outer_surf.vtk and LVRV_inner_surf.vtk with the same prefix.
 Both endocardial surfaces are retained in full; only outer contact regions may
 move outward by a mesh-scaled numerical clearance. No basal opening is made.
@@ -34,12 +35,28 @@ RV is the RV endocardium. Copies retain the original VTK format and arrays.
 Cleaned surfaces use ASCII VTK triangles with LV elemTag=1 and RV elemTag=0.
 Use --start-step 2 to clean existing Step 01 files without copying them again.
 Use --start-step 3 to move both epicardia using existing Step 02 surfaces.
+Use --epi-local-repair=true to try topology-preserving local displacement repair
+after Step 03's usual backtracking fails or accepts less than 0.01 mm maximum
+movement. Repair is disabled by default; --epi-min-accepted-step changes the
+threshold. Smaller final updates are allowed only if all final checks pass.
 Use --start-step 4 to extract the combined surface using existing Steps 02/03.
 Use --start-step 5 to clean only the existing Step 04 LVRV_surf.vtk files.
 Use --start-step 6 to mesh existing Step 05 surfaces; Step 03 LVepi_moved defines LV.
+
 Step 06 assigns elemTag=1 when a tetrahedron center is inside LVepi_moved, else 0.
 Use --start-step 7 to preview base detection on existing Step 05/06 outputs.
 Use --start-step 8 to open using the saved Step 07 apex-to-base direction.
+Step 08 publishes each successful frame before starting the next. Failed frames
+are logged and skipped, including native mesher crashes isolated in child
+processes. Step 09 in the same run receives only successful Step 08 frames.
+Step 08 first tries the unmodified shell. If TetGen fails and thin triangles
+are present, collapse retries use relative tolerances 0.01, 0.001, 0.0001 in
+descending order, stopping at the first validated meshing success. Each retry
+starts from the original shell, with its own isolated process and diagnostics.
+Use --step8-short-edge-collapse=false to disable retries, or configure the list
+with --step8-collapse-tolerances. Tolerances multiply the median shell edge
+length; the existing surface/opening-rim displacement checks remain mandatory.
+
 Step 08 uses a full translation only to define reference opening rims. Their
 inverse-translated curves split the original endocardia. Only the basal caps
 are extended; the protected apical/lateral patches and retained epi stay fixed.
@@ -52,15 +69,19 @@ The removed-myocardium diagnostic is a raw Boolean TRIANGLE surface, which
 may include coincident contact sheets; it is not used for meshing.
 No C++ helper or strict local-clipping/accuracy checks are used in this preview.
 Use --start-step 9 --stop-after 9 to correct only the saved Step 08 tags.
-Step 09 starts from Step 08 tags, with no Step 06 overlap voting. Grow tag 1
-into eligible tag 0 islands first, then tag 0 into eligible tag 1 islands.
-Only complete shared triangular faces define neighborhoods. Protect both
-initial main regions, and absorb only islands below a fixed volume limit.
---island-volume-percent defaults to 0.1, meaning 0.1% of the initial largest
-same-tag component's volume. Larger or unreachable islands remain unchanged.
-elemTag_step08, tagChanged and growthPass record the changes. JSON reports
-both passes, component counts and remaining islands. growthPass=1 denotes
-tag 1 growth, and growthPass=2 denotes tag 0 growth. No boundary erosion.
+
+Step 09 starts from Step 08 tags, with no Step 06 overlap voting. A weighted
+graph connects tetrahedron centres only across complete shared triangular
+faces. Multi-source Dijkstra first grows all tag 1 cells by --tag1-mm (10 mm),
+then all surviving tag 0 cells by --tag0-mm (12 mm), with a fresh distance
+budget. These are exactly two passes: no cycling or protected main regions.
+Distances approximate travel through the mesh, not continuous offsets.
+Tag 0 regions erased by pass 1 cannot independently seed pass 2. Coordinates
+are assumed to be millimetres. The final_volmesh_after_tag1.vtk intermediate
+and JSON report allow both passes to be inspected. elemTag_step08,
+elemTag_after_tag1_growth, grewTag1, grewTag0, tagChanged and growthPass record
+changes. growthPass is the last modifying pass; 2 can include reverted cells.
+
 Step 09 preserves every point, tetrahedron, cell type and element order exactly.
 Use --stop-after 7 to preview planes without cutting the volume.
 Use --overwrite to back up and replace existing outputs of the selected steps.
@@ -73,6 +94,7 @@ import hashlib
 import json
 from pathlib import Path
 import shutil
+import subprocess
 import sys
 from tempfile import TemporaryDirectory
 
@@ -125,7 +147,7 @@ def step_01_load_surf(subject_dir, frames=("ED", "ES"), overwrite=False):
         raise ValueError("Step 01 output directory must differ from vtks.")
 
     inputs = {(frame, name): input_dir / f"{name}_{frame}.vtk"
-              for frame in frames for name in SURFACES}
+              for frame in frames for name in SURFACES}     # LVendo/LVepi_ED/ES.vtk;RV/epi_ED/ES.vtk
     missing = [str(path) for path in inputs.values() if not path.is_file()]
     if missing:
         raise FileNotFoundError("Missing input surfaces: " + ", ".join(missing))
@@ -339,9 +361,68 @@ def validate_closed_epi(epi, endo, minimum=3.0, source=None, chamber="RV"):
     return info
 
 
+def _repair_closed_epi_displacement(points, faces, delta, edges, weights,
+                                    reference, normals, original, bad_faces, max_attempts=6,
+                                    min_accepted_step=0.01, final_check=None):
+    """Locally damp/smooth a rejected displacement without changing connectivity."""
+    from model_vol_septum.mesh_intersections import confirmed_self_intersections
+
+    step = delta.copy()
+    core = np.zeros(len(points), dtype=bool)
+    core[np.unique(faces[np.asarray(bad_faces, dtype=np.int64)])] = True
+    affected = core.copy()
+    a, b = edges[:, 0], edges[:, 1]
+    degree = np.bincount(np.r_[a, b], weights=np.r_[weights, weights], minlength=len(points))
+    xyz = points[faces]
+    cross = np.cross(xyz[:, 1] - xyz[:, 0], xyz[:, 2] - xyz[:, 0])
+    info = {"accepted": False, "attempts": [], "affected_vertex_ids": [],
+            "initial_problem_triangle_ids": np.asarray(bad_faces, dtype=int).tolist()}
+    candidate = points.copy()
+    for attempt in range(max_attempts):
+        mask = core.copy()
+        adjacent = core[a] | core[b]
+        mask[edges[adjacent].ravel()] = True
+        affected |= mask
+        average = np.zeros_like(step)
+        np.add.at(average, a, weights[:, None] * step[b])
+        np.add.at(average, b, weights[:, None] * step[a])
+        average /= np.maximum(degree, 1e-12)[:, None]
+        step[mask] = 0.5 * (0.75 * step[mask] + 0.25 * average[mask])
+        candidate = points + step
+        new = candidate[faces]
+        new_cross = np.cross(new[:, 1] - new[:, 0], new[:, 2] - new[:, 0])
+        folded = np.flatnonzero((np.linalg.norm(new_cross, axis=1) <= 1e-12)
+                               | (np.einsum("ij,ij->i", cross, new_cross) <= 0))
+        intersections = confirmed_self_intersections(candidate, faces)
+        outward = all(np.all(np.einsum("ij,ij->i", step, direction) >= -1e-12)
+                      for direction in (reference, normals))
+        outward &= bool(np.all(np.einsum("ij,ij->i", candidate - original, reference) >= -1e-9))
+        maximum_step = float(np.linalg.norm(step, axis=1).max())
+        geometry_ok = not len(folded) and not len(intersections) and outward
+        final_small_step = bool(geometry_ok and maximum_step < min_accepted_step
+                                and final_check is not None and final_check(candidate))
+        progress = maximum_step >= min_accepted_step or final_small_step
+        info["attempts"].append({"attempt": attempt + 1, "folded_triangle_ids": folded.tolist(),
+                                 "intersection_pairs": intersections.tolist(),
+                                 "outward": bool(outward), "maximum_step_mm": maximum_step,
+                                 "minimum_accepted_step_mm": min_accepted_step,
+                                 "step_large_enough": maximum_step >= min_accepted_step,
+                                 "final_small_step": final_small_step})
+        info["affected_vertex_ids"] = np.flatnonzero(affected).tolist()
+        info["affected_triangle_ids"] = np.flatnonzero(np.any(affected[faces], axis=1)).tolist()
+        if geometry_ok and progress:
+            info["accepted"] = True
+            return step, info, candidate
+        problem_faces = np.unique(np.r_[folded, intersections.ravel()]).astype(np.int64)
+        if len(problem_faces):
+            core[np.unique(faces[problem_faces])] = True
+    return None, info, candidate
+
+
 def move_closed_epi(epi, endo, minimum=3.0, max_iterations=600,
-                    clearance_padding=0.1, log_label=None, chamber="RV"):
-    """Displace a closed epicardium outward; keep its endocardium fixed."""
+                    clearance_padding=0.1, log_label=None, chamber="RV", diagnostics_dir=None,
+                    local_repair=False, min_accepted_step=0.01):
+    """Move a closed epi outward; save diagnostic-only meshes on movement failure."""
     import vtk
     from scipy.sparse import coo_matrix, eye
     from scipy.sparse.linalg import factorized
@@ -350,6 +431,8 @@ def move_closed_epi(epi, endo, minimum=3.0, max_iterations=600,
 
     if not np.isfinite(minimum) or minimum <= 0 or max_iterations < 1:
         raise ValueError("Epicardial clearance and iteration count must be positive.")
+    if not np.isfinite(min_accepted_step) or min_accepted_step <= 0:
+        raise ValueError("Minimum accepted epicardial step must be positive and finite.")
     epi_name, endo_name = ((f"{chamber}epi", f"{chamber}endo") if chamber else ("outer", "inner"))
     log_label = log_label or f"Step03 {epi_name}"
     validate_clean_surface(epi)
@@ -375,14 +458,78 @@ def move_closed_epi(epi, endo, minimum=3.0, max_iterations=600,
     result.points = original.copy()
     initial = signed(original)
     target, max_step = minimum + clearance_padding, min(1.0, max(0.5 * scale, 1e-3))
+    repair_info = {"enabled": bool(local_repair), "maximum_attempts_per_event": 6,
+                   "method": "local_displacement_damping_and_smoothing", "events": []}
+    step_status = {}
+
+    def final_check(points):
+        if not np.all(signed(points) >= minimum):
+            return False
+        trial = result.copy(deep=True)
+        trial.points = np.asarray(points).copy()
+        try:
+            validate_closed_epi(trial, endo, minimum, source=epi, chamber=chamber)
+        except RuntimeError:
+            return False
+        return True
+
+    def fail(message, completed_updates, phase, trial=None, backtracking_half=None):
+        # Diagnostics bypass clean-surface validation: a rejected trial may be invalid.
+        parent = (Path(diagnostics_dir) if diagnostics_dir is not None
+                  else Path.cwd() / "step03_failed_diagnostics" / epi_name)
+        destination = parent / datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        try:
+            destination.mkdir(parents=True, exist_ok=False)
+            paths = {}
+            for state, points in (("last_accepted", result.points), ("rejected_trial", trial)):
+                if points is None:
+                    continue
+                mesh = epi.copy(deep=True)
+                mesh.points = np.asarray(points, dtype=float).copy()
+                for data in (mesh.point_data, mesh.cell_data):
+                    if "Normals" in data:
+                        del data["Normals"]
+                mesh.cell_data["elemTag"] = np.full(mesh.n_cells, int(chamber == "LV"), dtype=np.int32)
+                mesh.point_data["displacement"] = mesh.points - original
+                mesh.point_data["outwardDisplacement"] = np.einsum("ij,ij->i", mesh.points - original, reference)
+                mesh.point_data[f"initialSignedDistanceTo{endo_name}"] = initial
+                current_distances = signed(mesh.points)
+                mesh.point_data[f"signedDistanceTo{endo_name}"] = current_distances
+                mesh.point_data[f"inside{endo_name}"] = (current_distances < 0).astype(np.int32)
+                mesh.field_data["diagnosticOnly"] = np.array([1], dtype=np.int32)
+                path = destination / f"{epi_name}_{state}.vtk"
+                mesh.save(path, binary=False)
+                paths[state] = str(path.resolve())
+            fixed_path = destination / f"{endo_name}_fixed.vtk"
+            endo.save(fixed_path, binary=False)
+            paths["fixed_endo"] = str(fixed_path.resolve())
+            summary = {"error": message, "phase": phase, "chamber": chamber,
+                       "log_label": log_label, "completed_updates": completed_updates,
+                       "minimum_requested_distance_mm": minimum, "target_distance_mm": target,
+                       "maximum_step_mm": max_step, "backtracking_half": backtracking_half,
+                       "minimum_accepted_step_mm": min_accepted_step, "last_step": step_status,
+                       "diagnostic_only": True, "final_output_published": False,
+                       "last_accepted_is_valid_final_mesh": False, "outputs": paths}
+            summary["local_repair"] = repair_info
+            (destination / "failure_summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="ascii")
+            print(f"[{log_label}] Failure diagnostics saved to: {destination.resolve()}", flush=True)
+        except Exception as diagnostic_error:
+            print(f"[{log_label}] Could not finish saving failure diagnostics to {destination}: "
+                  f"{diagnostic_error}", file=sys.stderr, flush=True)
+        raise RuntimeError(message)
+
     for iteration in range(max_iterations + 1):
         distances = signed(result.points)
         gap, witness = _surface_gap(result, fixed_object)
         if np.all(distances >= minimum) and gap >= minimum:
-            validation = validate_closed_epi(result, endo, minimum, source=epi, chamber=chamber)
+            try:
+                validation = validate_closed_epi(result, endo, minimum, source=epi, chamber=chamber)
+            except Exception as error:
+                fail(str(error), iteration, "final_validation_failed")
             break
         if iteration == max_iterations:
-            raise RuntimeError(f"{epi_name} movement did not converge; minimum vertex distance={distances.min():.6g} mm.")
+            fail(f"{epi_name} movement did not converge; minimum vertex distance={distances.min():.6g} mm.",
+                 iteration, "iteration_limit")
         raw = np.maximum(target - distances, 0)
         xyz = result.points[faces]
         probes = np.stack((xyz.mean(axis=1), (xyz[:, 0] + xyz[:, 1]) * .5,
@@ -402,6 +549,10 @@ def move_closed_epi(epi, endo, minimum=3.0, max_iterations=600,
         delta = directions * np.clip(smooth(raw), 0, max_step)[:, None]
         cross = np.cross(xyz[:, 1] - xyz[:, 0], xyz[:, 2] - xyz[:, 0])
         rejected = None
+        bad_faces = set()
+        accepted = False
+        trigger = "backtracking_failed"
+        step_status = {"proposed_maximum_step_mm": float(np.linalg.norm(delta, axis=1).max())}
         for half in range(18):
             step = delta * 0.5 ** half
             candidate = result.points + step
@@ -410,21 +561,60 @@ def move_closed_epi(epi, endo, minimum=3.0, max_iterations=600,
             folded = np.flatnonzero((np.linalg.norm(new_cross, axis=1) <= 1e-12)
                 | (np.einsum("ij,ij->i", cross, new_cross) <= 0))
             if len(folded):
+                if local_repair:
+                    bad_faces.update(folded.tolist())
                 rejected = f"folded triangle IDs {folded[:5].tolist()}"
                 continue
             intersections = confirmed_self_intersections(candidate, faces)
             if not len(intersections):
-                result.points = candidate
+                maximum_step = float(np.linalg.norm(step, axis=1).max())
+                accepted = maximum_step >= min_accepted_step or final_check(candidate)
+                if not accepted:
+                    trigger = "accepted_step_too_small"
+                    rejected = (f"accepted maximum step {maximum_step:.6g} mm is below "
+                                f"{min_accepted_step:g} mm before convergence")
                 break
             rejected = f"self-intersection triangle pairs {intersections[:5].tolist()}"
-        else:
-            raise RuntimeError(f"Outward {epi_name} displacement stopped at iteration {iteration + 1}: "
-                f"{rejected}; no invalid result saved.")
-        if np.max(np.linalg.norm(step, axis=1)) < 1e-9:
-            raise RuntimeError(f"{epi_name} movement stalled before meeting the requested clearance.")
-        if iteration % 5 == 0:
+            if local_repair:
+                bad_faces.update(intersections.ravel().tolist())
+        step_status.update({"backtracking_halvings": half,
+                            "backtracking_maximum_step_mm": float(np.linalg.norm(step, axis=1).max())})
+        if not accepted:
+            repaired_step = None
+            if local_repair:
+                if not bad_faces:
+                    deficient = np.any((distances < minimum)[faces], axis=1) | (deficits > 0)
+                    bad_faces.update(np.flatnonzero(deficient).tolist())
+                    if gap < minimum:
+                        bad_faces.add(int(result.find_closest_cell(witness)))
+                repaired_step, event, candidate = _repair_closed_epi_displacement(
+                    np.asarray(result.points), faces, delta, edges, weights, reference,
+                    normals, original, sorted(bad_faces), min_accepted_step=min_accepted_step,
+                    final_check=final_check)
+                event["iteration"] = iteration + 1
+                event["trigger"] = trigger
+                event["trigger_detail"] = rejected
+                repair_info["events"].append(event)
+                print(f"[{log_label}] local repair at iteration={iteration + 1}: "
+                      f"trigger={trigger} accepted={event['accepted']} attempts={len(event['attempts'])}", flush=True)
+                if repaired_step is None:
+                    rejected += f"; local repair also failed after {len(event['attempts'])} attempts"
+            if repaired_step is None:
+                fail(f"Outward {epi_name} displacement stopped at iteration {iteration + 1}: "
+                     f"{rejected}; no final output published.", iteration, trigger,
+                     trial=candidate, backtracking_half=half)
+            step = repaired_step
+        result.points = candidate
+        maximum_step = float(np.linalg.norm(step, axis=1).max())
+        step_status.update({"accepted_maximum_step_mm": maximum_step,
+                            "final_small_step": maximum_step < min_accepted_step,
+                            "repair_trigger": trigger if not accepted and local_repair else None})
+        if iteration % 5 == 0 or not accepted or maximum_step < min_accepted_step:
             print(f"[{log_label}] iteration={iteration + 1} minimum_signed_distance={distances.min():.6g} mm "
-                  f"maximum_step={np.linalg.norm(step, axis=1).max():.6g} mm", flush=True)
+                  f"proposed_maximum_step={step_status['proposed_maximum_step_mm']:.6g} mm "
+                  f"maximum_step={maximum_step:.6g} mm backtracking_halvings={half} "
+                  f"repair_trigger={step_status['repair_trigger']} "
+                  f"final_small_step={step_status['final_small_step']}", flush=True)
     result = result.compute_normals(point_normals=True, cell_normals=True,
         consistent_normals=False, auto_orient_normals=False, split_vertices=False)
     result.cell_data["elemTag"] = np.full(result.n_cells, int(chamber == "LV"), dtype=np.int32)
@@ -436,11 +626,12 @@ def move_closed_epi(epi, endo, minimum=3.0, max_iterations=600,
     return result, {"method": f"outward_{epi_name}_normal_displacement", "iterations": iteration,
                     "minimum_requested_distance_mm": minimum,
                     f"initial_vertices_inside_{endo_name}": int(np.count_nonzero(initial < 0)),
-                    "validation": validation}
+                    "validation": validation, "local_repair": repair_info,
+                    "minimum_accepted_step_mm": min_accepted_step, "last_step": step_status}
 
 
 def step_03_move_RVepi(subject_dir, frames=("ED", "ES"), overwrite=False,
-                       minimum=3.0, max_iterations=600):
+                       minimum=3.0, max_iterations=600, local_repair=False, min_accepted_step=0.01):
     """Move LVepi and RVepi independently; retain the existing Step 03 folder name."""
     subject_dir = Path(subject_dir).resolve()
     frames = parse_frames(",".join(frames))
@@ -484,7 +675,9 @@ def step_03_move_RVepi(subject_dir, frames=("ED", "ES"), overwrite=False,
                     epi_name = f"{chamber}epi"
                     print(f"{subject} {frame}: move closed {epi_name} outward from fixed {chamber}endo", flush=True)
                     moved, info = move_closed_epi(surfaces[epi_name], surfaces[endo_name],
-                        minimum=minimum, max_iterations=max_iterations, chamber=chamber)
+                        minimum=minimum, max_iterations=max_iterations, chamber=chamber,
+                        diagnostics_dir=output_dir / "failed_attempts" / f"{subject}_{frame}_{epi_name}",
+                        local_repair=local_repair, min_accepted_step=min_accepted_step)
                     copy = Path(temporary) / outputs[frame, chamber].name
                     save_clean_surface(moved, copy, tag)
                     saved = load_surface(copy)
@@ -1672,6 +1865,72 @@ def build_open_myocardial_shell(parts, axis, basal_fraction=.30):
     return shell, removed, artifacts, information
 
 
+def _opened_shell_quality(shell):
+    faces = shell.faces.reshape(-1, 4)[:, 1:]
+    xyz = np.asarray(shell.points, dtype=float)[faces]
+    edges = np.unique(np.sort(np.vstack((faces[:, :2], faces[:, 1:], faces[:, [2, 0]])), axis=1), axis=0)
+    lengths = np.linalg.norm(shell.points[edges[:, 0]] - shell.points[edges[:, 1]], axis=1)
+    angles = []
+    for i in range(3):
+        a, b = xyz[:, (i + 1) % 3] - xyz[:, i], xyz[:, (i + 2) % 3] - xyz[:, i]
+        angles.append(np.degrees(np.arctan2(np.linalg.norm(np.cross(a, b), axis=1),
+                                           np.einsum("ij,ij->i", a, b))))
+    minimum_angles = np.min(angles, axis=0)
+    areas = np.linalg.norm(np.cross(xyz[:, 1] - xyz[:, 0], xyz[:, 2] - xyz[:, 0]), axis=1) / 2
+    return {"points": shell.n_points, "triangles": shell.n_cells,
+            "median_edge_mm": float(np.median(lengths)), "minimum_edge_mm": float(lengths.min()),
+            "minimum_triangle_area_mm2": float(areas.min()),
+            "minimum_triangle_angle_deg": float(minimum_angles.min()),
+            "triangles_below_0_1_degree": int(np.count_nonzero(minimum_angles < .1)),
+            "euler_characteristic": shell.n_points - len(edges) + shell.n_cells,
+            "connected_components": int(shell.connectivity().cell_data["RegionId"].max()) + 1}
+
+
+def collapse_open_shell_short_edges(shell, relative_tolerance=0.001):
+    """Use Manifold's tolerance-bounded edge collapse, retaining region seams."""
+    import manifold3d
+    from model_vol_septum.clean_step02_surfaces import validate_clean_surface
+
+    if not np.isfinite(relative_tolerance) or relative_tolerance <= 0:
+        raise ValueError("Step 08 collapse relative tolerance must be positive and finite.")
+    before_validation = validate_clean_surface(shell)
+    before = _opened_shell_quality(shell)
+    tolerance = relative_tolerance * before["median_edge_mm"]
+    faces = shell.faces.reshape(-1, 4)[:, 1:]
+    roles = np.asarray(shell.cell_data["sourceSurface"], dtype=np.uint64)
+    solid = manifold3d.Manifold(manifold3d.Mesh64(np.asarray(shell.points, dtype=np.float64),
+        faces.astype(np.uint64), face_id=roles))
+    simplified = solid.simplify(tolerance)
+    if simplified.status() != manifold3d.Error.NoError or simplified.is_empty() or simplified.volume() <= 0:
+        raise RuntimeError(f"Short-edge collapse failed: {simplified.status()}")
+    cleaned = _manifold_surface(simplified)
+    after_validation = validate_clean_surface(cleaned)
+    after = _opened_shell_quality(cleaned)
+    for key in ("euler_characteristic", "connected_components"):
+        if before[key] != after[key]:
+            raise RuntimeError(f"Short-edge collapse changed shell {key}.")
+    if set(np.unique(cleaned.cell_data["sourceSurface"])) != set(np.unique(roles)):
+        raise RuntimeError("Short-edge collapse lost an anatomical surface region.")
+    errors = []
+    for source, target in ((shell, cleaned), (cleaned, shell)):
+        samples = np.vstack((source.points, source.cell_centers().points))
+        _, closest = target.find_closest_cell(samples, return_closest_point=True)
+        errors.append(float(np.linalg.norm(samples - closest, axis=1).max()))
+    rim_errors = {name: _rim_distance(_shell_opening_rim(shell, role), _shell_opening_rim(cleaned, role))
+                  for name, role in (("LV", 4), ("RV", 5))}
+    if max(*errors, *rim_errors.values()) > max(tolerance * 1.01, shell.length * 1e-10):
+        raise RuntimeError("Short-edge collapse exceeded its surface/opening-rim displacement tolerance.")
+    return cleaned, {"enabled": True, "method": "Manifold3D_tolerance_bounded_edge_collapse",
+                     "relative_tolerance": relative_tolerance, "tolerance_mm": tolerance,
+                     "before": before, "after": after, "before_validation": before_validation,
+                     "after_validation": after_validation, "opening_rim_distance_mm": rim_errors,
+                     "symmetric_sampled_surface_distance_mm": max(errors),
+                     "surface_distance_samples": "vertices_and_triangle_centroids_in_both_directions",
+                     "vertices_removed": shell.n_points - cleaned.n_points,
+                     "volume_change_mm3": float(simplified.volume() - solid.volume()),
+                     "surface_role_boundaries_preserved_by_face_ids": True}
+
+
 def mesh_open_myocardial_shell(shell, minratio=1.2, mindihedral=5., max_volume=0.):
     """Pass the closed, open-base myocardial shell directly to TetGen."""
     import tetgen
@@ -1707,9 +1966,152 @@ def label_remeshed_volume(grid, original):
     return result
 
 
+def _step08_frame_worker(job_path):
+    """Run one isolated attempt, always starting from the cached original shell."""
+    import faulthandler
+    import resource
+
+    faulthandler.enable()
+    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    job = json.loads(Path(job_path).read_text())
+    inputs = {role: Path(path) for role, path in job["inputs"].items()}
+    outputs = {role: Path(path) for role, path in job["outputs"].items()}
+    temporary = Path(job["temporary"])
+    subject, frame = job["subject"], job["frame"]
+    decision = json.loads(inputs["base"].read_text(encoding="ascii"))
+    if (decision["subject"] != subject or decision["frame"] != frame
+            or decision["volume_sha256"] != job["hashes"]["notag"]
+            or decision["surface_sha256"] != job["hashes"]["surface"]):
+        raise RuntimeError(f"{frame} Step 07 inputs changed; rerun Step 07 first.")
+    original, untagged = pv.read(inputs["volume"]), pv.read(inputs["notag"])
+    if not np.array_equal(original.points, untagged.points) or not np.array_equal(original.cells, untagged.cells):
+        raise RuntimeError("The tagged and untagged Step 06 meshes must have identical original tetrahedra.")
+    cache = Path(job["shell_cache"])
+    metadata_path = cache / "original_shell.json"
+    state_path = temporary / "attempt_state.json"
+
+    def stage(name):
+        state_path.write_text(json.dumps({"stage": name}), encoding="ascii")
+
+    stage("build_shell")
+    if job["collapse_relative_tolerance"] is None:
+        cache.mkdir(parents=True, exist_ok=False)
+        source = load_surface(inputs["surface"])
+        axis = np.asarray(decision["subject_detection"]["apex_to_base_axis"], dtype=float)
+        shell, removed, artifacts, measurements = build_open_myocardial_shell(
+            _lvrv_surface_components(source), axis, job["basal_fraction"])
+        shell.save(cache / "original_shell.vtk", binary=True)
+        removed.save(cache / "removed.vtk", binary=True)
+        for role, mesh in artifacts.items():
+            mesh.save(cache / f"{role}.vtk", binary=True)
+        metadata = {"quality": _opened_shell_quality(shell), "translation": measurements,
+                    "artifact_roles": list(artifacts)}
+        metadata_path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="ascii")
+    else:
+        metadata = json.loads(metadata_path.read_text())
+        shell, removed = pv.read(cache / "original_shell.vtk"), pv.read(cache / "removed.vtk")
+        artifacts = {role: pv.read(cache / f"{role}.vtk") for role in metadata["artifact_roles"]}
+        measurements = metadata["translation"]
+    collapse_info = {"enabled": False}
+    if job["collapse_relative_tolerance"] is not None:
+        stage("collapse_and_validate")
+        diagnostics = Path(job["collapse_diagnostics_dir"])
+        diagnostics.mkdir(parents=True, exist_ok=False)
+        shell.save(diagnostics / f"{subject}_{frame}_shell_before_collapse.vtk", binary=True)
+        shell, collapse_info = collapse_open_shell_short_edges(shell, job["collapse_relative_tolerance"])
+        shell.save(diagnostics / f"{subject}_{frame}_shell_after_collapse.vtk", binary=True)
+        (diagnostics / "collapse_summary.json").write_text(json.dumps(collapse_info, indent=2) + "\n")
+        for name, role in (("LV", 4), ("RV", 5)):
+            artifacts[f"{name}_rim"] = _shell_opening_rim(shell, role)
+        print(f"[Step08 collapse] {collapse_info['before']['triangles']} -> "
+              f"{collapse_info['after']['triangles']} triangles; tolerance={collapse_info['tolerance_mm']:.6g} mm", flush=True)
+    stage("tetgen")
+    volume = mesh_open_myocardial_shell(shell, job["minratio"], job["mindihedral"], job["max_volume"])
+    stage("tag_and_save")
+    volume = label_remeshed_volume(volume, original)
+    write_tetrahedral_vtk(volume, temporary / outputs["volume"].name)
+    removed.save(temporary / outputs["removed"].name, binary=False)
+    for role, mesh in artifacts.items():
+        mesh.save(temporary / outputs[role].name, binary=False)
+    report = {"subject": subject, "frame": frame, "status": "success",
+              "method": "basal_surface_extensions_then_TetGen", "new_tetrahedralization_performed": True,
+              "tagging": "spatial_transfer_from_step06_elemTag", "translation": measurements,
+              "tetrahedra": volume.n_cells, "outputs": job["outputs"], "short_edge_collapse": collapse_info}
+    (temporary / "result.json").write_text(json.dumps(report, indent=2) + "\n", encoding="ascii")
+    stage("complete")
+
+
+def _run_step08_frame(job_path, log_path):
+    bootstrap = ("import sys; sys.path.insert(0, sys.argv[1]); "
+                 "from model_vol_septum.generate_open_volmesh import _step08_frame_worker; "
+                 "_step08_frame_worker(sys.argv[2])")
+    with log_path.open("w", encoding="ascii") as log:
+        completed = subprocess.run([sys.executable, "-B", "-u", "-c", bootstrap,
+                                    str(Path(__file__).resolve().parents[1]), str(job_path)],
+                                   stdout=log, stderr=subprocess.STDOUT)
+    if completed.returncode:
+        raise RuntimeError(f"Step 08 worker exited with code {completed.returncode}; see {log_path}")
+
+
+def _step08_collapse_tolerances(values):
+    """Validate, deduplicate and try larger tolerance candidates first."""
+    values = tuple(float(value) for value in values)
+    if not values or any(not np.isfinite(value) or value <= 0 for value in values):
+        raise ValueError("Step 08 collapse tolerances must be positive and finite, with at least one value.")
+    return sorted(set(values), reverse=True)
+
+
+def _step08_attempts(job, temporary, diagnostics, log_path, tolerances):
+    """Retry only a failed TetGen call on a thin original shell, not other failures."""
+    attempts = []
+    for index, tolerance in enumerate([None, *tolerances]):
+        name = "original" if tolerance is None else f"collapse_{tolerance:g}"
+        attempt_dir = temporary / name
+        attempt_dir.mkdir()
+        attempt_log = log_path.with_name(f"{log_path.stem}_{name}.log")
+        attempt_job = dict(job, temporary=str(attempt_dir), collapse_relative_tolerance=tolerance,
+                           shell_cache=str(diagnostics / "original"),
+                           collapse_diagnostics_dir=str(diagnostics / name))
+        job_path = attempt_dir / "job.json"
+        job_path.write_text(json.dumps(attempt_job), encoding="ascii")
+        attempt = {"name": name, "relative_tolerance": tolerance, "log_path": str(attempt_log)}
+        print(f"{job['subject']} {job['frame']}: Step 08 {name}; log: {attempt_log}", flush=True)
+        try:
+            _run_step08_frame(job_path, attempt_log)
+            report = json.loads((attempt_dir / "result.json").read_text())
+            if any(not (attempt_dir / Path(path).name).is_file()
+                   or not (attempt_dir / Path(path).name).stat().st_size for path in job["outputs"].values()):
+                raise RuntimeError("Step 08 worker did not produce every requested output.")
+        except Exception as error:
+            state_path = attempt_dir / "attempt_state.json"
+            state = json.loads(state_path.read_text()) if state_path.exists() else {}
+            attempt.update(status="failed", stage=state.get("stage", "worker_start"), error=str(error))
+            attempts.append(attempt)
+            print(f"{job['subject']} {job['frame']}: {name} failed: {error}", flush=True)
+            if index == 0:
+                metadata_path = diagnostics / "original" / "original_shell.json"
+                metadata = json.loads(metadata_path.read_text()) if metadata_path.exists() else {}
+                if (state.get("stage") != "tetgen"
+                        or not metadata.get("quality", {}).get("triangles_below_0_1_degree", 0)):
+                    break
+            continue
+        attempt.update(status="success", stage="complete")
+        attempts.append(attempt)
+        report.update(attempts=attempts, selected_relative_tolerance=tolerance,
+                      log_path=str(attempt_log), shell_diagnostics=str(diagnostics))
+        return report, attempt_dir
+    return {"status": "failed", "attempts": attempts, "error": attempts[-1]["error"],
+            "log_path": attempts[-1]["log_path"], "shell_diagnostics": str(diagnostics)}, None
+
+
 def step_08_LV_RV_openbase(subject_dir, frames=("ED", "ES"), overwrite=False, basal_fraction=.30,
-                         minratio=1.2, mindihedral=5., max_volume=0.):
-    """Surface-based preview; save only the ten requested VTKs per frame."""
+                         minratio=1.2, mindihedral=5., max_volume=0., short_edge_collapse=True,
+                         collapse_relative_tolerance=None, collapse_tolerances=(0.01, 0.001, 0.0001)):
+    """Publish each successful frame immediately; log and skip failed frames."""
+    tolerances = _step08_collapse_tolerances(
+        collapse_tolerances if collapse_relative_tolerance is None else [collapse_relative_tolerance])
+    if not short_edge_collapse:
+        tolerances = []
     subject_dir = Path(subject_dir).resolve()
     subject, frames = subject_dir.name, parse_frames(",".join(frames))
     root = subject_dir / "volmesh_pipline"
@@ -1720,9 +2122,6 @@ def step_08_LV_RV_openbase(subject_dir, frames=("ED", "ES"), overwrite=False, ba
         "surface": ("step_05_LVRV_surf_clean", "LVRV_surf.vtk")}
     inputs = {(frame, role): root / folder / f"{subject}_{frame}_{suffix}"
               for frame in frames for role, (folder, suffix) in specifications.items()}
-    missing = [str(path) for path in inputs.values() if not path.is_file()]
-    if missing:
-        raise FileNotFoundError("Missing Step 08 inputs: " + ", ".join(missing))
     suffixes = {"volume": "openbase_volmesh.vtk", "removed": "removed_myocardium_raw_diagnostic.vtk"}
     for name in ("LV", "RV"):
         suffixes.update({f"{name}_{role}": f"{name}_{suffix}.vtk" for role, suffix in (
@@ -1730,54 +2129,62 @@ def step_08_LV_RV_openbase(subject_dir, frames=("ED", "ES"), overwrite=False, ba
             ("mapped_rim", "mapped_endo_rim"), ("rim", "opening_rim"))})
     outputs = {(frame, role): output_dir / f"{subject}_{frame}_{suffix}"
                for frame in frames for role, suffix in suffixes.items()}
-    existing = [path for path in output_dir.glob(f"{subject}_*") if path.is_file()
-                and any(path.name.startswith(f"{subject}_{frame}_") for frame in frames)]
-    if existing and not overwrite:
-        raise FileExistsError("Step 08 outputs already exist. Use --overwrite to archive them.")
-    hashes = {key: checksum(path) for key, path in inputs.items()}
-    backup = output_dir / "previous_outputs" / datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     output_dir.mkdir(parents=True, exist_ok=True)
+    logs = output_dir / "run_logs"
+    logs.mkdir(exist_ok=True)
     results = []
-    with TemporaryDirectory(prefix=".step08_shell_mesh_", dir=output_dir) as temporary:
-        temporary = Path(temporary)
-        for frame in frames:
-            decision = json.loads(inputs[frame, "base"].read_text(encoding="ascii"))
-            if (decision["subject"] != subject or decision["frame"] != frame
-                    or decision["volume_sha256"] != hashes[frame, "notag"]
-                    or decision["surface_sha256"] != hashes[frame, "surface"]):
-                raise RuntimeError(f"{frame} Step 07 inputs changed; rerun Step 07 first.")
-            original = pv.read(inputs[frame, "volume"])
-            untagged = pv.read(inputs[frame, "notag"])
-            if not np.array_equal(original.points, untagged.points) or not np.array_equal(original.cells, untagged.cells):
-                raise RuntimeError("The tagged and untagged Step 06 meshes must have identical original tetrahedra.")
-            source = load_surface(inputs[frame, "surface"])
-            axis = np.asarray(decision["subject_detection"]["apex_to_base_axis"], dtype=float)
-            shell, removed, artifacts, measurements = build_open_myocardial_shell(
-                _lvrv_surface_components(source), axis, basal_fraction)
-            volume = mesh_open_myocardial_shell(shell, minratio, mindihedral, max_volume)
-            volume = label_remeshed_volume(volume, original)
-            write_tetrahedral_vtk(volume, temporary / outputs[frame, "volume"].name)
-            removed.save(temporary / outputs[frame, "removed"].name, binary=False)
-            for role, mesh in artifacts.items():
-                mesh.save(temporary / outputs[frame, role].name, binary=False)
-            results.append({"subject": subject, "frame": frame,
-                            "method": "basal_surface_extensions_then_TetGen",
-                            "new_tetrahedralization_performed": True,
-                            "tagging": "spatial_transfer_from_step06_elemTag",
-                            "translation": measurements,
-                            "outputs": {role: str(outputs[frame, role]) for role in suffixes}})
-            print(f"{subject} {frame}: {volume.n_cells} new tetrahedra; "
-                  f"LV/RV tags spatially transferred; raw removed diagnostic has {removed.n_cells} triangles", flush=True)
-        for key, path in inputs.items():
-            if checksum(path) != hashes[key]:
-                raise RuntimeError(f"Step 08 input changed while meshing: {path}")
-        if existing:
-            backup.mkdir(parents=True)
-            for path in existing:
-                path.replace(backup / path.name)
-        for path in outputs.values():
-            (temporary / path.name).replace(path)
-    print(f"Step 08 complete: only requested VTKs in {output_dir}", flush=True)
+    for frame in frames:
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        log_path = logs / f"{subject}_{frame}_{stamp}.log"
+        diagnostics = output_dir / "shell_diagnostics" / f"{subject}_{frame}_{stamp}"
+        report = {}
+        try:
+            frame_inputs = {role: inputs[frame, role] for role in specifications}
+            frame_outputs = {role: outputs[frame, role] for role in suffixes}
+            missing = [str(path) for path in frame_inputs.values() if not path.is_file()]
+            if missing:
+                raise FileNotFoundError("Missing Step 08 inputs: " + ", ".join(missing))
+            existing = [path for path in output_dir.glob(f"{subject}_{frame}_*") if path.is_file()]
+            if existing and not overwrite:
+                raise FileExistsError(f"{frame} Step 08 outputs already exist. Use --overwrite to archive them.")
+            hashes = {role: checksum(path) for role, path in frame_inputs.items()}
+            with TemporaryDirectory(prefix=f".step08_{frame}_", dir=output_dir) as temporary:
+                temporary = Path(temporary)
+                job = {"subject": subject, "frame": frame, "temporary": str(temporary),
+                       "inputs": {role: str(path) for role, path in frame_inputs.items()},
+                       "outputs": {role: str(path) for role, path in frame_outputs.items()},
+                       "hashes": hashes, "basal_fraction": basal_fraction, "minratio": minratio,
+                       "mindihedral": mindihedral, "max_volume": max_volume}
+                report, selected = _step08_attempts(job, temporary, diagnostics, log_path, tolerances)
+                if selected is None:
+                    raise RuntimeError(report["error"])
+                for role, path in frame_inputs.items():
+                    if checksum(path) != hashes[role]:
+                        raise RuntimeError(f"Step 08 input changed while meshing: {path}")
+                if existing:
+                    backup = output_dir / "previous_outputs" / f"{stamp}_{frame}"
+                    backup.mkdir(parents=True)
+                    for path in existing:
+                        path.replace(backup / path.name)
+                for path in frame_outputs.values():
+                    (selected / path.name).replace(path)
+            (logs / f"{subject}_{frame}_{stamp}_result.json").write_text(
+                json.dumps(report, indent=2) + "\n", encoding="ascii")
+            results.append(report)
+            print(f"{subject} {frame}: published Step 08 outputs ({report['tetrahedra']} tetrahedra)", flush=True)
+        except Exception as error:
+            failures = output_dir / "failed_attempts"
+            failures.mkdir(exist_ok=True)
+            report = {**report, "subject": subject, "frame": frame, "status": "failed", "error": str(error),
+                      "log_path": report.get("log_path"), "outputs": {},
+                      "shell_diagnostics": str(diagnostics) if diagnostics.exists() else None}
+            (failures / f"{subject}_{frame}_{stamp}.json").write_text(
+                json.dumps(report, indent=2) + "\n", encoding="ascii")
+            results.append(report)
+            print(f"{subject} {frame}: Step 08 failed; skipped: {error}", flush=True)
+    successful = [item["frame"] for item in results if item["status"] == "success"]
+    failed = [item["frame"] for item in results if item["status"] == "failed"]
+    print(f"Step 08 complete: published frames {successful}; failed frames skipped: {failed}", flush=True)
     return results
 
 
@@ -1801,152 +2208,108 @@ def _assert_identical_geometry(before, after):
             raise RuntimeError(f"Step 09 changed {name}; the final mesh must match Step 08 exactly.")
 
 
-def _grow_tag_components(tags, volumes, a, b, face_areas, island_fraction=1e-3):
-    """Ordered, whole-component growth into the opposite protected main region."""
-    from model_vol_septum.tag_step10_volume import component_labels
-
-    if not np.isfinite(island_fraction) or not 0 <= island_fraction <= 1:
-        raise ValueError("Island volume fraction must be between 0 and 1.")
-    initial = np.asarray(tags)
-    volumes = np.asarray(volumes, dtype=float)
-    if initial.ndim != 1 or set(np.unique(initial)) != {0, 1}:
-        raise ValueError("Bidirectional growth requires both elemTag=0 and elemTag=1.")
-    if volumes.shape != initial.shape or not np.isfinite(volumes).all() or np.any(volumes <= 0):
-        raise ValueError("Every growth cell must have a finite positive volume.")
-    if not np.isfinite(face_areas).all() or np.any(face_areas <= 0):
-        raise ValueError("Growth requires positive shared triangular-face areas.")
-    result = initial.copy()
-    growth_pass = np.zeros(len(initial), dtype=np.int32)
-    labels = component_labels(result, a, b)
-
-    def regions(current_labels):
-        component_volumes = np.bincount(current_labels, weights=volumes)
-        sizes = np.bincount(current_labels)
-        summary = {}
-        for tag in (0, 1):
-            ids = np.unique(current_labels[result == tag])
-            ranked = ids[np.argsort(-component_volumes[ids], kind="stable")]
-            summary[str(tag)] = {
-                "components": int(len(ids)), "volume_mm3": float(volumes[result == tag].sum()),
-                "largest_component_volume_mm3": float(component_volumes[ranked[0]]),
-                "components_ranked_by_volume": [
-                    {"cells": int(sizes[i]), "volume_mm3": float(component_volumes[i])} for i in ranked]}
-        return summary
-
-    before = regions(labels)
-    initial_component_count = int(labels.max())+1
-    component_volumes = np.bincount(labels, weights=volumes)
-    seeds, limits, protected = {}, {}, {}
-    for tag in (0, 1):
-        ids = np.unique(labels[result == tag])
-        main = ids[np.argmax(component_volumes[ids])]
-        protected[tag] = np.flatnonzero(labels == main)
-        seeds[tag] = int(protected[tag][0])
-        limits[tag] = float(component_volumes[main]*island_fraction)
-    moves, passes = [], []
-    cycle = 0
-    while True:
-        cycle += 1
-        cycle_moves = len(moves)
-        for phase, target_tag in ((1, 1), (2, 0)):
-            source_tag = 1-target_tag
-            pass_start = len(moves)
-            components_before = int(labels.max())+1
-            while True:
-                component_volumes = np.bincount(labels, weights=volumes)
-                roots = {tag: int(labels[seed]) for tag, seed in seeds.items()}
-                component_tags = np.empty(len(component_volumes), dtype=initial.dtype)
-                component_tags[labels] = result
-                left, right = labels[a] == roots[target_tag], labels[b] == roots[target_tag]
-                support = np.bincount(np.r_[labels[b[left]], labels[a[right]]],
-                    weights=np.r_[face_areas[left], face_areas[right]], minlength=len(component_volumes))
-                eligible = ((component_tags == source_tag) &
-                            (component_volumes < limits[source_tag]) & (support > 0))
-                eligible[list(roots.values())] = False
-                candidates = np.flatnonzero(eligible)
-                if not len(candidates):
-                    break
-                component = int(candidates[np.argmin(component_volumes[candidates])])
-                ids = np.flatnonzero(labels == component)
-                result[ids] = target_tag
-                growth_pass[ids] = phase
-                moves.append({"cycle": cycle, "pass": phase, "from_tag": source_tag, "to_tag": target_tag,
-                    "cells": int(len(ids)), "cell_ids": ids.tolist(),
-                    "volume_mm3": float(component_volumes[component]),
-                    "supporting_face_area_mm2": float(support[component])})
-                old_count = len(component_volumes)
-                labels = component_labels(result, a, b)
-                if int(labels.max())+1 >= old_count:
-                    raise RuntimeError("Region growth did not reduce the component count.")
-            passes.append({"cycle": cycle, "pass": phase, "growing_tag": target_tag,
-                "components_before": components_before, "components_after": int(labels.max())+1,
-                "absorbed_islands": len(moves)-pass_start,
-                "changed_cells": sum(move["cells"] for move in moves[pass_start:])})
-        if len(moves) == cycle_moves:
-            break
-
-    after = regions(labels)
-    component_volumes = np.bincount(labels, weights=volumes)
-    sizes = np.bincount(labels)
-    roots = {tag: int(labels[seed]) for tag, seed in seeds.items()}
-    unresolved = []
-    for component in range(len(component_volumes)):
-        ids = np.flatnonzero(labels == component)
-        tag = int(result[ids[0]])
-        if component == roots[tag]:
-            continue
-        reason = ("at_or_above_volume_limit" if component_volumes[component] >= limits[tag]
-                  else "no_shared_face_with_opposite_main_region")
-        unresolved.append({"elemTag": tag, "cells": int(sizes[component]),
-            "volume_mm3": float(component_volumes[component]), "cell_ids": ids.tolist(), "reason": reason})
-    for tag, ids in protected.items():
-        if not np.all(result[ids] == tag):
-            raise RuntimeError("Region growth changed an initial protected main component.")
-    changed = result != initial
-    if not np.array_equal(changed, growth_pass != 0):
-        raise RuntimeError("A growth pass undid an earlier label change.")
-    return result, growth_pass, {
-        "method": "ordered_bidirectional_shared_face_component_growth",
-        "growth_order": ["tag1_into_tag0_islands", "tag0_into_tag1_islands"],
-        "growth_pass_legend": {"0": "unchanged", "1": "tag1_growth", "2": "tag0_growth"},
-        "island_volume_fraction": float(island_fraction), "island_volume_percent": float(100*island_fraction),
-        "island_volume_limit_mm3": {str(tag): value for tag, value in limits.items()},
-        "size_rule": "island volume < fraction * initial largest same-tag component volume",
-        "regions_before": before, "regions_after": after,
-        "initial_component_count": initial_component_count, "final_component_count": int(labels.max())+1,
-        "absorbed_islands": len(moves), "changes": moves, "growth_passes": passes,
-        "cycles_with_changes": max((move["cycle"] for move in moves), default=0),
-        "changed_cells": int(changed.sum()),
-        "RV_to_LV": int(np.count_nonzero(changed & (result == 1))),
-        "LV_to_RV": int(np.count_nonzero(changed & (result == 0))),
-        "unchanged_cells": int(np.count_nonzero(~changed)),
-        "unresolved_components": unresolved, "converged": True,
-        "initial_main_regions_preserved": True, "step06_overlap_voting_performed": False,
-        "limitation": "Wrong patches attached by faces to an initial main region are protected, not eroded."}
+def _validate_growth_distances(tag1_mm, tag0_mm):
+    if any(not np.isfinite(distance) or distance < 0 for distance in (tag1_mm, tag0_mm)):
+        raise ValueError("Growth distances must be finite and nonnegative, in mm.")
 
 
-def correct_openbase_tags(opened, island_fraction=1e-3):
-    """Grow tag 1 first, then tag 0, changing only Step 08 labels."""
+def _tag_distance_graph(points, cells):
+    """Centre-to-centre distances across full faces; never bridge vertex/edge contact."""
+    from scipy.sparse import coo_matrix
     from model_vol_septum.tag_step10_volume import shared_face_neighbors
 
-    if any(name in opened.cell_data for name in ("elemTag_step08", "tagChanged", "growthPass")):
+    a, b, _ = shared_face_neighbors(cells)
+    centers = points[cells].mean(axis=1)
+    weights = np.linalg.norm(centers[a]-centers[b], axis=1)
+    if not np.isfinite(weights).all() or np.any(weights <= 0):
+        raise ValueError("Invalid or coincident adjacent tetrahedron centres.")
+    graph = coo_matrix((np.r_[weights, weights], (np.r_[a, b], np.r_[b, a])),
+                       shape=(len(cells), len(cells))).tocsr()
+    return graph, len(a)
+
+
+def _grow_tag_distance(graph, tags, seed_tag, distance_mm):
+    """One simultaneous multi-source pass, with a fresh shortest-path budget."""
+    from scipy.sparse.csgraph import dijkstra
+
+    _validate_growth_distances(distance_mm, 0)
+    result = tags.copy()
+    seeds = np.flatnonzero(tags == seed_tag)
+    changed = np.zeros(len(tags), dtype=bool)
+    if len(seeds) and distance_mm > 0:
+        distances = dijkstra(graph, directed=False, indices=seeds, min_only=True, limit=distance_mm)
+        changed = (tags != seed_tag) & (distances <= distance_mm)
+        result[changed] = seed_tag
+    return result, changed
+
+
+def _tag_distance_statistics(graph, tags, volumes):
+    from scipy.sparse.csgraph import connected_components
+
+    statistics = {}
+    for tag in (0, 1):
+        mask = tags == tag
+        count = int(mask.sum())
+        components = int(connected_components(graph[mask][:, mask], directed=False,
+                         return_labels=False)) if count else 0
+        statistics[str(tag)] = {"cells": count, "volume_mm3": float(volumes[mask].sum()),
+                                "components": components}
+    return statistics
+
+
+def correct_openbase_tags(opened, tag1_mm=10., tag0_mm=12.):
+    """Exactly two distance-growth passes on Step 08 labels; geometry stays fixed."""
+    _validate_growth_distances(tag1_mm, tag0_mm)
+    diagnostic_names = ("elemTag_step08", "elemTag_after_tag1_growth", "grewTag1", "grewTag0",
+                        "tagChanged", "growthPass")
+    if any(name in opened.cell_data for name in diagnostic_names):
         raise ValueError("Step 09 expects the original Step 08 file, not an already corrected result.")
     _, basis, initial = _tagged_tetrahedra(opened, "Step 08 input")
     cells = opened.cells.reshape(-1, 5)[:, 1:]
-    a, b, faces = shared_face_neighbors(cells)
-    triangles = opened.points[faces]
-    face_areas = np.linalg.norm(np.cross(triangles[:, 1]-triangles[:, 0],
-                                        triangles[:, 2]-triangles[:, 0]), axis=1)/2
+    graph, shared_faces = _tag_distance_graph(np.asarray(opened.points), cells)
     volumes = np.abs(np.linalg.det(basis))/6
-    tags, growth_pass, report = _grow_tag_components(initial, volumes, a, b, face_areas, island_fraction)
+    if not np.isfinite(volumes).all() or np.any(volumes <= 0):
+        raise ValueError("Every growth cell must have a finite positive volume.")
+    after_tag1, grew1 = _grow_tag_distance(graph, initial, 1, tag1_mm)
+    tags, grew0 = _grow_tag_distance(graph, after_tag1, 0, tag0_mm)
+    growth_pass = grew1.astype(np.int32)
+    growth_pass[grew0] = 2
     result = opened.copy(deep=True)
     result.cell_data["elemTag"] = tags
     result.cell_data["elemTag_step08"] = initial.copy()
+    result.cell_data["elemTag_after_tag1_growth"] = after_tag1
+    result.cell_data["grewTag1"] = grew1.astype(np.int32)
+    result.cell_data["grewTag0"] = grew0.astype(np.int32)
     result.cell_data["tagChanged"] = (tags != initial).astype(np.int32)
     result.cell_data["growthPass"] = growth_pass
     result.set_active_scalars("elemTag", preference="cell")
     _assert_identical_geometry(opened, result)
-    report.update({"tetrahedra": opened.n_cells, "geometry_connectivity_and_cell_order_unchanged": True})
+    warnings = []
+    if np.any(initial == 0) and not np.any(after_tag1 == 0):
+        warnings.append("Pass 1 erased all tag 0 cells; pass 2 has no seeds and cannot regrow tag 0.")
+    report = {"method": "two_pass_shared_face_distance_growth", "growth_order": [1, 0],
+        "tag1_growth_mm": float(tag1_mm), "tag0_growth_mm": float(tag0_mm),
+        "distance_definition": "Shortest path between tetrahedron centres across shared triangular faces; coordinates assumed mm. Each pass seeds all currently matching cells.",
+        "distance_limitation": "Discrete mesh approximation, not an exact continuous interface offset; surviving tag 0 cells seed pass 2, and extinct tag 0 regions cannot independently regrow.",
+        "shared_triangular_faces": shared_faces, "points": opened.n_points, "tetrahedra": opened.n_cells,
+        "pass1_seed_cells": int(np.count_nonzero(initial == 1)),
+        "pass2_seed_cells": int(np.count_nonzero(after_tag1 == 0)),
+        "pass1_changed_0_to_1": int(grew1.sum()), "pass2_changed_1_to_0": int(grew0.sum()),
+        "changed_in_both_passes": int((grew1 & grew0).sum()),
+        "changed_cells": int(np.count_nonzero(tags != initial)),
+        "RV_to_LV": int(np.count_nonzero((initial == 0) & (tags == 1))),
+        "LV_to_RV": int(np.count_nonzero((initial == 1) & (tags == 0))),
+        "regions_before": _tag_distance_statistics(graph, initial, volumes),
+        "regions_after_tag1": _tag_distance_statistics(graph, after_tag1, volumes),
+        "regions_after": _tag_distance_statistics(graph, tags, volumes),
+        "geometry_connectivity_and_cell_order_unchanged": True, "step06_overlap_voting_performed": False,
+        "warnings": warnings,
+        "diagnostics": {"elemTag_step08": "Original input tags.",
+            "elemTag_after_tag1_growth": "Tags after pass 1.",
+            "grewTag1": "Changed 0 to 1 during pass 1, even if later reverted.",
+            "grewTag0": "Changed 1 to 0 during pass 2.",
+            "tagChanged": "Final tag differs from the input tag.",
+            "growthPass": "Last modifying pass: 0 untouched, 1 tag 1 growth, 2 tag 0 growth; 2 may mean reverted."}}
     return result, report
 
 
@@ -1988,10 +2351,9 @@ def _write_step09_mesh(grid, path):
             field(stream, dict(grid.point_data))
 
 
-def step_09_final_mesh(subject_dir, frames=("ED", "ES"), overwrite=False, island_volume_percent=.1):
-    """Bidirectional island absorption on Step 08 tags, without changing geometry."""
-    if not np.isfinite(island_volume_percent) or not 0 <= island_volume_percent <= 100:
-        raise ValueError("Island volume percent must be between 0 and 100.")
+def step_09_final_mesh(subject_dir, frames=("ED", "ES"), overwrite=False, tag1_mm=10., tag0_mm=12.):
+    """Distance-based tag 1 then tag 0 growth; save both passes without moving points."""
+    _validate_growth_distances(tag1_mm, tag0_mm)
     subject_dir = Path(subject_dir).resolve()
     subject, frames = subject_dir.name, parse_frames(",".join(frames))
     root = subject_dir / "volmesh_pipline"
@@ -2003,6 +2365,7 @@ def step_09_final_mesh(subject_dir, frames=("ED", "ES"), overwrite=False, island
         raise FileNotFoundError("Missing Step 09 inputs: " + ", ".join(missing))
     outputs = {(frame, role): directory/f"{subject}_{frame}_{suffix}" for frame in frames
                for role, suffix in (("mesh", "final_volmesh.vtk"),
+                                    ("intermediate", "final_volmesh_after_tag1.vtk"),
                                     ("summary", "step09_tag_correction_summary.json"))}
     existing = [path for path in outputs.values() if path.exists()]
     if existing and not overwrite:
@@ -2013,24 +2376,40 @@ def step_09_final_mesh(subject_dir, frames=("ED", "ES"), overwrite=False, island
     with TemporaryDirectory(prefix=".step09_tags_", dir=directory) as temporary:
         temporary = Path(temporary)
         for frame in frames:
-            print(f"{subject} {frame}: tag 1 then tag 0 growth, island volume < {island_volume_percent:g}%", flush=True)
+            print(f"{subject} {frame}: grow tag 1 by {tag1_mm:g} mm, then tag 0 by {tag0_mm:g} mm", flush=True)
             opened = pv.read(inputs[frame])
-            result, report = correct_openbase_tags(opened, island_volume_percent/100)
-            staged = temporary/outputs[frame, "mesh"].name
-            _write_step09_mesh(result, staged)
-            saved = pv.read(staged)
-            _assert_identical_geometry(opened, saved)
-            for attribute in ("cell_data", "point_data", "field_data"):
-                before, after = getattr(result, attribute), getattr(saved, attribute)
-                if set(before) != set(after) or any(not np.array_equal(before[key], after[key]) for key in before):
-                    raise RuntimeError(f"Step 09 serialization changed {attribute}.")
+            result, report = correct_openbase_tags(opened, tag1_mm, tag0_mm)
+            intermediate = opened.copy(deep=True)
+            intermediate.cell_data["elemTag"] = result.cell_data["elemTag_after_tag1_growth"].copy()
+            for name in ("elemTag_step08", "grewTag1"):
+                intermediate.cell_data[name] = result.cell_data[name].copy()
+            intermediate.set_active_scalars("elemTag", preference="cell")
+            for role, expected in (("mesh", result), ("intermediate", intermediate)):
+                staged = temporary/outputs[frame, role].name
+                _write_step09_mesh(expected, staged)
+                saved = pv.read(staged)
+                _assert_identical_geometry(opened, saved)
+                for attribute in ("cell_data", "point_data", "field_data"):
+                    before, after = getattr(expected, attribute), getattr(saved, attribute)
+                    if set(before) != set(after) or any(not np.array_equal(
+                            before[key], after[key], equal_nan=True) for key in before):
+                        raise RuntimeError(f"Step 09 serialization changed {attribute}.")
+                if saved.cell_data.active_scalars_name != "elemTag":
+                    raise RuntimeError("Step 09 saved active cell scalars must be elemTag.")
             report.update({"subject": subject, "frame": frame,
                 "inputs": {"opened": {"path": str(inputs[frame]), "sha256": hashes[frame]}},
-                "output_path": str(outputs[frame, "mesh"]), "output_sha256": checksum(staged),
-                "saved_geometry_matches_step08_exactly": True})
+                "output_path": str(outputs[frame, "mesh"]),
+                "intermediate_path": str(outputs[frame, "intermediate"]),
+                "output_sha256": checksum(temporary/outputs[frame, "mesh"].name),
+                "saved_geometry_matches_step08_exactly": True,
+                "all_expected_arrays_preserved_after_reload": True})
             (temporary/outputs[frame, "summary"].name).write_text(
                 json.dumps(report, indent=2, allow_nan=False)+"\n", encoding="ascii")
             results.append(report)
+            for warning in report["warnings"]:
+                print(f"{subject} {frame}: WARNING: {warning}", flush=True)
+            print(f"{subject} {frame}: pass 1 changed {report['pass1_changed_0_to_1']} cells; "
+                  f"pass 2 changed {report['pass2_changed_1_to_0']} cells", flush=True)
             print(f"{subject} {frame}: changed {report['changed_cells']} tags "
                   f"(RV->LV {report['RV_to_LV']}, LV->RV {report['LV_to_RV']}); "
                   f"regions 0/1: {report['regions_before']['0']['components']}/"
@@ -2060,27 +2439,46 @@ def main(argv=None):
     parser.add_argument("--min-wall-distance", "--rv-min-distance", dest="rv_min_distance", type=float,
                         default=3.0, help="Minimum epi/endo surface clearance for both LV and RV, in mm.")
     parser.add_argument("--rv-move-max-iterations", type=int, default=600)
+    parser.add_argument("--epi-local-repair", choices=("true", "false"), nargs="?", const="true",
+                        default="false", help="Step 03 local displacement repair after failed backtracking; default false.")
+    parser.add_argument("--epi-min-accepted-step", type=float, default=0.01,
+                        help="Step 03 minimum accepted maximum vertex movement in mm; smaller steps require final convergence.")
     parser.add_argument("--tetgen-minratio", type=float, default=1.2)
     parser.add_argument("--tetgen-mindihedral", type=float, default=5.0)
     parser.add_argument("--tetgen-max-volume", type=float, default=0.0, help="Maximum tetrahedron volume in mm^3; 0 disables the limit.")
+    parser.add_argument("--step8-short-edge-collapse", choices=("true", "false"), nargs="?", const="true",
+                        default="true", help="Retry failed Step 08 TetGen with edge collapse if thin triangles exist; default true.")
+    collapse_group = parser.add_mutually_exclusive_group()
+    collapse_group.add_argument("--step8-collapse-tolerances", type=float, nargs="+", default=[.01, .001, .0001],
+                        help="Relative collapse tolerances tried largest first after original TetGen fails.")
+    collapse_group.add_argument("--step8-collapse-relative-tolerance", type=float,
+                        help="Legacy single-value override for the Step 08 fallback tolerance list.")
     parser.add_argument("--base-axis", default="auto", help="Subject long axis: auto, z, or nx,ny,nz.")
     parser.add_argument("--base-side", choices=("auto", "high", "low"), default="auto",
                         help="Which end along the chosen axis is the base.")
     parser.add_argument("--base-samples", type=int, default=160)
     parser.add_argument("--basal-search-fraction", type=float, default=.30,
                         help="Basal fraction used for Step 07 plane search and Step 08 directional-thickness samples.")
-    parser.add_argument("--island-volume-percent", type=float, default=1,
-                        help="Step 09 island limit as percent of initial main same-tag volume; 0.1 means 0.1%%.")
+    parser.add_argument("--tag1-mm", type=float, default=10.,
+                        help="Step 09 tag 1 growth distance across shared tetrahedral faces, in mm; default 10.")
+    parser.add_argument("--tag0-mm", type=float, default=12.,
+                        help="Step 09 tag 0 growth after tag 1, using a fresh distance budget in mm; default 12.")
     parser.add_argument("--overwrite", action="store_true", help="Back up and replace existing outputs of selected steps.")
     args = parser.parse_args(argv)
     if args.start_step > args.stop_after:
         parser.error("--start-step cannot exceed --stop-after.")
+    try:
+        _validate_growth_distances(args.tag1_mm, args.tag0_mm)
+    except ValueError as error:
+        parser.error(str(error))
     frames = [args.frame] if args.frame else args.frames
     operations = {1: step_01_load_surf, 2: step_02_surf_clean}
     for step in range(args.start_step, args.stop_after + 1):
         if step == 3:
             step_03_move_RVepi(args.subject_dir, frames, args.overwrite,
-                              args.rv_min_distance, args.rv_move_max_iterations)
+                              args.rv_min_distance, args.rv_move_max_iterations,
+                              local_repair=args.epi_local_repair == "true",
+                              min_accepted_step=args.epi_min_accepted_step)
         elif step == 4:
             step_04_extract_LVRV_surf(args.subject_dir, frames, args.overwrite, args.rv_min_distance)
         elif step == 5:
@@ -2092,11 +2490,17 @@ def main(argv=None):
             step_07_base_detection(args.subject_dir, frames, args.overwrite, args.base_axis,
                                    args.base_side, args.base_samples, args.basal_search_fraction)
         elif step == 8:
-            step_08_LV_RV_openbase(args.subject_dir, frames, args.overwrite,
-                                   args.basal_search_fraction, args.tetgen_minratio,
-                                   args.tetgen_mindihedral, args.tetgen_max_volume)
+            step08_results = step_08_LV_RV_openbase(args.subject_dir, frames, args.overwrite,
+                                args.basal_search_fraction, args.tetgen_minratio,
+                                args.tetgen_mindihedral, args.tetgen_max_volume,
+                                short_edge_collapse=args.step8_short_edge_collapse == "true",
+                                collapse_relative_tolerance=args.step8_collapse_relative_tolerance,
+                                collapse_tolerances=args.step8_collapse_tolerances)
+            frames = [item["frame"] for item in step08_results if item["status"] == "success"]
+            if not frames:
+                raise RuntimeError("Step 08 failed for every requested frame; see failed_attempts and run_logs.")
         elif step == 9:
-            step_09_final_mesh(args.subject_dir, frames, args.overwrite, args.island_volume_percent)
+            step_09_final_mesh(args.subject_dir, frames, args.overwrite, args.tag1_mm, args.tag0_mm)
         else:
             operations[step](args.subject_dir, frames, args.overwrite)
     print(f"Stopped after Step {args.stop_after:02d}. No later stages were run.", flush=True)

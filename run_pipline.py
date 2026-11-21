@@ -45,10 +45,17 @@ CONDA_ENV = "cme-dt-env"
 
 # Edit these arguments to adjust each stage's settings.
 STAGE_ARGS = {
-    "segment": ["--stage01_seg_only=true", "--overwrite"],
-    "raw_surface": ["--stage02_surf_only=true", "--seg_manual=false"],
-    "volumetric": ["--frames", "ED,ES", "--overwrite"],
-    "uvc_fiber": ["--uvc-fiber", "--frames", "ED,ES",
+    "segment": ["--stage01_seg_only=true",
+                "--overwrite"],
+    "raw_surface": ["--stage02_surf_only=true",
+                    "--seg_manual=false"],
+    "volumetric": ["--frames", "ED,ES",
+                   "--overwrite",
+                   "--epi-local-repair=true", "--epi-min-accepted-step=0.01",
+                   "--step8-short-edge-collapse=true", "--step8-collapse-tolerances", "0.01", "0.001", "0.0001",
+                   "--tag1-mm", "10", "--tag0-mm", "12"],
+    "uvc_fiber": ["--uvc-fiber",
+                  "--frames", "ED,ES",
                   "--carp-bin-dir", "/opt/openCARP/usr/bin"],
 }
 
