@@ -1,0 +1,242 @@
+{
+  "error": "Outward RVepi displacement stopped at iteration 6: accepted maximum step 0.0213006 mm is below 0.03 mm before convergence; local repair also failed after 6 attempts; no final output published.",
+  "phase": "accepted_step_too_small",
+  "chamber": "RV",
+  "log_label": "Step03 RVepi",
+  "completed_updates": 5,
+  "minimum_requested_distance_mm": 3.0,
+  "target_distance_mm": 3.1,
+  "maximum_step_mm": 0.6816200068882062,
+  "backtracking_half": 5,
+  "minimum_accepted_step_mm": 0.03,
+  "last_step": {
+    "proposed_maximum_step_mm": 0.6816200068882063,
+    "backtracking_halvings": 5,
+    "backtracking_maximum_step_mm": 0.021300625215256448
+  },
+  "diagnostic_only": true,
+  "final_output_published": false,
+  "last_accepted_is_valid_final_mesh": false,
+  "outputs": {
+    "last_accepted": "/home/haibo/Research/4Dsegment/data/subject_23/volmesh_pipline/step_03_move_RVepi/failed_attempts/subject_23_ED_RVepi/20261123_173209_482493/RVepi_last_accepted.vtk",
+    "rejected_trial": "/home/haibo/Research/4Dsegment/data/subject_23/volmesh_pipline/step_03_move_RVepi/failed_attempts/subject_23_ED_RVepi/20261123_173209_482493/RVepi_rejected_trial.vtk",
+    "fixed_endo": "/home/haibo/Research/4Dsegment/data/subject_23/volmesh_pipline/step_03_move_RVepi/failed_attempts/subject_23_ED_RVepi/20261123_173209_482493/RVendo_fixed.vtk"
+  },
+  "local_repair": {
+    "enabled": true,
+    "maximum_attempts_per_event": 6,
+    "method": "local_displacement_damping_and_smoothing",
+    "events": [
+      {
+        "accepted": false,
+        "attempts": [
+          {
+            "attempt": 1,
+            "folded_triangle_ids": [],
+            "intersection_pairs": [
+              [
+                12850,
+                12857
+              ],
+              [
+                12850,
+                12858
+              ]
+            ],
+            "outward": true,
+            "maximum_step_mm": 0.6816200068882063,
+            "minimum_accepted_step_mm": 0.03,
+            "step_large_enough": true,
+            "final_small_step": false
+          },
+          {
+            "attempt": 2,
+            "folded_triangle_ids": [],
+            "intersection_pairs": [
+              [
+                12850,
+                12857
+              ],
+              [
+                12850,
+                12858
+              ]
+            ],
+            "outward": true,
+            "maximum_step_mm": 0.6816200068882063,
+            "minimum_accepted_step_mm": 0.03,
+            "step_large_enough": true,
+            "final_small_step": false
+          },
+          {
+            "attempt": 3,
+            "folded_triangle_ids": [],
+            "intersection_pairs": [
+              [
+                12850,
+                12857
+              ],
+              [
+                12850,
+                12858
+              ]
+            ],
+            "outward": true,
+            "maximum_step_mm": 0.6816200068882063,
+            "minimum_accepted_step_mm": 0.03,
+            "step_large_enough": true,
+            "final_small_step": false
+          },
+          {
+            "attempt": 4,
+            "folded_triangle_ids": [],
+            "intersection_pairs": [
+              [
+                12850,
+                12857
+              ],
+              [
+                12850,
+                12858
+              ]
+            ],
+            "outward": true,
+            "maximum_step_mm": 0.6816200068882063,
+            "minimum_accepted_step_mm": 0.03,
+            "step_large_enough": true,
+            "final_small_step": false
+          },
+          {
+            "attempt": 5,
+            "folded_triangle_ids": [],
+            "intersection_pairs": [
+              [
+                12850,
+                12857
+              ],
+              [
+                12850,
+                12858
+              ]
+            ],
+            "outward": true,
+            "maximum_step_mm": 0.6816200068882063,
+            "minimum_accepted_step_mm": 0.03,
+            "step_large_enough": true,
+            "final_small_step": false
+          },
+          {
+            "attempt": 6,
+            "folded_triangle_ids": [],
+            "intersection_pairs": [
+              [
+                12850,
+                12857
+              ],
+              [
+                12850,
+                12858
+              ]
+            ],
+            "outward": true,
+            "maximum_step_mm": 0.6816200068882063,
+            "minimum_accepted_step_mm": 0.03,
+            "step_large_enough": true,
+            "final_small_step": false
+          }
+        ],
+        "affected_vertex_ids": [
+          6986,
+          6989,
+          6990,
+          6993,
+          7371,
+          7374,
+          7377,
+          7378,
+          7381,
+          7755,
+          7759,
+          7762,
+          7763,
+          7764,
+          7767,
+          8139,
+          8142,
+          8144,
+          8145,
+          8147
+        ],
+        "initial_problem_triangle_ids": [
+          12850,
+          12857,
+          12858
+        ],
+        "affected_triangle_ids": [
+          11349,
+          11353,
+          11354,
+          11360,
+          11361,
+          11366,
+          11367,
+          11374,
+          12086,
+          12087,
+          12092,
+          12093,
+          12094,
+          12095,
+          12098,
+          12099,
+          12100,
+          12101,
+          12104,
+          12105,
+          12110,
+          12111,
+          12839,
+          12842,
+          12843,
+          12848,
+          12849,
+          12850,
+          12851,
+          12856,
+          12857,
+          12858,
+          12859,
+          12864,
+          12865,
+          12872,
+          12873,
+          13608,
+          13609,
+          13614,
+          13615,
+          13620,
+          13621,
+          13622,
+          13623,
+          13628,
+          13629,
+          13634,
+          14382,
+          14383,
+          14388,
+          14389,
+          14394,
+          14395,
+          14396,
+          14397,
+          14402,
+          14403,
+          14404
+        ],
+        "iteration": 6,
+        "trigger": "accepted_step_too_small",
+        "trigger_detail": "accepted maximum step 0.0213006 mm is below 0.03 mm before convergence"
+      }
+    ]
+  }
+}

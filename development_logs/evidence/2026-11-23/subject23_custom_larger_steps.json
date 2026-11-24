@@ -1,0 +1,160 @@
+{
+  "elapsed_seconds": 48.451265041250736,
+  "input_sha256": {
+    "data/subject_23/volmesh_pipline/step_02_surf_clean/subject_23_ED_RVepi.vtk": "21096cf68bd1889512da81759c1feb441b677b3ef49b08254b96f8ce17251d9b",
+    "data/subject_23/volmesh_pipline/step_02_surf_clean/subject_23_ED_RV.vtk": "78b674e4c940156c6694c624fbad8f128d583e04c1687ae63c8f84462f981836"
+  },
+  "old_first_fallback_step_mm": 0.0004046586749661298,
+  "movement": {
+    "method": "collision_aware_constrained_optimization",
+    "iterations": 4,
+    "elapsed_seconds": 43.812553324736655,
+    "warm_start": true,
+    "initial_maximum_displacement_mm": 1.8118844323576975,
+    "minimum_requested_distance_mm": 3.0,
+    "target_distance_mm": 3.1,
+    "contact_activation_distance_mm": 0.06816200068882063,
+    "smooth_weight": 0.02,
+    "collision_detection": "swept_AABB_separating_planes_adaptive_advancement",
+    "direction_constraints": "contact_halfspaces_and_minimum_path_area",
+    "connectivity_preserved": true,
+    "point_numbering_preserved": true,
+    "validation": {
+      "minimum_surface_distance_mm": 3.027438703089212,
+      "self_intersection_pairs": 0,
+      "RVepi_vertices_inside_RVendo": 0,
+      "RVendo_vertices_outside_RVepi": 0,
+      "free_edges": 0,
+      "distance_method": "FCL_triangle_triangle",
+      "connectivity_preserved": true,
+      "inward_displacement_vertices": 0,
+      "maximum_displacement_mm": 3.318605371621833
+    },
+    "history": [
+      {
+        "iteration": 1,
+        "energy": 17942.341188390674,
+        "minimum_sample_distance_mm": 1.735924482345581,
+        "proposed_maximum_step_mm": 0.6816200068882063,
+        "active_contacts": 16,
+        "ccd_candidates": 109279,
+        "ccd": {
+          "candidate_pairs": 109279,
+          "plane_certified_pairs": 109279,
+          "advancement_iterations": 1,
+          "refinements": 0,
+          "unresolved_pairs": 0,
+          "limiting_reason": "complete"
+        },
+        "direction_constraints": {
+          "patch_vertices": 337,
+          "contact_constraints": 943,
+          "area_constraints": 14,
+          "projection_passes": 4,
+          "projection_success": true
+        },
+        "ccd_step_fraction": 1.0,
+        "step_fraction": 1.0,
+        "line_search_halvings": 0,
+        "maximum_step_mm": 0.6816200068882063
+      },
+      {
+        "iteration": 2,
+        "energy": 6168.996641207645,
+        "minimum_sample_distance_mm": 2.280750036239624,
+        "proposed_maximum_step_mm": 0.6816200068882062,
+        "active_contacts": 4,
+        "ccd_candidates": 108087,
+        "ccd": {
+          "candidate_pairs": 108087,
+          "plane_certified_pairs": 108087,
+          "advancement_iterations": 2,
+          "refinements": 0,
+          "unresolved_pairs": 0,
+          "limiting_reason": "complete"
+        },
+        "direction_constraints": {
+          "patch_vertices": 280,
+          "contact_constraints": 931,
+          "area_constraints": 12,
+          "projection_passes": 2,
+          "projection_success": true
+        },
+        "ccd_step_fraction": 1.0,
+        "step_fraction": 1.0,
+        "line_search_halvings": 0,
+        "maximum_step_mm": 0.6816200068882062
+      },
+      {
+        "iteration": 3,
+        "energy": 698.5751711425203,
+        "minimum_sample_distance_mm": 2.7955708503723145,
+        "proposed_maximum_step_mm": 0.476707313820477,
+        "active_contacts": 56,
+        "ccd_candidates": 89098,
+        "ccd": {
+          "candidate_pairs": 89098,
+          "plane_certified_pairs": 89098,
+          "advancement_iterations": 3,
+          "refinements": 0,
+          "unresolved_pairs": 0,
+          "limiting_reason": "complete"
+        },
+        "direction_constraints": {
+          "patch_vertices": 244,
+          "contact_constraints": 1076,
+          "area_constraints": 19,
+          "projection_passes": 2,
+          "projection_success": true
+        },
+        "ccd_step_fraction": 1.0,
+        "step_fraction": 1.0,
+        "line_search_halvings": 0,
+        "maximum_step_mm": 0.476707313820477
+      },
+      {
+        "iteration": 4,
+        "energy": 6.834711496813285,
+        "minimum_sample_distance_mm": 2.977065086364746,
+        "proposed_maximum_step_mm": 0.6816200068882062,
+        "active_contacts": 131,
+        "ccd_candidates": 72329,
+        "ccd": {
+          "candidate_pairs": 72329,
+          "plane_certified_pairs": 72329,
+          "advancement_iterations": 11,
+          "refinements": 0,
+          "unresolved_pairs": 0,
+          "limiting_reason": "complete"
+        },
+        "direction_constraints": {
+          "patch_vertices": 203,
+          "contact_constraints": 715,
+          "area_constraints": 12,
+          "projection_passes": 3,
+          "projection_success": true
+        },
+        "ccd_step_fraction": 1.0,
+        "step_fraction": 1.0,
+        "line_search_halvings": 0,
+        "maximum_step_mm": 0.6816200068882062
+      }
+    ]
+  },
+  "saved_validation": {
+    "minimum_surface_distance_mm": 3.027438703089212,
+    "self_intersection_pairs": 0,
+    "RVepi_vertices_inside_RVendo": 0,
+    "RVendo_vertices_outside_RVepi": 0,
+    "free_edges": 0,
+    "distance_method": "FCL_triangle_triangle",
+    "connectivity_preserved": true,
+    "inward_displacement_vertices": 0,
+    "maximum_displacement_mm": 3.318605371621833
+  },
+  "input_files_unchanged": true,
+  "output_path": "/home/haibo/Research/4Dsegment/data/subject_23/volmesh_pipline/constrained_validation/larger_steps/ED_RV/RVepi_result.vtk",
+  "scope": "ED RV; constrained fallback warm start after seven accepted normal updates",
+  "regression_tests_passed": 31,
+  "first_fallback_step_improvement_factor": 1684.4319646557888
+}

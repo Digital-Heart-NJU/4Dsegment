@@ -1,0 +1,573 @@
+{
+  "step": "step_03_move_RVepi",
+  "subject": "subject_24",
+  "frame": "ED",
+  "inputs": {
+    "LVendo": "/home/haibo/Research/4Dsegment/data/subject_24/volmesh_pipline/step_02_surf_clean/subject_24_ED_LVendo.vtk",
+    "LVepi": "/home/haibo/Research/4Dsegment/data/subject_24/volmesh_pipline/step_02_surf_clean/subject_24_ED_LVepi.vtk",
+    "RV": "/home/haibo/Research/4Dsegment/data/subject_24/volmesh_pipline/step_02_surf_clean/subject_24_ED_RV.vtk",
+    "RVepi": "/home/haibo/Research/4Dsegment/data/subject_24/volmesh_pipline/step_02_surf_clean/subject_24_ED_RVepi.vtk"
+  },
+  "input_sha256": {
+    "LVendo": "d7eff28f37317c67f3b4034ecca4d91ac9f65f474230ee9bacabfa9724a5bd79",
+    "LVepi": "bde40032159382bf5ae2fbe843e953c762cbb82e5aa08d910e2feb220dfb70fa",
+    "RV": "57946750ddcee571c1474f3ddfccd7a397f97bba1a9c379ea833191932c81eca",
+    "RVepi": "92b947ee5cbb7c4dfc35354cb2eceb4a7594dfe8622f025051852a40b388f89e"
+  },
+  "outputs": {
+    "RVepi": {
+      "output_path": "/home/haibo/Research/4Dsegment/data/subject_24/volmesh_pipline/step_03_move_RVepi/subject_24_ED_RVepi_moved.vtk",
+      "output_sha256": "f88a0dd12cdd2a5fa2075996127d244e9c194602dc7db29e507801d6234accc0",
+      "movement": {
+        "method": "outward_RVepi_normal_displacement",
+        "iterations": 15,
+        "minimum_requested_distance_mm": 3.0,
+        "initial_vertices_inside_RVendo": 0,
+        "validation": {
+          "minimum_surface_distance_mm": 3.030383249182149,
+          "self_intersection_pairs": 0,
+          "RVepi_vertices_inside_RVendo": 0,
+          "RVendo_vertices_outside_RVepi": 0,
+          "free_edges": 0,
+          "distance_method": "FCL_triangle_triangle",
+          "connectivity_preserved": true,
+          "inward_displacement_vertices": 0,
+          "maximum_displacement_mm": 3.5101900952460965
+        },
+        "local_repair": {
+          "enabled": true,
+          "maximum_attempts_per_event": null,
+          "method": "collision_aware_constrained_optimization_fallback",
+          "events": [
+            {
+              "iteration": 11,
+              "trigger": "accepted_step_too_small",
+              "trigger_detail": "accepted maximum step 9.9969e-05 mm is below 0.01 mm before convergence",
+              "accepted": true,
+              "method": "constrained",
+              "normal_updates_before_fallback": 10,
+              "initial_state": "last_accepted_normal_mesh",
+              "remaining_iteration_budget": 590,
+              "optimization": {
+                "method": "collision_aware_constrained_optimization",
+                "iterations": 5,
+                "elapsed_seconds": 24.984542432241142,
+                "warm_start": true,
+                "initial_maximum_displacement_mm": 2.7276891238052023,
+                "minimum_requested_distance_mm": 3.0,
+                "target_distance_mm": 3.1,
+                "contact_activation_distance_mm": 0.0692235639897923,
+                "smooth_weight": 0.02,
+                "contact_backend": {
+                  "package": "ipctk",
+                  "version": "1.4.0",
+                  "barrier": "BarrierPotential",
+                  "stiffness": 10.43427056049842
+                },
+                "collision_detection": "ipctk.Candidates_TightInclusionCCD",
+                "direction_constraints": "contact_halfspaces_and_minimum_path_area",
+                "connectivity_preserved": true,
+                "point_numbering_preserved": true,
+                "validation": {
+                  "minimum_surface_distance_mm": 3.030383249182149,
+                  "self_intersection_pairs": 0,
+                  "RVepi_vertices_inside_RVendo": 0,
+                  "RVendo_vertices_outside_RVepi": 0,
+                  "free_edges": 0,
+                  "distance_method": "FCL_triangle_triangle",
+                  "connectivity_preserved": true,
+                  "inward_displacement_vertices": 0,
+                  "maximum_displacement_mm": 3.5101900952460965
+                },
+                "history": [
+                  {
+                    "iteration": 1,
+                    "energy": 1042.3823393135285,
+                    "minimum_sample_distance_mm": 2.653298854827881,
+                    "proposed_maximum_step_mm": 0.6922356398979229,
+                    "active_contacts": 2031,
+                    "ccd_candidates": 67766,
+                    "ccd": {
+                      "backend": "ipctk",
+                      "version": "1.4.0",
+                      "narrow_phase": "TightInclusionCCD",
+                      "tolerance_mm": 1e-09,
+                      "candidate_pairs": 67766,
+                      "unresolved_pairs": null,
+                      "limiting_reason": "complete"
+                    },
+                    "direction_constraints": {
+                      "patch_vertices": 184,
+                      "contact_constraints": 654,
+                      "area_constraints": 11,
+                      "projection_passes": 2,
+                      "projection_success": true,
+                      "trust_region_reductions": 0,
+                      "remaining_contact_violations": 0,
+                      "remaining_area_violations": 0
+                    },
+                    "ccd_step_fraction": 1.0,
+                    "step_fraction": 1.0,
+                    "line_search_halvings": 0,
+                    "maximum_step_mm": 0.6922356398979229
+                  },
+                  {
+                    "iteration": 2,
+                    "energy": 534.407915298593,
+                    "minimum_sample_distance_mm": 2.438937187194824,
+                    "proposed_maximum_step_mm": 0.692235639897923,
+                    "active_contacts": 1876,
+                    "ccd_candidates": 72175,
+                    "ccd": {
+                      "backend": "ipctk",
+                      "version": "1.4.0",
+                      "narrow_phase": "TightInclusionCCD",
+                      "tolerance_mm": 1e-09,
+                      "candidate_pairs": 72175,
+                      "unresolved_pairs": null,
+                      "limiting_reason": "complete"
+                    },
+                    "direction_constraints": {
+                      "patch_vertices": 130,
+                      "contact_constraints": 254,
+                      "area_constraints": 2,
+                      "projection_passes": 2,
+                      "projection_success": true,
+                      "trust_region_reductions": 0,
+                      "remaining_contact_violations": 0,
+                      "remaining_area_violations": 0
+                    },
+                    "ccd_step_fraction": 1.0,
+                    "step_fraction": 1.0,
+                    "line_search_halvings": 0,
+                    "maximum_step_mm": 0.692235639897923
+                  },
+                  {
+                    "iteration": 3,
+                    "energy": 145.88353286600173,
+                    "minimum_sample_distance_mm": 2.7523419857025146,
+                    "proposed_maximum_step_mm": 0.6922356398979229,
+                    "active_contacts": 1847,
+                    "ccd_candidates": 72645,
+                    "ccd": {
+                      "backend": "ipctk",
+                      "version": "1.4.0",
+                      "narrow_phase": "TightInclusionCCD",
+                      "tolerance_mm": 1e-09,
+                      "candidate_pairs": 72645,
+                      "unresolved_pairs": null,
+                      "limiting_reason": "complete"
+                    },
+                    "direction_constraints": {
+                      "patch_vertices": 108,
+                      "contact_constraints": 200,
+                      "area_constraints": 7,
+                      "projection_passes": 4,
+                      "projection_success": true,
+                      "trust_region_reductions": 0,
+                      "remaining_contact_violations": 0,
+                      "remaining_area_violations": 0
+                    },
+                    "ccd_step_fraction": 1.0,
+                    "step_fraction": 1.0,
+                    "line_search_halvings": 0,
+                    "maximum_step_mm": 0.6922356398979229
+                  },
+                  {
+                    "iteration": 4,
+                    "energy": 9.30481988101986,
+                    "minimum_sample_distance_mm": 2.990691900253296,
+                    "proposed_maximum_step_mm": 0.569220668706561,
+                    "active_contacts": 1739,
+                    "ccd_candidates": 55076,
+                    "ccd": {
+                      "backend": "ipctk",
+                      "version": "1.4.0",
+                      "narrow_phase": "TightInclusionCCD",
+                      "tolerance_mm": 1e-09,
+                      "candidate_pairs": 55076,
+                      "unresolved_pairs": null,
+                      "limiting_reason": "complete"
+                    },
+                    "direction_constraints": {
+                      "patch_vertices": 82,
+                      "contact_constraints": 150,
+                      "area_constraints": 6,
+                      "projection_passes": 4,
+                      "projection_success": true,
+                      "trust_region_reductions": 0,
+                      "remaining_contact_violations": 0,
+                      "remaining_area_violations": 0
+                    },
+                    "ccd_step_fraction": 1.0,
+                    "step_fraction": 1.0,
+                    "line_search_halvings": 0,
+                    "maximum_step_mm": 0.569220668706561
+                  },
+                  {
+                    "iteration": 5,
+                    "energy": 5.786897968198763,
+                    "minimum_sample_distance_mm": 2.893096446990967,
+                    "proposed_maximum_step_mm": 0.6922356398979229,
+                    "active_contacts": 1579,
+                    "ccd_candidates": 56607,
+                    "ccd": {
+                      "backend": "ipctk",
+                      "version": "1.4.0",
+                      "narrow_phase": "TightInclusionCCD",
+                      "tolerance_mm": 1e-09,
+                      "candidate_pairs": 56607,
+                      "unresolved_pairs": null,
+                      "limiting_reason": "complete"
+                    },
+                    "direction_constraints": {
+                      "patch_vertices": 34,
+                      "contact_constraints": 51,
+                      "area_constraints": 1,
+                      "projection_passes": 1,
+                      "projection_success": true,
+                      "trust_region_reductions": 0,
+                      "remaining_contact_violations": 0,
+                      "remaining_area_violations": 0
+                    },
+                    "ccd_step_fraction": 1.0,
+                    "step_fraction": 1.0,
+                    "line_search_halvings": 0,
+                    "maximum_step_mm": 0.6922356398979229
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "minimum_accepted_step_mm": 0.01,
+        "last_step": {
+          "proposed_maximum_step_mm": 0.4094729079843497,
+          "backtracking_halvings": 12,
+          "backtracking_maximum_step_mm": 9.996897167586663e-05,
+          "completion_method": "constrained_fallback",
+          "repair_trigger": "accepted_step_too_small",
+          "normal_updates_before_fallback": 10,
+          "constrained_iterations": 5,
+          "accepted_maximum_step_mm": 0.6922356398979229
+        }
+      },
+      "saved_validation": {
+        "minimum_surface_distance_mm": 3.030383249182149,
+        "self_intersection_pairs": 0,
+        "RVepi_vertices_inside_RVendo": 0,
+        "RVendo_vertices_outside_RVepi": 0,
+        "free_edges": 0,
+        "distance_method": "FCL_triangle_triangle",
+        "connectivity_preserved": true,
+        "inward_displacement_vertices": 0,
+        "maximum_displacement_mm": 3.5101900952460965
+      },
+      "elemTag": 0
+    },
+    "LVepi": {
+      "output_path": "/home/haibo/Research/4Dsegment/data/subject_24/volmesh_pipline/step_03_move_RVepi/subject_24_ED_LVepi_moved.vtk",
+      "output_sha256": "c792866415614309228aaf9e4ddff4593ace52262a7a984288fe18f66273a149",
+      "movement": {
+        "method": "outward_LVepi_normal_displacement",
+        "iterations": 6,
+        "minimum_requested_distance_mm": 3.0,
+        "initial_vertices_inside_LVendo": 0,
+        "validation": {
+          "minimum_surface_distance_mm": 3.035649114890976,
+          "self_intersection_pairs": 0,
+          "LVepi_vertices_inside_LVendo": 0,
+          "LVendo_vertices_outside_LVepi": 0,
+          "free_edges": 0,
+          "distance_method": "FCL_triangle_triangle",
+          "connectivity_preserved": true,
+          "inward_displacement_vertices": 0,
+          "maximum_displacement_mm": 3.0889448816501868
+        },
+        "local_repair": {
+          "enabled": true,
+          "maximum_attempts_per_event": null,
+          "method": "collision_aware_constrained_optimization_fallback",
+          "events": []
+        },
+        "minimum_accepted_step_mm": 0.01,
+        "last_step": {
+          "proposed_maximum_step_mm": 0.051778133586392265,
+          "backtracking_halvings": 0,
+          "backtracking_maximum_step_mm": 0.051778133586392265,
+          "accepted_maximum_step_mm": 0.051778133586392265,
+          "final_small_step": false,
+          "repair_trigger": null
+        }
+      },
+      "saved_validation": {
+        "minimum_surface_distance_mm": 3.035649114890976,
+        "self_intersection_pairs": 0,
+        "LVepi_vertices_inside_LVendo": 0,
+        "LVendo_vertices_outside_LVepi": 0,
+        "free_edges": 0,
+        "distance_method": "FCL_triangle_triangle",
+        "connectivity_preserved": true,
+        "inward_displacement_vertices": 0,
+        "maximum_displacement_mm": 3.0889448816501868
+      },
+      "elemTag": 1
+    }
+  },
+  "output_path": "/home/haibo/Research/4Dsegment/data/subject_24/volmesh_pipline/step_03_move_RVepi/subject_24_ED_RVepi_moved.vtk",
+  "output_sha256": "f88a0dd12cdd2a5fa2075996127d244e9c194602dc7db29e507801d6234accc0",
+  "movement": {
+    "method": "outward_RVepi_normal_displacement",
+    "iterations": 15,
+    "minimum_requested_distance_mm": 3.0,
+    "initial_vertices_inside_RVendo": 0,
+    "validation": {
+      "minimum_surface_distance_mm": 3.030383249182149,
+      "self_intersection_pairs": 0,
+      "RVepi_vertices_inside_RVendo": 0,
+      "RVendo_vertices_outside_RVepi": 0,
+      "free_edges": 0,
+      "distance_method": "FCL_triangle_triangle",
+      "connectivity_preserved": true,
+      "inward_displacement_vertices": 0,
+      "maximum_displacement_mm": 3.5101900952460965
+    },
+    "local_repair": {
+      "enabled": true,
+      "maximum_attempts_per_event": null,
+      "method": "collision_aware_constrained_optimization_fallback",
+      "events": [
+        {
+          "iteration": 11,
+          "trigger": "accepted_step_too_small",
+          "trigger_detail": "accepted maximum step 9.9969e-05 mm is below 0.01 mm before convergence",
+          "accepted": true,
+          "method": "constrained",
+          "normal_updates_before_fallback": 10,
+          "initial_state": "last_accepted_normal_mesh",
+          "remaining_iteration_budget": 590,
+          "optimization": {
+            "method": "collision_aware_constrained_optimization",
+            "iterations": 5,
+            "elapsed_seconds": 24.984542432241142,
+            "warm_start": true,
+            "initial_maximum_displacement_mm": 2.7276891238052023,
+            "minimum_requested_distance_mm": 3.0,
+            "target_distance_mm": 3.1,
+            "contact_activation_distance_mm": 0.0692235639897923,
+            "smooth_weight": 0.02,
+            "contact_backend": {
+              "package": "ipctk",
+              "version": "1.4.0",
+              "barrier": "BarrierPotential",
+              "stiffness": 10.43427056049842
+            },
+            "collision_detection": "ipctk.Candidates_TightInclusionCCD",
+            "direction_constraints": "contact_halfspaces_and_minimum_path_area",
+            "connectivity_preserved": true,
+            "point_numbering_preserved": true,
+            "validation": {
+              "minimum_surface_distance_mm": 3.030383249182149,
+              "self_intersection_pairs": 0,
+              "RVepi_vertices_inside_RVendo": 0,
+              "RVendo_vertices_outside_RVepi": 0,
+              "free_edges": 0,
+              "distance_method": "FCL_triangle_triangle",
+              "connectivity_preserved": true,
+              "inward_displacement_vertices": 0,
+              "maximum_displacement_mm": 3.5101900952460965
+            },
+            "history": [
+              {
+                "iteration": 1,
+                "energy": 1042.3823393135285,
+                "minimum_sample_distance_mm": 2.653298854827881,
+                "proposed_maximum_step_mm": 0.6922356398979229,
+                "active_contacts": 2031,
+                "ccd_candidates": 67766,
+                "ccd": {
+                  "backend": "ipctk",
+                  "version": "1.4.0",
+                  "narrow_phase": "TightInclusionCCD",
+                  "tolerance_mm": 1e-09,
+                  "candidate_pairs": 67766,
+                  "unresolved_pairs": null,
+                  "limiting_reason": "complete"
+                },
+                "direction_constraints": {
+                  "patch_vertices": 184,
+                  "contact_constraints": 654,
+                  "area_constraints": 11,
+                  "projection_passes": 2,
+                  "projection_success": true,
+                  "trust_region_reductions": 0,
+                  "remaining_contact_violations": 0,
+                  "remaining_area_violations": 0
+                },
+                "ccd_step_fraction": 1.0,
+                "step_fraction": 1.0,
+                "line_search_halvings": 0,
+                "maximum_step_mm": 0.6922356398979229
+              },
+              {
+                "iteration": 2,
+                "energy": 534.407915298593,
+                "minimum_sample_distance_mm": 2.438937187194824,
+                "proposed_maximum_step_mm": 0.692235639897923,
+                "active_contacts": 1876,
+                "ccd_candidates": 72175,
+                "ccd": {
+                  "backend": "ipctk",
+                  "version": "1.4.0",
+                  "narrow_phase": "TightInclusionCCD",
+                  "tolerance_mm": 1e-09,
+                  "candidate_pairs": 72175,
+                  "unresolved_pairs": null,
+                  "limiting_reason": "complete"
+                },
+                "direction_constraints": {
+                  "patch_vertices": 130,
+                  "contact_constraints": 254,
+                  "area_constraints": 2,
+                  "projection_passes": 2,
+                  "projection_success": true,
+                  "trust_region_reductions": 0,
+                  "remaining_contact_violations": 0,
+                  "remaining_area_violations": 0
+                },
+                "ccd_step_fraction": 1.0,
+                "step_fraction": 1.0,
+                "line_search_halvings": 0,
+                "maximum_step_mm": 0.692235639897923
+              },
+              {
+                "iteration": 3,
+                "energy": 145.88353286600173,
+                "minimum_sample_distance_mm": 2.7523419857025146,
+                "proposed_maximum_step_mm": 0.6922356398979229,
+                "active_contacts": 1847,
+                "ccd_candidates": 72645,
+                "ccd": {
+                  "backend": "ipctk",
+                  "version": "1.4.0",
+                  "narrow_phase": "TightInclusionCCD",
+                  "tolerance_mm": 1e-09,
+                  "candidate_pairs": 72645,
+                  "unresolved_pairs": null,
+                  "limiting_reason": "complete"
+                },
+                "direction_constraints": {
+                  "patch_vertices": 108,
+                  "contact_constraints": 200,
+                  "area_constraints": 7,
+                  "projection_passes": 4,
+                  "projection_success": true,
+                  "trust_region_reductions": 0,
+                  "remaining_contact_violations": 0,
+                  "remaining_area_violations": 0
+                },
+                "ccd_step_fraction": 1.0,
+                "step_fraction": 1.0,
+                "line_search_halvings": 0,
+                "maximum_step_mm": 0.6922356398979229
+              },
+              {
+                "iteration": 4,
+                "energy": 9.30481988101986,
+                "minimum_sample_distance_mm": 2.990691900253296,
+                "proposed_maximum_step_mm": 0.569220668706561,
+                "active_contacts": 1739,
+                "ccd_candidates": 55076,
+                "ccd": {
+                  "backend": "ipctk",
+                  "version": "1.4.0",
+                  "narrow_phase": "TightInclusionCCD",
+                  "tolerance_mm": 1e-09,
+                  "candidate_pairs": 55076,
+                  "unresolved_pairs": null,
+                  "limiting_reason": "complete"
+                },
+                "direction_constraints": {
+                  "patch_vertices": 82,
+                  "contact_constraints": 150,
+                  "area_constraints": 6,
+                  "projection_passes": 4,
+                  "projection_success": true,
+                  "trust_region_reductions": 0,
+                  "remaining_contact_violations": 0,
+                  "remaining_area_violations": 0
+                },
+                "ccd_step_fraction": 1.0,
+                "step_fraction": 1.0,
+                "line_search_halvings": 0,
+                "maximum_step_mm": 0.569220668706561
+              },
+              {
+                "iteration": 5,
+                "energy": 5.786897968198763,
+                "minimum_sample_distance_mm": 2.893096446990967,
+                "proposed_maximum_step_mm": 0.6922356398979229,
+                "active_contacts": 1579,
+                "ccd_candidates": 56607,
+                "ccd": {
+                  "backend": "ipctk",
+                  "version": "1.4.0",
+                  "narrow_phase": "TightInclusionCCD",
+                  "tolerance_mm": 1e-09,
+                  "candidate_pairs": 56607,
+                  "unresolved_pairs": null,
+                  "limiting_reason": "complete"
+                },
+                "direction_constraints": {
+                  "patch_vertices": 34,
+                  "contact_constraints": 51,
+                  "area_constraints": 1,
+                  "projection_passes": 1,
+                  "projection_success": true,
+                  "trust_region_reductions": 0,
+                  "remaining_contact_violations": 0,
+                  "remaining_area_violations": 0
+                },
+                "ccd_step_fraction": 1.0,
+                "step_fraction": 1.0,
+                "line_search_halvings": 0,
+                "maximum_step_mm": 0.6922356398979229
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "minimum_accepted_step_mm": 0.01,
+    "last_step": {
+      "proposed_maximum_step_mm": 0.4094729079843497,
+      "backtracking_halvings": 12,
+      "backtracking_maximum_step_mm": 9.996897167586663e-05,
+      "completion_method": "constrained_fallback",
+      "repair_trigger": "accepted_step_too_small",
+      "normal_updates_before_fallback": 10,
+      "constrained_iterations": 5,
+      "accepted_maximum_step_mm": 0.6922356398979229
+    }
+  },
+  "saved_validation": {
+    "minimum_surface_distance_mm": 3.030383249182149,
+    "self_intersection_pairs": 0,
+    "RVepi_vertices_inside_RVendo": 0,
+    "RVendo_vertices_outside_RVepi": 0,
+    "free_edges": 0,
+    "distance_method": "FCL_triangle_triangle",
+    "connectivity_preserved": true,
+    "inward_displacement_vertices": 0,
+    "maximum_displacement_mm": 3.5101900952460965
+  },
+  "fixed_surfaces": [
+    "LVendo",
+    "RV"
+  ],
+  "clearance_method": "normal",
+  "input_files_modified": false,
+  "LV_intersection_handling": false,
+  "stopped_after": "step_03_move_RVepi",
+  "previous_output_backup": "/home/haibo/Research/4Dsegment/data/subject_24/volmesh_pipline/step_03_move_RVepi/previous_outputs/20261123_203619_161416"
+}

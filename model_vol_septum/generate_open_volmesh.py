@@ -3,7 +3,7 @@
 
 Step 01: copy original surfaces without changing their geometry or arrays.
 Step 02: MeshFix repair, closed-surface validation and LV/RV surface labels.
-Step 03: move closed LVepi/RVepi outward, keeping both endocardia fixed and clearance >=3 mm.
+Step 03: try four connectivity-preserving clearance approaches, keeping endocardia fixed.
 Step 04: extract the outer envelope and append both complete inner surfaces.
 Step 05: MeshFix-clean the combined surface, retaining both blood-pool cavities.
 Step 06: TetGen mesh of the connected myocardium, then LVepi-based LV/RV tags.
@@ -34,11 +34,45 @@ move outward by a mesh-scaled numerical clearance. No basal opening is made.
 RV is the RV endocardium. Copies retain the original VTK format and arrays.
 Cleaned surfaces use ASCII VTK triangles with LV elemTag=1 and RV elemTag=0.
 Use --start-step 2 to clean existing Step 01 files without copying them again.
-Use --start-step 3 to move both epicardia using existing Step 02 surfaces.
-Use --epi-local-repair=true to try topology-preserving local displacement repair
+Use --start-step 3 to process both epicardia using existing Step 02 surfaces.
+The default --epi-clearance-method=auto tries normal displacement with damping,
+constrained recovery, then PyMeshFix recovery, followed by standalone constrained
+optimization. Each attempt starts from Step 02; the first saved and validated
+result is retained independently for each epicardium and frame. All four failures
+stop Step 03 without publishing its staged outputs. Single methods remain selectable.
+Use --epi-clearance-method=sdf to extract an endocardial offset,
+union it with the original epi, and retain/reinsert all original epi vertices
+whose signed distance was >= the requested clearance. Connectivity may change.
+The new points and transition strips are regridded, without unconstrained
+smoothing. Final checks require >=3 mm triangle clearance, containment, no
+detected self-intersections, and bit-exact frozen coordinates after saving.
+--epi-sdf-spacing controls initial grid spacing in mm (default clearance / 6).
+Bounded retries increase the extraction margin or refine the grid; a margin is
+not a substitute for actual clearance checks. SDF diagnostics are retained.
+Use --epi-clearance-method=normal for the previous displacement method.
+Use --epi-clearance-method=constrained for sparse collision-aware optimization:
+clearance penalties, displacement regularization, self-contact barriers and
+conservative continuous collision checks, preserving point IDs and triangles.
+Official IPC Toolkit (ipctk==1.4.0) supplies the contact barrier derivatives
+and Tight Inclusion CCD; missing or unsupported packages raise an error.
+Tangential updates are allowed; total displacement must remain outward relative
+to the original normals. No remeshing or fallback to SDF is performed.
+Only that normal mode uses --epi-local-repair=true for local displacement repair
 after Step 03's usual backtracking fails or accepts less than 0.01 mm maximum
-movement. Repair is disabled by default; --epi-min-accepted-step changes the
+movement. Explicit normal mode disables repair by default; auto enables it.
+--epi-min-accepted-step changes the
 threshold. Smaller final updates are allowed only if all final checks pass.
+--epi-local-repair-method=pymeshfix enables an alternative normal-mode repair:
+MeshFix repairs a closed trial target, then only nearby original vertices are
+projected onto it. Its replacement triangles are discarded to preserve input
+connectivity. Corrections outside the patch are zero; full-surface fold,
+self-intersection, outward-motion and final clearance checks remain mandatory.
+--epi-local-repair-method=constrained selects a whole-surface optimization
+fallback instead: normal movement runs first, then the optimizer continues
+from the last accepted state if backtracking fails or its step is too small.
+Original point IDs, triangles and outward reference are preserved. The
+remaining --rv-move-max-iterations budget bounds optimization; the six-attempt
+local damping limit does not apply. Selecting constrained enables repair.
 Use --start-step 4 to extract the combined surface using existing Steps 02/03.
 Use --start-step 5 to clean only the existing Step 04 LVRV_surf.vtk files.
 Use --start-step 6 to mesh existing Step 05 surfaces; Step 03 LVepi_moved defines LV.
@@ -96,6 +130,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import time
 from tempfile import TemporaryDirectory
 
 import numpy as np
@@ -212,7 +247,7 @@ def step_01_load_surf(subject_dir, frames=("ED", "ES"), overwrite=False):
     return results
 
 
-def save_clean_surface(surface, path, tag=None):
+def save_clean_surface(surface, path, tag=None, exact=False):
     """Write ASCII triangles and recheck the serialized geometry and labels."""
     from model_vol_septum.clean_step02_surfaces import validate_clean_surface
 
@@ -224,11 +259,45 @@ def save_clean_surface(surface, path, tag=None):
         grid.point_data[name] = values
     for name, values in surface.cell_data.items():
         grid.cell_data[name] = values
-    grid.save(path, binary=False)
+    if exact:
+        types = {"i4": "int", "i8": "vtktypeint64", "u4": "unsigned_int",
+                 "u8": "vtktypeuint64", "f4": "float", "f8": "double"}
+        with Path(path).open("w", encoding="ascii") as stream:
+            stream.write("# vtk DataFile Version 3.0\nValidated epicardial surface\nASCII\nDATASET UNSTRUCTURED_GRID\n")
+            stream.write(f"POINTS {surface.n_points} double\n")
+            np.savetxt(stream, surface.points, fmt="%.17g")
+            stream.write(f"CELLS {surface.n_cells} {surface.n_cells*4}\n")
+            np.savetxt(stream, surface.faces.reshape(-1, 4), fmt="%d")
+            stream.write(f"CELL_TYPES {surface.n_cells}\n")
+            np.savetxt(stream, np.full(surface.n_cells, 5), fmt="%d")
+            for label, arrays, count in (("CELL_DATA", surface.cell_data, surface.n_cells),
+                                         ("POINT_DATA", surface.point_data, surface.n_points)):
+                if not len(arrays):
+                    continue
+                stream.write(f"{label} {count}\n")
+                remaining = dict(arrays)
+                if label == "CELL_DATA" and "elemTag" in remaining:
+                    values = np.asarray(remaining.pop("elemTag"))
+                    stream.write(f"SCALARS elemTag {types[values.dtype.kind+str(values.dtype.itemsize)]} 1\nLOOKUP_TABLE default\n")
+                    np.savetxt(stream, values, fmt="%d")
+                if remaining:
+                    stream.write(f"FIELD FieldData {len(remaining)}\n")
+                for name, values in remaining.items():
+                    values = np.asarray(values)
+                    key = values.dtype.kind+str(values.dtype.itemsize)
+                    if key not in types or values.ndim not in (1, 2) or any(c.isspace() for c in name):
+                        raise ValueError(f"Unsupported exact surface array: {name}")
+                    data = values.reshape(count, -1)
+                    stream.write(f"{name} {data.shape[1]} {count} {types[key]}\n")
+                    np.savetxt(stream, data, fmt="%.17g" if values.dtype.kind == "f" else "%d")
+    else:
+        grid.save(path, binary=False)
     saved = load_surface(path)
     if (not np.array_equal(saved.cells, surface.faces)
             or not np.allclose(saved.points, surface.points, rtol=0.0, atol=1e-9)):
         raise RuntimeError(f"Saved cleaning result changed its geometry or connectivity: {path}")
+    if exact and not np.array_equal(saved.points, surface.points):
+        raise RuntimeError(f"Saving surface changed exact point coordinates: {path}")
     tags = np.asarray(saved.cell_data.get("elemTag", []))
     expected = surface.cell_data["elemTag"] if tag is None else np.full(surface.n_cells, tag)
     if len(tags) != saved.n_cells or not np.array_equal(tags, expected):
@@ -329,6 +398,42 @@ def _surface_gap(surface, fixed_object):
     return distance, result.nearest_points[0]
 
 
+def _clearance_freeze_state(surface, endo, minimum):
+    """Select locks at repair entry using double-precision signed distances."""
+    import vtk
+
+    distance = vtk.vtkImplicitPolyDataDistance()
+    distance.SetInput(endo)
+    signed = np.fromiter((distance.EvaluateFunction(p) for p in surface.points), float,
+                         count=surface.n_points)
+    frozen = signed >= minimum
+    faces = surface.faces.reshape(-1, 4)[:, 1:]
+    fixed_faces = np.all(frozen[faces], axis=1)
+    gap = None
+    if np.any(fixed_faces):
+        patch = pv.PolyData(surface.points,
+            np.column_stack((np.full(int(fixed_faces.sum()), 3), faces[fixed_faces])).ravel())
+        gap, _ = _surface_gap(patch, _surface_object(endo))
+    return frozen, {"enabled": True, "activated": True, "selection_state": "repair_entry",
+                    "minimum_clearance_mm": minimum, "frozen_vertex_count": int(frozen.sum()),
+                    "frozen_vertex_ids": np.flatnonzero(frozen).tolist(),
+                    "fully_frozen_triangle_count": int(fixed_faces.sum()),
+                    "minimum_frozen_triangle_distance_mm": gap}
+
+
+def _validate_frozen_vertices(surface):
+    """Check exact locks in memory and again after VTK serialization."""
+    if "clearanceFrozen" not in surface.point_data:
+        return {}
+    mask = np.asarray(surface.point_data["clearanceFrozen"], dtype=bool)
+    reference = np.asarray(surface.point_data.get("freezeReferencePosition", []))
+    if mask.shape != (surface.n_points,) or reference.shape != surface.points.shape:
+        raise RuntimeError("Invalid frozen-vertex reference arrays.")
+    if not np.array_equal(surface.points[mask], reference[mask]):
+        raise RuntimeError("A clearance-satisfying frozen vertex moved.")
+    return {"frozen_vertex_count": int(mask.sum()), "frozen_vertices_preserved_exactly": True}
+
+
 def validate_closed_epi(epi, endo, minimum=3.0, source=None, chamber="RV"):
     """Validate the closed moved surface without changing either input."""
     from model_vol_septum.clean_step02_surfaces import validate_clean_surface
@@ -348,6 +453,7 @@ def validate_closed_epi(epi, endo, minimum=3.0, source=None, chamber="RV"):
     info = {"minimum_surface_distance_mm": distance, "self_intersection_pairs": 0,
             f"{epi_name}_vertices_inside_{endo_name}": 0, f"{endo_name}_vertices_outside_{epi_name}": 0,
             "free_edges": quality["free_edges"], "distance_method": "FCL_triangle_triangle"}
+    info.update(_validate_frozen_vertices(epi))
     if source is not None:
         if epi.points.shape != source.points.shape or not np.array_equal(epi.faces, source.faces):
             raise RuntimeError(f"{epi_name} point numbering or triangle connectivity changed.")
@@ -363,31 +469,38 @@ def validate_closed_epi(epi, endo, minimum=3.0, source=None, chamber="RV"):
 
 def _repair_closed_epi_displacement(points, faces, delta, edges, weights,
                                     reference, normals, original, bad_faces, max_attempts=6,
-                                    min_accepted_step=0.01, final_check=None):
+                                    min_accepted_step=0.01, final_check=None, fixed_vertices=None):
     """Locally damp/smooth a rejected displacement without changing connectivity."""
     from model_vol_septum.mesh_intersections import confirmed_self_intersections
 
     step = delta.copy()
+    frozen = np.zeros(len(points), dtype=bool) if fixed_vertices is None else np.asarray(fixed_vertices, dtype=bool)
+    if frozen.shape != (len(points),):
+        raise ValueError("Frozen-vertex mask must match the point count.")
+    step[frozen] = 0.
     core = np.zeros(len(points), dtype=bool)
     core[np.unique(faces[np.asarray(bad_faces, dtype=np.int64)])] = True
-    affected = core.copy()
+    affected = np.zeros(len(points), dtype=bool)
     a, b = edges[:, 0], edges[:, 1]
     degree = np.bincount(np.r_[a, b], weights=np.r_[weights, weights], minlength=len(points))
     xyz = points[faces]
     cross = np.cross(xyz[:, 1] - xyz[:, 0], xyz[:, 2] - xyz[:, 0])
     info = {"accepted": False, "attempts": [], "affected_vertex_ids": [],
+            "frozen_vertex_count": int(frozen.sum()),
             "initial_problem_triangle_ids": np.asarray(bad_faces, dtype=int).tolist()}
     candidate = points.copy()
     for attempt in range(max_attempts):
         mask = core.copy()
         adjacent = core[a] | core[b]
         mask[edges[adjacent].ravel()] = True
+        mask[frozen] = False
         affected |= mask
         average = np.zeros_like(step)
         np.add.at(average, a, weights[:, None] * step[b])
         np.add.at(average, b, weights[:, None] * step[a])
         average /= np.maximum(degree, 1e-12)[:, None]
         step[mask] = 0.5 * (0.75 * step[mask] + 0.25 * average[mask])
+        step[frozen] = 0.
         candidate = points + step
         new = candidate[faces]
         new_cross = np.cross(new[:, 1] - new[:, 0], new[:, 2] - new[:, 0])
@@ -412,6 +525,7 @@ def _repair_closed_epi_displacement(points, faces, delta, edges, weights,
         info["affected_triangle_ids"] = np.flatnonzero(np.any(affected[faces], axis=1)).tolist()
         if geometry_ok and progress:
             info["accepted"] = True
+            info["frozen_vertices_preserved_exactly"] = bool(np.array_equal(candidate[frozen], points[frozen]))
             return step, info, candidate
         problem_faces = np.unique(np.r_[folded, intersections.ravel()]).astype(np.int64)
         if len(problem_faces):
@@ -421,7 +535,9 @@ def _repair_closed_epi_displacement(points, faces, delta, edges, weights,
 
 def move_closed_epi(epi, endo, minimum=3.0, max_iterations=600,
                     clearance_padding=0.1, log_label=None, chamber="RV", diagnostics_dir=None,
-                    local_repair=False, min_accepted_step=0.01):
+                    local_repair=False, min_accepted_step=0.01, local_repair_method="damping",
+                    optimization_contact_distance=None, optimization_smooth_weight=.02,
+                    freeze_satisfied=False):
     """Move a closed epi outward; save diagnostic-only meshes on movement failure."""
     import vtk
     from scipy.sparse import coo_matrix, eye
@@ -433,6 +549,11 @@ def move_closed_epi(epi, endo, minimum=3.0, max_iterations=600,
         raise ValueError("Epicardial clearance and iteration count must be positive.")
     if not np.isfinite(min_accepted_step) or min_accepted_step <= 0:
         raise ValueError("Minimum accepted epicardial step must be positive and finite.")
+    if local_repair_method not in ("damping", "pymeshfix", "constrained"):
+        raise ValueError("Local repair method must be damping, pymeshfix, or constrained.")
+    local_repair = local_repair or local_repair_method in ("pymeshfix", "constrained")
+    if freeze_satisfied and not local_repair:
+        raise ValueError("Freezing satisfied vertices requires local repair to be enabled.")
     epi_name, endo_name = ((f"{chamber}epi", f"{chamber}endo") if chamber else ("outer", "inner"))
     log_label = log_label or f"Step03 {epi_name}"
     validate_clean_surface(epi)
@@ -458,9 +579,17 @@ def move_closed_epi(epi, endo, minimum=3.0, max_iterations=600,
     result.points = original.copy()
     initial = signed(original)
     target, max_step = minimum + clearance_padding, min(1.0, max(0.5 * scale, 1e-3))
-    repair_info = {"enabled": bool(local_repair), "maximum_attempts_per_event": 6,
-                   "method": "local_displacement_damping_and_smoothing", "events": []}
+    repair_info = {"enabled": bool(local_repair),
+                   "maximum_attempts_per_event": None if local_repair_method == "constrained" else 6,
+                   "method": {"pymeshfix": "pymeshfix_local_coordinate_transfer",
+                              "damping": "local_displacement_damping_and_smoothing",
+                              "constrained": "collision_aware_constrained_optimization_fallback"}[local_repair_method],
+                   "events": []}
     step_status = {}
+    frozen = np.zeros(len(original), dtype=bool)
+    frozen_reference = None
+    freeze_info = {"enabled": bool(freeze_satisfied), "activated": False, "frozen_vertex_count": 0}
+    repair_info["freeze"] = freeze_info
 
     def final_check(points):
         if not np.all(signed(points) >= minimum):
@@ -496,6 +625,9 @@ def move_closed_epi(epi, endo, minimum=3.0, max_iterations=600,
                 current_distances = signed(mesh.points)
                 mesh.point_data[f"signedDistanceTo{endo_name}"] = current_distances
                 mesh.point_data[f"inside{endo_name}"] = (current_distances < 0).astype(np.int32)
+                if frozen_reference is not None:
+                    mesh.point_data["clearanceFrozen"] = frozen.astype(np.int32)
+                    mesh.point_data["freezeReferencePosition"] = frozen_reference
                 mesh.field_data["diagnosticOnly"] = np.array([1], dtype=np.int32)
                 path = destination / f"{epi_name}_{state}.vtk"
                 mesh.save(path, binary=False)
@@ -547,6 +679,7 @@ def move_closed_epi(epi, endo, minimum=3.0, max_iterations=600,
                 directions -= np.minimum(np.einsum("ij,ij->i", directions, outward), 0)[:, None] * outward
         directions /= np.maximum(np.linalg.norm(directions, axis=1), 1e-12)[:, None]
         delta = directions * np.clip(smooth(raw), 0, max_step)[:, None]
+        delta[frozen] = 0.
         cross = np.cross(xyz[:, 1] - xyz[:, 0], xyz[:, 2] - xyz[:, 0])
         rejected = None
         bad_faces = set()
@@ -580,6 +713,41 @@ def move_closed_epi(epi, endo, minimum=3.0, max_iterations=600,
         step_status.update({"backtracking_halvings": half,
                             "backtracking_maximum_step_mm": float(np.linalg.norm(step, axis=1).max())})
         if not accepted:
+            if local_repair and local_repair_method == "constrained":
+                from model_vol_septum.constrained_epi import optimize_closed_epi
+                event = {"iteration": iteration + 1, "trigger": trigger, "trigger_detail": rejected,
+                         "accepted": False, "method": "constrained",
+                         "normal_updates_before_fallback": iteration,
+                         "initial_state": "last_accepted_normal_mesh",
+                         "remaining_iteration_budget": max_iterations - iteration}
+                repair_info["events"].append(event)
+                print(f"[{log_label}] constrained fallback at iteration={iteration + 1}: "
+                      f"trigger={trigger} remaining_iterations={max_iterations - iteration}", flush=True)
+                try:
+                    optimized, optimization = optimize_closed_epi(epi, endo, minimum=minimum,
+                        max_iterations=max_iterations - iteration, chamber=chamber,
+                        initial_points=np.asarray(result.points).copy(), diagnostics_dir=diagnostics_dir,
+                        contact_distance=optimization_contact_distance,
+                        smooth_weight=optimization_smooth_weight, freeze_satisfied=freeze_satisfied)
+                    validation = validate_closed_epi(optimized, endo, minimum, source=epi, chamber=chamber)
+                except (RuntimeError, ValueError) as error:
+                    event["error"] = str(error)
+                    fail(f"Outward {epi_name} displacement stopped at iteration {iteration + 1}: "
+                         f"{rejected}; constrained fallback failed: {error}; no final output published.",
+                         iteration, trigger, trial=candidate, backtracking_half=half)
+                event.update(accepted=True, optimization=optimization)
+                repair_info["freeze"] = optimization["freeze"]
+                result = optimized
+                distances = signed(result.points)
+                history = optimization.get("history", [])
+                step_status.update(completion_method="constrained_fallback", repair_trigger=trigger,
+                    normal_updates_before_fallback=iteration,
+                    constrained_iterations=optimization["iterations"],
+                    accepted_maximum_step_mm=history[-1]["maximum_step_mm"] if history else 0.)
+                iteration += optimization["iterations"]
+                print(f"[{log_label}] constrained fallback complete: "
+                      f"clearance={validation['minimum_surface_distance_mm']:.9g} mm", flush=True)
+                break
             repaired_step = None
             if local_repair:
                 if not bad_faces:
@@ -587,16 +755,31 @@ def move_closed_epi(epi, endo, minimum=3.0, max_iterations=600,
                     bad_faces.update(np.flatnonzero(deficient).tolist())
                     if gap < minimum:
                         bad_faces.add(int(result.find_closest_cell(witness)))
-                repaired_step, event, candidate = _repair_closed_epi_displacement(
+                repair = _repair_closed_epi_displacement
+                if local_repair_method == "pymeshfix":
+                    from model_vol_septum.pymeshfix_epi_repair import repair_closed_epi_pymeshfix
+                    repair = repair_closed_epi_pymeshfix
+                if freeze_satisfied and frozen_reference is None:
+                    frozen, selected = _clearance_freeze_state(result, endo, minimum)
+                    freeze_info.update(selected)
+                    frozen_reference = np.asarray(result.points).copy()
+                    print(f"[{log_label}] freezing {int(frozen.sum())} clearance-satisfying vertices", flush=True)
+                    if selected["minimum_frozen_triangle_distance_mm"] is not None and selected["minimum_frozen_triangle_distance_mm"] < minimum:
+                        fail("Frozen vertices prevent the required triangle clearance: a fully frozen triangle is too close to the endocardium.",
+                             iteration, "frozen_clearance_infeasible", trial=result.points)
+                delta[frozen] = 0.
+                repair_options = {"fixed_vertices": frozen} if freeze_satisfied or local_repair_method == "pymeshfix" else {}
+                repaired_step, event, candidate = repair(
                     np.asarray(result.points), faces, delta, edges, weights, reference,
                     normals, original, sorted(bad_faces), min_accepted_step=min_accepted_step,
-                    final_check=final_check)
+                    final_check=final_check, **repair_options)
                 event["iteration"] = iteration + 1
                 event["trigger"] = trigger
                 event["trigger_detail"] = rejected
                 repair_info["events"].append(event)
                 print(f"[{log_label}] local repair at iteration={iteration + 1}: "
-                      f"trigger={trigger} accepted={event['accepted']} attempts={len(event['attempts'])}", flush=True)
+                      f"method={local_repair_method} trigger={trigger} "
+                      f"accepted={event['accepted']} attempts={len(event['attempts'])}", flush=True)
                 if repaired_step is None:
                     rejected += f"; local repair also failed after {len(event['attempts'])} attempts"
             if repaired_step is None:
@@ -604,6 +787,9 @@ def move_closed_epi(epi, endo, minimum=3.0, max_iterations=600,
                      f"{rejected}; no final output published.", iteration, trigger,
                      trial=candidate, backtracking_half=half)
             step = repaired_step
+        if frozen_reference is not None and not np.array_equal(candidate[frozen], frozen_reference[frozen]):
+            fail("A frozen vertex moved during normal movement or repair.", iteration,
+                 "frozen_vertex_moved", trial=candidate)
         result.points = candidate
         maximum_step = float(np.linalg.norm(step, axis=1).max())
         step_status.update({"accepted_maximum_step_mm": maximum_step,
@@ -623,6 +809,10 @@ def move_closed_epi(epi, endo, minimum=3.0, max_iterations=600,
     result.point_data[f"initialSignedDistanceTo{endo_name}"] = initial
     result.point_data[f"signedDistanceTo{endo_name}"] = distances
     result.point_data[f"inside{endo_name}"] = (distances < 0).astype(np.int32)
+    if frozen_reference is not None:
+        result.point_data["clearanceFrozen"] = frozen.astype(np.int32)
+        result.point_data["freezeReferencePosition"] = frozen_reference
+        validation.update(_validate_frozen_vertices(result))
     return result, {"method": f"outward_{epi_name}_normal_displacement", "iterations": iteration,
                     "minimum_requested_distance_mm": minimum,
                     f"initial_vertices_inside_{endo_name}": int(np.count_nonzero(initial < 0)),
@@ -630,9 +820,234 @@ def move_closed_epi(epi, endo, minimum=3.0, max_iterations=600,
                     "minimum_accepted_step_mm": min_accepted_step, "last_step": step_status}
 
 
+def _sample_closed_endo_sdf(endo, spacing, minimum, max_samples=40000000):
+    """Sample a centred, watertight endocardium in bounded-memory batches."""
+    import open3d as o3d
+
+    centre = np.asarray(endo.points, dtype=float).mean(axis=0)
+    points = np.asarray(endo.points, dtype=float)-centre
+    padding = minimum+4*spacing
+    lower, upper = points.min(axis=0)-padding, points.max(axis=0)+padding
+    shape = np.ceil((upper-lower)/spacing).astype(int)+1
+    count = int(np.prod(shape, dtype=np.int64))
+    if count > max_samples:
+        raise RuntimeError(f"SDF grid needs {count} samples; limit is {max_samples}. Increase --epi-sdf-spacing.")
+    scene = o3d.t.geometry.RaycastingScene(nthreads=4)
+    scene.add_triangles(o3d.core.Tensor(points.astype(np.float32)), o3d.core.Tensor(
+        endo.faces.reshape(-1, 4)[:, 1:].astype(np.uint32)))
+    values = np.empty(count, dtype=np.float32)
+    print(f"[Step03 SDF] grid={shape.tolist()} spacing={spacing:g} mm samples={count}", flush=True)
+    for start in range(0, count, 200000):
+        stop = min(count, start+200000)
+        ijk = np.column_stack(np.unravel_index(np.arange(start, stop), tuple(shape)))
+        query = (lower+spacing*ijk).astype(np.float32)
+        values[start:stop] = scene.compute_signed_distance(
+            o3d.core.Tensor(query), nthreads=4, nsamples=3).numpy()
+    return values.reshape(tuple(shape)), lower+centre
+
+
+def _pin_original_epi_vertices(surface, original, fixed_ids):
+    """Reinsert locked coordinates by conforming face/edge splits, not point-cloud merging."""
+    from scipy.spatial import cKDTree
+
+    result = surface.copy(deep=True)
+    points = np.asarray(result.points, dtype=float).copy()
+    faces = result.faces.reshape(-1, 4)[:, 1:].copy()
+    ids = np.full(len(points), -1, dtype=np.int32)
+    tolerance = max(result.length*1e-10, 1e-9)
+    distance, nearest = cKDTree(points).query(original[fixed_ids])
+    missing = []
+    for source_id, dist, target in zip(fixed_ids, distance, nearest):
+        if dist <= tolerance and ids[target] < 0:
+            points[target] = original[source_id]
+            ids[target] = source_id
+        else:
+            missing.append(source_id)
+    for source_id in missing:
+        point = original[source_id]
+        current = pv.PolyData(points, np.column_stack((np.full(len(faces), 3), faces)).ravel())
+        cell, closest = current.find_closest_cell(point[None, :], return_closest_point=True)
+        face_id, q = int(np.asarray(cell).ravel()[0]), np.asarray(closest).reshape(-1, 3)[0]
+        face = faces[face_id]
+        xyz = points[face]
+        uv = np.linalg.lstsq((xyz[1:]-xyz[0]).T, q-xyz[0], rcond=None)[0]
+        bary = np.r_[1-uv.sum(), uv]
+        corner = int(np.argmax(bary))
+        if bary[corner] >= 1-1e-8 and ids[face[corner]] < 0:
+            points[face[corner]] = point
+            ids[face[corner]] = source_id
+            continue
+        new_id = len(points)
+        points = np.vstack((points, point))
+        ids = np.r_[ids, np.int32(source_id)]
+        if bary.min() <= 1e-8:
+            opposite = int(np.argmin(bary))
+            edge = face[[(opposite+1) % 3, (opposite+2) % 3]]
+            incident = np.flatnonzero(np.isin(faces, edge).sum(axis=1) == 2)
+            if len(incident) != 2:
+                raise RuntimeError("Cannot reinsert a fixed epi point on a nonmanifold edge.")
+            additions = []
+            for triangle in faces[incident]:
+                i = next(i for i in range(3) if triangle[i] in edge and triangle[(i+1) % 3] in edge)
+                a, b, c = np.roll(triangle, -i)
+                additions.extend(((a, new_id, c), (new_id, b, c)))
+            faces = np.vstack((np.delete(faces, incident, axis=0), additions))
+        else:
+            a, b, c = face
+            faces = np.vstack((np.delete(faces, face_id, axis=0),
+                               ((a, b, new_id), (b, c, new_id), (c, a, new_id))))
+    result = pv.PolyData(points, np.column_stack((np.full(len(faces), 3), faces)).ravel())
+    result.point_data["originalVertexId"] = ids
+    result.point_data["fixedOriginalVertex"] = (ids >= 0).astype(np.int32)
+    return result, len(missing)
+
+
+def validate_sdf_epi(epi, endo, original, minimum=3., chamber="RV"):
+    """Require full clearance/containment and exact retention of every safe original point."""
+    import vtk
+
+    quality = validate_closed_epi(epi, endo, minimum, chamber=chamber)
+    components = int(epi.connectivity().cell_data["RegionId"].max())+1
+    if components != 1:
+        raise RuntimeError(f"SDF reconstruction has {components} surface components, not one epicardium.")
+    distance = vtk.vtkImplicitPolyDataDistance()
+    distance.SetInput(endo)
+    signed = np.fromiter((distance.EvaluateFunction(p) for p in original.points), float,
+                         count=original.n_points)
+    fixed_ids = np.flatnonzero(signed >= minimum)
+    ids = np.asarray(epi.point_data.get("originalVertexId", []))
+    fixed = ids >= 0
+    if (ids.shape != (epi.n_points,) or not np.array_equal(np.sort(ids[fixed]), fixed_ids)
+            or not np.array_equal(epi.points[fixed], original.points[ids[fixed]])):
+        raise RuntimeError("SDF reconstruction did not preserve every satisfactory original epi vertex exactly.")
+    return {**quality, "connected_components": components, "fixed_original_vertices": int(len(fixed_ids)),
+            "fixed_original_vertices_preserved_exactly": True, "connectivity_preserved": False}
+
+
+def rebuild_closed_epi_sdf(epi, endo, minimum=3., spacing=None, max_attempts=3,
+                           diagnostics_dir=None, chamber="RV"):
+    """Union an SDF offset with the old epi, then restore and lock its safe vertices."""
+    import manifold3d
+    import vtk
+    from skimage.measure import marching_cubes
+    from model_vol_septum.clean_step02_surfaces import validate_clean_surface
+
+    spacing = minimum/6 if spacing is None else spacing
+    if (not np.isfinite(minimum) or minimum <= 0 or not np.isfinite(spacing)
+            or spacing <= 0 or max_attempts < 1):
+        raise ValueError("SDF clearance, spacing and attempt count must be positive and finite.")
+    validate_clean_surface(epi)
+    validate_clean_surface(endo)
+    original = np.asarray(epi.points, dtype=float).copy()
+    endo_points = np.asarray(endo.points).copy()
+    endo_faces = endo.faces.copy()
+    implicit = vtk.vtkImplicitPolyDataDistance()
+    implicit.SetInput(endo)
+    initial = np.fromiter((implicit.EvaluateFunction(p) for p in original), float, count=len(original))
+    fixed_ids = np.flatnonzero(initial >= minimum)
+    folder = None
+    if diagnostics_dir is not None:
+        folder = Path(diagnostics_dir) / datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        folder.mkdir(parents=True, exist_ok=False)
+        cloud = pv.PolyData(original[fixed_ids])
+        cloud.point_data["originalVertexId"] = fixed_ids.astype(np.int32)
+        cloud.save(folder / f"{chamber}epi_fixed_original_points.vtk", binary=True)
+    faces = epi.faces.reshape(-1, 4)[:, 1:]
+    outward = epi.compute_normals(point_normals=False, cell_normals=True,
+        consistent_normals=True, auto_orient_normals=True, split_vertices=False)
+    epi_solid = manifold3d.Manifold(manifold3d.Mesh64(original,
+        outward.faces.reshape(-1, 4)[:, 1:].astype(np.uint64),
+        face_id=np.arange(len(faces), dtype=np.uint64)))
+    if epi_solid.status() != manifold3d.Error.NoError or epi_solid.volume() <= 0:
+        raise RuntimeError("Original epi is not a positive oriented Manifold solid.")
+    attempts = []
+    result = None
+    validation = None
+    if np.all(initial >= minimum) and _surface_gap(epi, _surface_object(endo))[0] >= minimum:
+        result = epi.copy(deep=True)
+        result.point_data["originalVertexId"] = np.arange(len(original), dtype=np.int32)
+        result.point_data["fixedOriginalVertex"] = np.ones(len(original), dtype=np.int32)
+    grid = None
+    for attempt in range(max_attempts if result is None else 0):
+        current_spacing = spacing / (2 ** (attempt // 2))
+        level = minimum + current_spacing * (.05 if attempt % 2 == 0 else .15)
+        record = {"attempt": attempt+1, "spacing_mm": current_spacing, "offset_level_mm": level}
+        try:
+            if grid is None or attempt % 2 == 0:
+                grid, origin = _sample_closed_endo_sdf(endo, current_spacing, minimum)
+            vertices, triangles, _, _ = marching_cubes(grid, level=level,
+                spacing=(current_spacing,)*3, allow_degenerate=False, method="lewiner")
+            envelope = pv.PolyData(vertices.astype(float)+origin,
+                np.column_stack((np.full(len(triangles), 3), triangles)).ravel()).compute_normals(
+                point_normals=False, cell_normals=True, consistent_normals=True,
+                auto_orient_normals=True, split_vertices=False)
+            offset_solid = manifold3d.Manifold(manifold3d.Mesh64(np.asarray(envelope.points),
+                envelope.faces.reshape(-1, 4)[:, 1:].astype(np.uint64),
+                face_id=np.arange(envelope.n_cells, dtype=np.uint64)+len(faces)))
+            fused = epi_solid + offset_solid
+            if fused.status() != manifold3d.Error.NoError or fused.is_empty():
+                raise RuntimeError(f"SDF envelope union failed: {fused.status()}")
+            candidate = _manifold_surface(fused)
+            if folder is not None:
+                envelope.save(folder / f"attempt{attempt+1}_{chamber}endo_offset_envelope.vtk", binary=True)
+                candidate.save(folder / f"attempt{attempt+1}_{chamber}epi_union.vtk", binary=True)
+            candidate, inserted = _pin_original_epi_vertices(candidate, original, fixed_ids)
+            record["reinserted_fixed_vertices"] = inserted
+            if folder is not None:
+                candidate.save(folder / f"attempt{attempt+1}_{chamber}epi_pinned.vtk", binary=True)
+            validation = validate_sdf_epi(candidate, endo, epi, minimum, chamber)
+            result = candidate
+            record.update(status="success", validation=validation)
+            attempts.append(record)
+            print(f"[Step03 {chamber}epi SDF] attempt={attempt+1} clearance="
+                  f"{validation['minimum_surface_distance_mm']:.9g} mm fixed={len(fixed_ids)}", flush=True)
+            break
+        except Exception as error:
+            record.update(status="failed", error=str(error))
+            attempts.append(record)
+            print(f"[Step03 {chamber}epi SDF] attempt={attempt+1} rejected: {error}", flush=True)
+    report = {"method": "SDF_offset_union_with_exact_original_vertex_pinning",
+              "minimum_requested_distance_mm": minimum, "initial_grid_spacing_mm": spacing,
+              "original_vertices": len(original), "fixed_original_vertices": int(len(fixed_ids)),
+              "iterations": len(attempts), "attempts": attempts,
+              "diagnostics_dir": str(folder) if folder else None,
+              "connectivity_may_change": True, "unconstrained_smoothing_performed": False}
+    if result is None:
+        report.update(status="failed", final_output_published=False)
+        if folder is not None:
+            (folder / "sdf_summary.json").write_text(json.dumps(report, indent=2)+"\n")
+        raise RuntimeError(f"{chamber}epi SDF reconstruction failed validation; no final output published. "
+                           f"Last failure: {attempts[-1]['error']}")
+    if not np.array_equal(endo.points, endo_points) or not np.array_equal(endo.faces, endo_faces):
+        raise RuntimeError("SDF reconstruction changed the fixed endocardium.")
+    name = f"{chamber}endo"
+    result.point_data[f"signedDistanceTo{name}"] = np.fromiter(
+        (implicit.EvaluateFunction(p) for p in result.points), float, count=result.n_points)
+    result.cell_data["elemTag"] = np.full(result.n_cells, int(chamber == "LV"), dtype=np.int32)
+    if validation is None:
+        validation = validate_sdf_epi(result, endo, epi, minimum, chamber)
+    report.update(status="success", validation=validation,
+                  endocardium_unchanged=True, points=result.n_points, triangles=result.n_cells)
+    if folder is not None:
+        result.save(folder / f"{chamber}epi_sdf_rebuilt.vtk", binary=True)
+        (folder / "sdf_summary.json").write_text(json.dumps(report, indent=2)+"\n")
+    return result, report
+
+
 def step_03_move_RVepi(subject_dir, frames=("ED", "ES"), overwrite=False,
-                       minimum=3.0, max_iterations=600, local_repair=False, min_accepted_step=0.01):
-    """Move LVepi and RVepi independently; retain the existing Step 03 folder name."""
+                       minimum=3.0, max_iterations=600, local_repair=False, min_accepted_step=0.01,
+                       method="auto", sdf_spacing=None, sdf_max_attempts=3,
+                       optimization_contact_distance=None, optimization_smooth_weight=.02,
+                       local_repair_method="damping", freeze_satisfied=False):
+    """Process both epicardia, publishing only after all frames validate."""
+    if method not in ("auto", "normal", "sdf", "constrained"):
+        raise ValueError("Epicardial clearance method must be auto, normal, sdf, or constrained.")
+    if local_repair_method not in ("damping", "pymeshfix", "constrained"):
+        raise ValueError("Local repair method must be damping, pymeshfix, or constrained.")
+    if method != "normal" and local_repair_method != "damping":
+        raise ValueError(f"--epi-local-repair-method={local_repair_method} requires --epi-clearance-method=normal.")
+    if freeze_satisfied and (method == "sdf" or (method == "normal" and local_repair_method == "damping" and not local_repair)):
+        raise ValueError("--epi-freeze-satisfied requires constrained optimization or enabled local repair.")
     subject_dir = Path(subject_dir).resolve()
     frames = parse_frames(",".join(frames))
     subject = subject_dir.name
@@ -673,16 +1088,89 @@ def step_03_move_RVepi(subject_dir, frames=("ED", "ES"), overwrite=False,
                 records = {}
                 for chamber, endo_name, tag in (("RV", "RV", 0), ("LV", "LVendo", 1)):
                     epi_name = f"{chamber}epi"
-                    print(f"{subject} {frame}: move closed {epi_name} outward from fixed {chamber}endo", flush=True)
-                    moved, info = move_closed_epi(surfaces[epi_name], surfaces[endo_name],
-                        minimum=minimum, max_iterations=max_iterations, chamber=chamber,
-                        diagnostics_dir=output_dir / "failed_attempts" / f"{subject}_{frame}_{epi_name}",
-                        local_repair=local_repair, min_accepted_step=min_accepted_step)
+                    print(f"{subject} {frame}: closed {epi_name} clearance method={method}; "
+                          f"fixed {chamber}endo", flush=True)
                     copy = Path(temporary) / outputs[frame, chamber].name
-                    save_clean_surface(moved, copy, tag)
-                    saved = load_surface(copy)
-                    verification = validate_closed_epi(pv.PolyData(saved.points, saved.cells),
-                        surfaces[endo_name], minimum, source=surfaces[epi_name], chamber=chamber)
+                    approaches = (("normal", "damping"), ("normal", "constrained"),
+                                  ("normal", "pymeshfix"), ("constrained", "damping")) if method == "auto" else ((method, local_repair_method),)
+                    attempts = []
+                    attempt_dir = None
+                    if method == "auto":
+                        attempt_dir = output_dir / "method_attempts" / f"{subject}_{frame}_{epi_name}" / datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                        attempt_dir.mkdir(parents=True)
+                    for attempt_number, (attempt_method, repair_method) in enumerate(approaches, 1):
+                        approach = f"normal_{repair_method}" if attempt_method == "normal" else attempt_method
+                        diagnostics = (attempt_dir / approach if attempt_dir is not None else
+                            output_dir / "failed_attempts" / f"{subject}_{frame}_{epi_name}")
+                        event = {"approach": approach, "status": "running", "initial_state": "step_02_surface",
+                                 "maximum_iterations": max_iterations, "freeze_satisfied": bool(freeze_satisfied)}
+                        attempts.append(event)
+                        started = time.monotonic()
+                        if attempt_dir is not None:
+                            print(f"{subject} {frame} {epi_name}: auto attempt {attempt_number}/{len(approaches)} {approach}", flush=True)
+                            (attempt_dir / "attempt_summary.json").write_text(json.dumps({"status": "running", "attempts": attempts}, indent=2)+"\n")
+                        try:
+                            # No attempt inherits coordinates, arrays, or locks from a failed solver.
+                            epi, endo = surfaces[epi_name].copy(deep=True), surfaces[endo_name].copy(deep=True)
+                            if attempt_method == "sdf":
+                                moved, info = rebuild_closed_epi_sdf(epi, endo,
+                                    minimum=minimum, spacing=sdf_spacing, max_attempts=sdf_max_attempts,
+                                    chamber=chamber, diagnostics_dir=output_dir / "sdf_diagnostics" /
+                                    f"{subject}_{frame}_{epi_name}")
+                            elif attempt_method == "constrained":
+                                from model_vol_septum.constrained_epi import optimize_closed_epi
+                                moved, info = optimize_closed_epi(epi, endo,
+                                    minimum=minimum, max_iterations=max_iterations, chamber=chamber,
+                                    contact_distance=optimization_contact_distance,
+                                    smooth_weight=optimization_smooth_weight, freeze_satisfied=freeze_satisfied,
+                                    diagnostics_dir=diagnostics)
+                            else:
+                                moved, info = move_closed_epi(epi, endo,
+                                    minimum=minimum, max_iterations=max_iterations, chamber=chamber,
+                                    diagnostics_dir=diagnostics,
+                                    local_repair=method == "auto" or local_repair,
+                                    min_accepted_step=min_accepted_step, local_repair_method=repair_method,
+                                    optimization_contact_distance=optimization_contact_distance,
+                                    optimization_smooth_weight=optimization_smooth_weight,
+                                    freeze_satisfied=freeze_satisfied)
+                            # Validate before saving as well as the exact file consumed downstream.
+                            if attempt_method == "sdf":
+                                validate_sdf_epi(moved, surfaces[endo_name], surfaces[epi_name], minimum, chamber)
+                            else:
+                                validate_closed_epi(moved, surfaces[endo_name], minimum, source=surfaces[epi_name], chamber=chamber)
+                            save_clean_surface(moved, copy, tag,
+                                exact=method == "auto" or freeze_satisfied or attempt_method in ("sdf", "constrained") or repair_method in ("pymeshfix", "constrained"))
+                            saved = load_surface(copy)
+                            saved_surface = pv.PolyData(saved.points, saved.cells)
+                            saved_surface.point_data.update(dict(saved.point_data))
+                            _validate_frozen_vertices(saved_surface)
+                            if attempt_method == "sdf":
+                                verification = validate_sdf_epi(saved_surface, surfaces[endo_name], surfaces[epi_name], minimum, chamber)
+                            else:
+                                verification = validate_closed_epi(saved_surface,
+                                    surfaces[endo_name], minimum, source=surfaces[epi_name], chamber=chamber)
+                        except (RuntimeError, ValueError, ImportError) as error:
+                            if method != "auto":
+                                raise
+                            event.update(status="failed", error=str(error), elapsed_seconds=time.monotonic()-started)
+                            (attempt_dir / "attempt_summary.json").write_text(json.dumps({
+                                "status": "failed" if attempt_number == len(approaches) else "running",
+                                "attempts": attempts, "final_output_published": False}, indent=2)+"\n")
+                            print(f"{subject} {frame} {epi_name}: auto {approach} failed: {error}", flush=True)
+                            continue
+                        event.update(status="accepted", elapsed_seconds=time.monotonic()-started,
+                                     saved_validation=verification)
+                        if attempt_dir is not None:
+                            automatic = {"enabled": True, "selected_approach": approach,
+                                         "attempts": attempts, "diagnostics_dir": str(attempt_dir)}
+                            info["automatic"] = automatic
+                            (attempt_dir / "attempt_summary.json").write_text(json.dumps({
+                                **automatic, "status": "accepted", "staged_output_validated": True}, indent=2)+"\n")
+                            print(f"{subject} {frame} {epi_name}: auto accepted {approach}; saved clearance={verification['minimum_surface_distance_mm']:.9g} mm", flush=True)
+                        break
+                    else:
+                        reasons = "; ".join(f"{event['approach']}: {event['error']}" for event in attempts)
+                        raise RuntimeError(f"All four Step 03 approaches failed for {subject} {frame} {epi_name}: {reasons}; no final output published. Attempt report: {attempt_dir / 'attempt_summary.json'}")
                     records[epi_name] = {"output_path": str(outputs[frame, chamber]),
                         "output_sha256": checksum(copy), "movement": info,
                         "saved_validation": verification, "elemTag": tag}
@@ -699,7 +1187,7 @@ def step_03_move_RVepi(subject_dir, frames=("ED", "ES"), overwrite=False,
                     "output_sha256": records["RVepi"]["output_sha256"],
                     "movement": records["RVepi"]["movement"],
                     "saved_validation": records["RVepi"]["saved_validation"],
-                    "fixed_surfaces": ["LVendo", "RV"],
+                    "fixed_surfaces": ["LVendo", "RV"], "clearance_method": method,
                     "input_files_modified": False, "LV_intersection_handling": False,
                     "stopped_after": "step_03_move_RVepi",
                     "previous_output_backup": str(backup) if backup else None,
@@ -2441,8 +2929,22 @@ def main(argv=None):
     parser.add_argument("--rv-move-max-iterations", type=int, default=600)
     parser.add_argument("--epi-local-repair", choices=("true", "false"), nargs="?", const="true",
                         default="false", help="Step 03 local displacement repair after failed backtracking; default false.")
+    parser.add_argument("--epi-local-repair-method", choices=("damping", "pymeshfix", "constrained"), default="damping",
+                        help="Normal-mode fallback: damping (default), local MeshFix transfer, or constrained optimization from the last accepted state. Selecting pymeshfix or constrained enables repair.")
+    parser.add_argument("--epi-freeze-satisfied", choices=("true", "false"), nargs="?", const="true", default="false",
+                        help="Lock clearance-satisfying vertices at optimizer/local repair entry; default false.")
     parser.add_argument("--epi-min-accepted-step", type=float, default=0.01,
                         help="Step 03 minimum accepted maximum vertex movement in mm; smaller steps require final convergence.")
+    parser.add_argument("--epi-clearance-method", choices=("auto", "normal", "sdf", "constrained"), default="auto",
+                        help="Step 03: auto (default) tries normal+damping, normal+constrained, normal+pymeshfix, then standalone constrained; or select a single method.")
+    parser.add_argument("--epi-optimization-contact-distance", type=float,
+                        help="Constrained mode: self-contact barrier activation in mm; default 0.05 times median edge length.")
+    parser.add_argument("--epi-optimization-smooth-weight", type=float, default=.02,
+                        help="Constrained mode: displacement regularization weight; default 0.02.")
+    parser.add_argument("--epi-sdf-spacing", type=float,
+                        help="Initial Step 03 SDF grid spacing in mm; default minimum wall distance / 6.")
+    parser.add_argument("--epi-sdf-max-attempts", type=int, default=3,
+                        help="Bounded Step 03 SDF reconstruction/validation attempts; default 3.")
     parser.add_argument("--tetgen-minratio", type=float, default=1.2)
     parser.add_argument("--tetgen-mindihedral", type=float, default=5.0)
     parser.add_argument("--tetgen-max-volume", type=float, default=0.0, help="Maximum tetrahedron volume in mm^3; 0 disables the limit.")
@@ -2478,7 +2980,13 @@ def main(argv=None):
             step_03_move_RVepi(args.subject_dir, frames, args.overwrite,
                               args.rv_min_distance, args.rv_move_max_iterations,
                               local_repair=args.epi_local_repair == "true",
-                              min_accepted_step=args.epi_min_accepted_step)
+                              local_repair_method=args.epi_local_repair_method,
+                              freeze_satisfied=args.epi_freeze_satisfied == "true",
+                              min_accepted_step=args.epi_min_accepted_step,
+                              method=args.epi_clearance_method, sdf_spacing=args.epi_sdf_spacing,
+                              sdf_max_attempts=args.epi_sdf_max_attempts,
+                              optimization_contact_distance=args.epi_optimization_contact_distance,
+                              optimization_smooth_weight=args.epi_optimization_smooth_weight)
         elif step == 4:
             step_04_extract_LVRV_surf(args.subject_dir, frames, args.overwrite, args.rv_min_distance)
         elif step == 5:

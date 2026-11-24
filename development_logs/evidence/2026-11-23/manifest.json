@@ -1,0 +1,72 @@
+{
+  "recorded_at": "2026-11-23T21:21:15.180553+08:00",
+  "evidence": [
+    {
+      "file": "subject23_damping_failure.json",
+      "source": "data/subject_23/volmesh_pipline/step_03_move_RVepi/failed_attempts/subject_23_ED_RVepi/20261123_173209_482493/failure_summary.json",
+      "sha256": "3ed54e46b5e3393f522e7a052e1fab5420f29d294ed19bcb562d13f80096eb4b"
+    },
+    {
+      "file": "subject23_ipc_environment_failure.json",
+      "source": "data/subject_23/volmesh_pipline/step_03_move_RVepi/failed_attempts/subject_23_ED_RVepi/20261123_201812_733364/failure_summary.json",
+      "sha256": "986ff75f4215f0812e1fe1aa960127bb22d896d5a383f685cac1b33f6d4a600e"
+    },
+    {
+      "file": "subject23_custom_larger_steps.json",
+      "source": "data/subject_23/volmesh_pipline/constrained_validation/larger_steps/ED_RV/validation_summary.json",
+      "sha256": "1ece4e7bb5f4cf36c8c8656909ddf9a47e8c54f52b7c89a15270d83540af2de6"
+    },
+    {
+      "file": "subject23_official_ipc.json",
+      "source": "data/subject_23/volmesh_pipline/constrained_validation/official_ipc/ED_RV/validation_summary.json",
+      "sha256": "becadda6e5fd4999ac8965a7bfc01fa87d85e43a22a6e8141764eae1c4d5d161"
+    },
+    {
+      "file": "subject23_early_validation_status.json",
+      "source": "data/subject_23/volmesh_pipline/constrained_validation/validation_status.json",
+      "sha256": "eb4c73db706b389454ae299ab0c1376612a19341850a41a8321beb04ffef7fab"
+    },
+    {
+      "file": "subject24_ED_min_step_0.001.json",
+      "source": "data/subject_24/volmesh_pipline/step_03_move_RVepi/previous_outputs/20261123_203619_161416/subject_24_ED_step03_move_RVepi_summary.json",
+      "sha256": "59ad8c89bd0d6910093b20fb12d4f5bebdc9d916b9dc091b6e305bb34d26afbc"
+    },
+    {
+      "file": "subject24_ED_min_step_0.01.json",
+      "source": "data/subject_24/volmesh_pipline/step_03_move_RVepi/previous_outputs/20261123_204244_486718/subject_24_ED_step03_move_RVepi_summary.json",
+      "sha256": "3390b4171fd2b6765397706d860adf88a7f7ebb742705c2b9828d776c8bf94ca"
+    },
+    {
+      "file": "subject24_ED_min_step_0.1.json",
+      "source": "data/subject_24/volmesh_pipline/step_03_move_RVepi/subject_24_ED_step03_move_RVepi_summary.json",
+      "sha256": "fe890239940a1a84253083949cd005128cfc020db1d5292ea8040f389cdddd52"
+    },
+    {
+      "file": "subject24_ES_min_step_0.1.json",
+      "source": "data/subject_24/volmesh_pipline/step_03_move_RVepi/subject_24_ES_step03_move_RVepi_summary.json",
+      "sha256": "b07b5225129e48c6d1915a3d585a62a67570829e6061c0f9e719db0ec8476e61"
+    },
+    {
+      "file": "freeze_tests_49.log",
+      "source": "/tmp/epi_freeze_tests.log",
+      "sha256": "5aa8a829fdfdf7f99bd894cad2013f8cad9f413f81038b90fb8622c70d166fc1"
+    },
+    {
+      "file": "auto_tests_61.log",
+      "source": "/tmp/epi_auto_tests.log",
+      "sha256": "032376067f0175e5b38039d052eae6f81b883986fb1f810f727bd34a37e14ec6"
+    }
+  ],
+  "code_sha256": {
+    "run_pipline.py": "ff80181aa56af87ac02ba8684f3063105f12dae80f502d9fcffd9932d32ce814",
+    "model_vol_septum/generate_open_volmesh.py": "2647c645725b50dc43d4bd8e24d84458d2f4a1e11e8f0e5f5d602b2cd7c08369",
+    "model_vol_septum/constrained_epi.py": "45356d7b6541c636b84f9e4410e222fbfbbbf0b2fd34e4a70f833534a7e254db",
+    "model_vol_septum/pymeshfix_epi_repair.py": "27a992770d420b5d79573eadc9c3aad441e13a841f07f06487e36817c946eff7",
+    "model_vol_septum/tests/test_step03_auto.py": "bebd292b94681cb51d6f800e2e9d65d6f2e09f3c7f7af5d48c7496b3d901d0a7",
+    "model_vol_septum/tests/test_constrained_epi.py": "53a00d2ed31bc960cfe29996b86c3d4224ac7a11c0155145dc73fe62a6b77e7e",
+    "model_vol_septum/tests/test_pymeshfix_epi_repair.py": "cee0fb0c387bfb99377a2671e48f0af6c8e31ad93fb446c91b9a4fd423dbcf87",
+    "model_vol_septum/tests/test_run_pipeline.py": "68cc9ce7edcb7292a7df318f759647418ca4b9f81627ea565d1ea318513c2156",
+    "environment/cme-dt-env.yml": "98708d2612d639adc1b5e647de8394f41c557a1ea154500188627afe4cebbe6d",
+    "environment/README.md": "eb1768beaa9a25bf3b3a0f362d7d6abf5eb05528ac5dca45e8f07e02da4fdd75"
+  }
+}

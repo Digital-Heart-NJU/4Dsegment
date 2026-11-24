@@ -1,0 +1,31 @@
+{
+  "error": "Outward outer displacement stopped at iteration 6: accepted maximum step 0.00921098 mm is below 0.01 mm before convergence; no final output published.",
+  "phase": "accepted_step_too_small",
+  "chamber": null,
+  "log_label": "Step04 outer envelope",
+  "completed_updates": 5,
+  "minimum_requested_distance_mm": 0.07211102485656738,
+  "target_distance_mm": 0.14422204971313476,
+  "maximum_step_mm": 1.0,
+  "backtracking_half": 0,
+  "minimum_accepted_step_mm": 0.01,
+  "last_step": {
+    "proposed_maximum_step_mm": 0.009210984282598075,
+    "backtracking_halvings": 0,
+    "backtracking_maximum_step_mm": 0.009210984282598075
+  },
+  "diagnostic_only": true,
+  "final_output_published": false,
+  "last_accepted_is_valid_final_mesh": false,
+  "outputs": {
+    "last_accepted": "/home/mengao/Code/4Dsegment/step03_failed_diagnostics/outer/20261123_153950_062004/outer_last_accepted.vtk",
+    "rejected_trial": "/home/mengao/Code/4Dsegment/step03_failed_diagnostics/outer/20261123_153950_062004/outer_rejected_trial.vtk",
+    "fixed_endo": "/home/mengao/Code/4Dsegment/step03_failed_diagnostics/outer/20261123_153950_062004/inner_fixed.vtk"
+  },
+  "local_repair": {
+    "enabled": false,
+    "maximum_attempts_per_event": 6,
+    "method": "local_displacement_damping_and_smoothing",
+    "events": []
+  }
+}

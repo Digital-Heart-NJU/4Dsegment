@@ -1,0 +1,169 @@
+{
+  "step": "step_03_move_RVepi",
+  "subject": "subject_24",
+  "frame": "ES",
+  "inputs": {
+    "LVendo": "/home/haibo/Research/4Dsegment/data/subject_24/volmesh_pipline/step_02_surf_clean/subject_24_ES_LVendo.vtk",
+    "LVepi": "/home/haibo/Research/4Dsegment/data/subject_24/volmesh_pipline/step_02_surf_clean/subject_24_ES_LVepi.vtk",
+    "RV": "/home/haibo/Research/4Dsegment/data/subject_24/volmesh_pipline/step_02_surf_clean/subject_24_ES_RV.vtk",
+    "RVepi": "/home/haibo/Research/4Dsegment/data/subject_24/volmesh_pipline/step_02_surf_clean/subject_24_ES_RVepi.vtk"
+  },
+  "input_sha256": {
+    "LVendo": "3563ec2d7a5d3a519702bf65127397cfd6483d81f31456074d0d76aa8af1a890",
+    "LVepi": "278aa90b9814f3a07ea779af5292c1069488d3b17e6f9943025da8fcdc1490f7",
+    "RV": "0d0530e0d1a2605d658b17f97fe0ff199031dafee8c12311884b7dfb533eeb6e",
+    "RVepi": "1e4547e4c33f4098ff8b3bffbb3d6002e63eb19f23878cf0caec744654d7084f"
+  },
+  "outputs": {
+    "RVepi": {
+      "output_path": "/home/haibo/Research/4Dsegment/data/subject_24/volmesh_pipline/step_03_move_RVepi/subject_24_ES_RVepi_moved.vtk",
+      "output_sha256": "094e502ddea8b3cdcf8fc7c8325c80b342fe398f88d046ed8c532605dc887ad7",
+      "movement": {
+        "method": "outward_RVepi_normal_displacement",
+        "iterations": 5,
+        "minimum_requested_distance_mm": 3.0,
+        "initial_vertices_inside_RVendo": 0,
+        "validation": {
+          "minimum_surface_distance_mm": 3.009642059169681,
+          "self_intersection_pairs": 0,
+          "RVepi_vertices_inside_RVendo": 0,
+          "RVendo_vertices_outside_RVepi": 0,
+          "free_edges": 0,
+          "distance_method": "FCL_triangle_triangle",
+          "connectivity_preserved": true,
+          "inward_displacement_vertices": 0,
+          "maximum_displacement_mm": 3.105595027487104
+        },
+        "local_repair": {
+          "enabled": true,
+          "maximum_attempts_per_event": null,
+          "method": "collision_aware_constrained_optimization_fallback",
+          "events": []
+        },
+        "minimum_accepted_step_mm": 0.1,
+        "last_step": {
+          "proposed_maximum_step_mm": 0.37023347908690224,
+          "backtracking_halvings": 0,
+          "backtracking_maximum_step_mm": 0.37023347908690224,
+          "accepted_maximum_step_mm": 0.37023347908690224,
+          "final_small_step": false,
+          "repair_trigger": null
+        }
+      },
+      "saved_validation": {
+        "minimum_surface_distance_mm": 3.009642059169681,
+        "self_intersection_pairs": 0,
+        "RVepi_vertices_inside_RVendo": 0,
+        "RVendo_vertices_outside_RVepi": 0,
+        "free_edges": 0,
+        "distance_method": "FCL_triangle_triangle",
+        "connectivity_preserved": true,
+        "inward_displacement_vertices": 0,
+        "maximum_displacement_mm": 3.105595027487104
+      },
+      "elemTag": 0
+    },
+    "LVepi": {
+      "output_path": "/home/haibo/Research/4Dsegment/data/subject_24/volmesh_pipline/step_03_move_RVepi/subject_24_ES_LVepi_moved.vtk",
+      "output_sha256": "05d986a1867dc4b4c5b0454e86408889c95612de6a3dd83bc901063d42a93f02",
+      "movement": {
+        "method": "outward_LVepi_normal_displacement",
+        "iterations": 6,
+        "minimum_requested_distance_mm": 3.0,
+        "initial_vertices_inside_LVendo": 0,
+        "validation": {
+          "minimum_surface_distance_mm": 3.044804031041822,
+          "self_intersection_pairs": 0,
+          "LVepi_vertices_inside_LVendo": 0,
+          "LVendo_vertices_outside_LVepi": 0,
+          "free_edges": 0,
+          "distance_method": "FCL_triangle_triangle",
+          "connectivity_preserved": true,
+          "inward_displacement_vertices": 0,
+          "maximum_displacement_mm": 3.01889901971915
+        },
+        "local_repair": {
+          "enabled": true,
+          "maximum_attempts_per_event": null,
+          "method": "collision_aware_constrained_optimization_fallback",
+          "events": []
+        },
+        "minimum_accepted_step_mm": 0.1,
+        "last_step": {
+          "proposed_maximum_step_mm": 0.050669474299947476,
+          "backtracking_halvings": 0,
+          "backtracking_maximum_step_mm": 0.050669474299947476,
+          "accepted_maximum_step_mm": 0.050669474299947476,
+          "final_small_step": true,
+          "repair_trigger": null
+        }
+      },
+      "saved_validation": {
+        "minimum_surface_distance_mm": 3.044804031041822,
+        "self_intersection_pairs": 0,
+        "LVepi_vertices_inside_LVendo": 0,
+        "LVendo_vertices_outside_LVepi": 0,
+        "free_edges": 0,
+        "distance_method": "FCL_triangle_triangle",
+        "connectivity_preserved": true,
+        "inward_displacement_vertices": 0,
+        "maximum_displacement_mm": 3.01889901971915
+      },
+      "elemTag": 1
+    }
+  },
+  "output_path": "/home/haibo/Research/4Dsegment/data/subject_24/volmesh_pipline/step_03_move_RVepi/subject_24_ES_RVepi_moved.vtk",
+  "output_sha256": "094e502ddea8b3cdcf8fc7c8325c80b342fe398f88d046ed8c532605dc887ad7",
+  "movement": {
+    "method": "outward_RVepi_normal_displacement",
+    "iterations": 5,
+    "minimum_requested_distance_mm": 3.0,
+    "initial_vertices_inside_RVendo": 0,
+    "validation": {
+      "minimum_surface_distance_mm": 3.009642059169681,
+      "self_intersection_pairs": 0,
+      "RVepi_vertices_inside_RVendo": 0,
+      "RVendo_vertices_outside_RVepi": 0,
+      "free_edges": 0,
+      "distance_method": "FCL_triangle_triangle",
+      "connectivity_preserved": true,
+      "inward_displacement_vertices": 0,
+      "maximum_displacement_mm": 3.105595027487104
+    },
+    "local_repair": {
+      "enabled": true,
+      "maximum_attempts_per_event": null,
+      "method": "collision_aware_constrained_optimization_fallback",
+      "events": []
+    },
+    "minimum_accepted_step_mm": 0.1,
+    "last_step": {
+      "proposed_maximum_step_mm": 0.37023347908690224,
+      "backtracking_halvings": 0,
+      "backtracking_maximum_step_mm": 0.37023347908690224,
+      "accepted_maximum_step_mm": 0.37023347908690224,
+      "final_small_step": false,
+      "repair_trigger": null
+    }
+  },
+  "saved_validation": {
+    "minimum_surface_distance_mm": 3.009642059169681,
+    "self_intersection_pairs": 0,
+    "RVepi_vertices_inside_RVendo": 0,
+    "RVendo_vertices_outside_RVepi": 0,
+    "free_edges": 0,
+    "distance_method": "FCL_triangle_triangle",
+    "connectivity_preserved": true,
+    "inward_displacement_vertices": 0,
+    "maximum_displacement_mm": 3.105595027487104
+  },
+  "fixed_surfaces": [
+    "LVendo",
+    "RV"
+  ],
+  "clearance_method": "normal",
+  "input_files_modified": false,
+  "LV_intersection_handling": false,
+  "stopped_after": "step_03_move_RVepi",
+  "previous_output_backup": "/home/haibo/Research/4Dsegment/data/subject_24/volmesh_pipline/step_03_move_RVepi/previous_outputs/20261123_205122_738059"
+}

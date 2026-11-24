@@ -3,11 +3,13 @@
 python run_pipline.py --request segment --subject 11
 python run_pipline.py --request raw_surface --subject 11
 python run_pipline.py --request volumetric --subject 11
+python run_pipline.py --request volumetric --subject 23 --epi-clearance-method constrained
+python run_pipline.py --request volumetric --subject 23 --epi-clearance-method normal --epi-local-repair-method pymeshfix
 python run_pipline.py --request uvc_fiber --subject 11
 
 python run_pipline.py --request all --subject 11-18
 
-Requires Conda and cme-dt-env; DMACS stages also require running Docker.
+Requires Conda and the project-local ./cme-dt-env; DMACS stages also require running Docker.
 Batch jobs run sequentially.
 Segmentation, raw-surface, and volumetric stages replace generated outputs.
 uvc_fiber resumes completed coordinate/fiber stages and writes UVC_fiber_Outputs.
@@ -16,31 +18,33 @@ raw_surface also clears subject-root *.txt files through the original Stage 02
 routine. Inputs/manual files are retained.
 
 actual_command in DMACS.py:
-conda run --no-capture-output -n cme-dt-env \
+conda run --no-capture-output --prefix ./cme-dt-env \
   python -B -u code_by_stage/DMACS.py \
   --segmentation_backend=nnunet --subject subject_11 \
   --stage02_surf_only=true --seg_manual=false
 
 actual_command in generate_open_volmesh.py:
-conda run --no-capture-output -n cme-dt-env python -B -u \
+conda run --no-capture-output --prefix ./cme-dt-env python -B -u \
   model_vol_septum/generate_open_volmesh.py \
   --subject-dir data/subject_11 \
   --frames ED,ES \
   --overwrite
 
 actual_command in generate_UVC_fiber.py:
-conda run --no-capture-output -n cme-dt-env python -B -u \
+conda run --no-capture-output --prefix ./cme-dt-env python -B -u \
   model_vol_septum/generate_UVC_fiber.py \
   --data-dir data --subject subject_11 --frames ED,ES \
   --carp-bin-dir /opt/openCARP/usr/bin --uvc-fiber
 """
 
 import argparse
+import math
 from pathlib import Path
 import shutil
 import subprocess
 
 
+# Environment directory next to this script, independent of named Conda envs.
 CONDA_ENV = "cme-dt-env"
 
 # Edit these arguments to adjust each stage's settings.
@@ -51,6 +55,8 @@ STAGE_ARGS = {
                     "--seg_manual=false"],
     "volumetric": ["--frames", "ED,ES",
                    "--overwrite",
+                   # "--epi-clearance-method=sdf",
+                   "--epi-clearance-method=auto",
                    "--epi-local-repair=true", "--epi-min-accepted-step=0.01",
                    "--step8-short-edge-collapse=true", "--step8-collapse-tolerances", "0.01", "0.001", "0.0001",
                    "--tag1-mm", "10", "--tag0-mm", "12"],
@@ -79,7 +85,17 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--request", required=True, choices=list(STAGE_ARGS) + ["all"])
     parser.add_argument("--subject", required=True, type=subject_range, help="Subject ID or inclusive range: 11 or 11-18.")
+    parser.add_argument("--epi-clearance-method", choices=("auto", "normal", "sdf", "constrained"),
+                        help="Override the volumetric Step 03 method configured in STAGE_ARGS.")
+    parser.add_argument("--epi-local-repair-method", choices=("damping", "pymeshfix", "constrained"),
+                        help="Override normal-mode Step 03 repair; pymeshfix or constrained enables connectivity-preserving recovery.")
+    parser.add_argument("--epi-min-accepted-step", type=float,
+                        help="Override the normal-mode minimum accepted step in mm; must be positive and finite.")
+    parser.add_argument("--epi-freeze-satisfied", choices=("true", "false"), nargs="?", const="true",
+                        help="Lock clearance-satisfying vertices at optimizer/local repair entry; default false.")
     args = parser.parse_args(argv)
+    if args.epi_min_accepted_step is not None and (not math.isfinite(args.epi_min_accepted_step) or args.epi_min_accepted_step <= 0):
+        parser.error("--epi-min-accepted-step must be positive and finite.")
     requests = REQUEST_ORDER if args.request == "all" else [args.request]
 
     root = Path(__file__).resolve().parent
@@ -99,8 +115,13 @@ def main(argv=None):
         if not scripts[request].is_file():
             raise SystemExit("Cannot find: " + str(scripts[request]))
 
-    python_command = [conda, "run", "--no-capture-output", "-n", CONDA_ENV,
+    environment_prefix = root / CONDA_ENV
+    if not (environment_prefix / "conda-meta" / "history").is_file() or not (environment_prefix / "bin" / "python").is_file():
+        raise SystemExit("Project Conda environment is missing or incomplete: " + str(environment_prefix) +
+                         ". Create it using environment/cme-dt-env.yml and --prefix " + str(environment_prefix))
+    python_command = [conda, "run", "--no-capture-output", "--prefix", str(environment_prefix),
                       "python", "-B", "-u"]
+    print("Python environment: " + str(environment_prefix), flush=True)
 
     completed, failed = [], []
     for number in args.subject:
@@ -128,7 +149,16 @@ def main(argv=None):
                     command += ["--segmentation_backend=nnunet",
                                 "--data-dir", str(root / "data"), "--subject", subject]
                 print("\n" + subject + ": starting " + request, flush=True)
-                subprocess.run(command + STAGE_ARGS[request], cwd=root, check=True)
+                stage_args = list(STAGE_ARGS[request])
+                if request == "volumetric" and args.epi_clearance_method:
+                    stage_args += ["--epi-clearance-method", args.epi_clearance_method]
+                if request == "volumetric" and args.epi_local_repair_method:
+                    stage_args += ["--epi-local-repair-method", args.epi_local_repair_method]
+                if request == "volumetric" and args.epi_min_accepted_step is not None:
+                    stage_args += ["--epi-min-accepted-step", str(args.epi_min_accepted_step)]
+                if request == "volumetric" and args.epi_freeze_satisfied is not None:
+                    stage_args += ["--epi-freeze-satisfied", args.epi_freeze_satisfied]
+                subprocess.run(command + stage_args, cwd=root, check=True)
                 output = subject_dir / output_folders[request]
                 print(subject + ": " + request + " finished. Outputs: " + str(output), flush=True)
         except subprocess.CalledProcessError as error:

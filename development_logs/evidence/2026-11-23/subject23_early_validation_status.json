@@ -1,0 +1,31 @@
+{
+  "status": "stopped_for_user_manual_testing",
+  "recorded_at_utc": "2026-11-23T10:11:30.659836+00:00",
+  "method": "constrained",
+  "scope": "Step 03 on isolated copies of subject 23 Step 02 inputs",
+  "regression_tests_passed": 17,
+  "completed_checks": [
+    {
+      "frame": "ED",
+      "chamber": "RV",
+      "saved_geometry_validation_passed": true,
+      "minimum_clearance_at_least_mm": 3.0,
+      "connectivity_preserved": true
+    },
+    {
+      "frame": "ED",
+      "chamber": "LV",
+      "saved_geometry_validation_passed": true,
+      "minimum_clearance_at_least_mm": 3.0,
+      "connectivity_preserved": true
+    }
+  ],
+  "unfinished_checks": [
+    "ES RV",
+    "ES LV"
+  ],
+  "final_outputs_published": false,
+  "reason": "User requested manual testing before the four-surface automated batch completed.",
+  "log_path": "/home/haibo/Research/4Dsegment/data/subject_23/volmesh_pipline/constrained_validation/cli_validation.log",
+  "manual_command": "python run_pipline.py --request volumetric --subject 23 --epi-clearance-method constrained"
+}
