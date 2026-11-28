@@ -13,6 +13,7 @@ def Check_sax(cine_path):
         raise FileNotFoundError(f"cine file not found: {cine_path}")
 
     cine_img = nib.load(cine_path)
+    print(cine_img)
     cine_data = cine_img.get_fdata()   # (256,256,8,30)
 
     print("cine shape:", cine_data.shape)
@@ -144,6 +145,7 @@ if __name__ == "__main__":
     # cine_path = r"/home/mengao/Code/test_1/biv_volumetric_meshing/src/segmentation/data/group3/subject002/Instance_2/LAX_4Ch.nii.gz"
 
     # cine_path = r"/media/mengao/T7/Dataset_XI-AN_XINSIJUN/normal_select/A YUN GAK1092085/SAX.nii.gz"
-    cine_path = r"/media/mengao/T7/Dataset_XI-AN_XINSIJUN/normal_select/A YUN GAK1092085/LAX_4Ch.nii.gz"
+    # cine_path = r"/media/mengao/T7/Dataset_XI-AN_XINSIJUN/normal_select/A YUN GAK1092085/LAX_4Ch.nii.gz"
+    cine_path = r"/home/mengao/Code/4Dsegment/data/subject_42/example.nii"
     Check_sax(cine_path)
     # Check_lax(cine_path)

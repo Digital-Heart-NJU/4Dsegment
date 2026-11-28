@@ -438,11 +438,13 @@ but full mode refuses to continue into refinement with missing anatomy.
 
 ```text
 example.nii (read only)
-  -> original headertool / temporalalign / autocontrast / phase detection
-  -> lvsa_.nii.gz and lvsa_ED.nii.gz / lvsa_ES.nii.gz
-  -> 3D ED and ES nnUNet cases, on the corresponding phase image grids
+  -> split all original acquisition frames into 3D float32 nnUNet cases
   -> supplied 2D SAX nnUNet, with its own normalization/resampling
-  -> native labels: background=0, LV blood=1, LV myocardium=2, RV blood=3
+  -> original-space 4D native labels: background=0, LV blood=1, LV myocardium=2, RV blood=3
+  -> legacy MRI preprocessing and ED/ES detection (separate from inference)
+  -> map processed ED/ES indices to original acquisition indices
+  -> regenerate ED/ES MRIs from those same original frames
+  -> align selected labels to the legacy phase coordinates, without interpolation
   -> remap native RV blood from 3 to 4
   -> generate synthetic RV myocardium=3 in original background only
   -> clear all labels in the whole image's first and last Z slices
@@ -457,10 +459,42 @@ the existing `Dataset12345_temp` and similar model-workspace folders are
 not modified. Worker processes import the modern launcher rather than the
 TensorFlow entry point.
 
-The phase arrays are split only along their singleton time axis. Their
-spatial affine, resolution, orientation, and slice order are not replaced
-with the training image geometry. nnUNet's exported predictions must match
-the phase grid before labels are published.
+The inference inputs retain original intensities to float32 precision;
+legacy autocontrast and safe-int16 scaling do not affect them. This is
+frame-by-frame inference using the existing 2D model, not a temporal neural
+network. Exported predictions must match the original acquisition grid.
+
+`nifti_working_copy.py` makes working-copy metadata consistent before
+different image readers see it. Original NIfTI slope/intercept scaling is
+materialized into float32 values with slope 1 and intercept 0. The original
+active nibabel affine defines the physical geometry: working-copy `pixdim`,
+qform and sform are synchronized to it, without changing voxel values,
+voxel order or that affine. Thus a conflicting `pixdim` cannot silently
+change the spacing read by SimpleITK. Genuine shear is rejected rather than
+silently approximated. The same normalization is applied to the temporary
+legacy input before `headertool -reset`; safe-int16 contrast rescaling still
+applies only to the separate legacy preprocessing branch.
+
+The original file is never rewritten. Metadata changes and original intensity
+scaling are recorded in the inference work directory's
+`input_metadata_normalization.json`, the Stage 01 summary, and the legacy
+`lvsa_intensity_preprocessing.json`. For conflicting source metadata, verify
+that the active affine is the intended geometry against the acquisition.
+
+ED/ES detection still uses the legacy processed cine. Index and intensity-ramp
+probes run through the actual `temporalalign` executable to establish which
+original frame each processed frame represents. The current executable
+selects nearest original frames; an interpolating implementation is rejected
+rather than silently assigning labels to a mixed-time image. ED is processed
+index 0; ES is the index reported by `cardiacphasedetection`, verified against
+its extracted image. The original and processed indices can differ.
+
+`headertool -reset` must preserve the voxel array and ordering. This is
+verified before its coordinate-reference change is applied to the selected
+labels. No linear/cubic interpolation, label smoothing or intensity processing
+is applied to categorical labels. Phase MRIs are regenerated from the same
+original acquisitions, while `lvsa_.nii.gz` remains the legacy processed cine
+for downstream operations. Stage 02 atlas refinement remains unchanged.
 
 The resulting canonical labels are:
 
@@ -541,7 +575,7 @@ to an additional terminal-slice deletion by this change.
 Each phase produces the following files in `<subject>/segs/`:
 
 ```text
-nnunet_native/seg_lvsa_ED.nii.gz  # original four-label nnUNet prediction
+nnunet_native/seg_lvsa_ED.nii.gz  # selected native prediction, aligned to phase coordinates
 nnunet_mapped_ED.nii.gz          # RV blood remapped to 4, before wall growth
 rv_myo_added_ED.nii.gz           # newly added wall retained after terminal cleanup
 rv_myo_added_ED_summary.json     # distances, slice counts, edge flags, warnings
@@ -552,6 +586,20 @@ The same files are saved for ES. Canonical outputs are int16, with the
 phase's affine, spatial units, and qform/sform preserved. The subject-level
 `dmacs_nnunet_stage01_summary.json` records the model, selected folds,
 native-label mapping, protected input checksum, and missing anatomy.
+
+Additional outputs in `segs/`:
+
+```text
+nnunet_native/seg_sax_original_4d.nii.gz  # all raw predictions on the original 4D grid
+ED_ES_frames.txt                       # human-readable original/processed ED/ES indices
+ED_ES_frames.json                      # machine-readable frame lookup and coordinate transform
+```
+
+The text record gives both zero-based indices and one-based frame numbers,
+original acquisition times/units, frame counts and the original-to-phase
+world-coordinate matrix. Native labels remain untouched by alignment;
+the existing RV remapping, synthetic XY wall growth and terminal-slice
+cleanup are separate, explicitly recorded postprocessing operations.
 
 Stage 01 refuses to replace existing canonical predictions/preprocessed
 cine unless `--overwrite` is supplied. Even with that option, existing

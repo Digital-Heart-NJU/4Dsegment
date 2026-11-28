@@ -73,27 +73,61 @@ def ensure_temporal_int16_range(path):
     return report
 
 
-def imagePreprocessing(originalNii, data_dir, atlas_dir):
+def imagePreprocessing(originalNii, data_dir, atlas_dir, native_frame_phases=False):
     working = os.path.join(data_dir, 'lvsa_.nii.gz')
     if os.path.realpath(originalNii) == os.path.realpath(working):
         raise ValueError('The original image must differ from the preprocessing working copy.')
-    subprocess.check_call(['headertool', originalNii, working, '-reset'])
-    report = ensure_temporal_int16_range(working)
-    report['original_image'] = os.path.abspath(originalNii)
-    report['working_image'] = os.path.abspath(working)
-    with open(os.path.join(data_dir, 'lvsa_intensity_preprocessing.json'), 'w') as stream:
-        json.dump(report, stream, indent=2)
-        stream.write('\n')
-    print('  Int16 safety: {0}'.format(report['method']))
-    subprocess.check_call(['temporalalign', os.path.join(atlas_dir, 'temporal.gipl'), working, working,
-                           '-St1', '0', '-St2', '0', '-Et1', '1', '-Et2', '1'])
-    validate_nonnegative_image(working)
-    subprocess.check_call(['autocontrast', working, working])
-    validate_nonnegative_image(working)
-    ed, es = (os.path.join(data_dir, 'lvsa_' + frame + '.nii.gz') for frame in ('ED', 'ES'))
-    subprocess.check_call(['cardiacphasedetection', working, ed, es])
-    for phase in (ed, es):
-        validate_nonnegative_image(phase)
+    temporary = tempfile.mkdtemp(prefix='.native-phases-', dir=data_dir) if native_frame_phases else None
+    try:
+        reset_input = originalNii
+        metadata = None
+        if native_frame_phases:
+            from nifti_working_copy import consistent_image, normalization_report
+            original = nib.load(originalNii)
+            normalized = consistent_image(np.asarray(original.dataobj), original)
+            metadata = normalization_report(original, normalized)
+            reset_input = os.path.join(temporary, 'scaled_original.nii.gz')
+            nib.save(normalized, reset_input)
+        subprocess.check_call(['headertool', reset_input, working, '-reset'])
+        if native_frame_phases:
+            reset = nib.load(working)
+            if (len(original.shape) != 4 or original.shape != reset.shape
+                    or not np.allclose(np.asarray(normalized.dataobj), np.asarray(reset.dataobj),
+                                       rtol=1e-6, atol=1e-6)):
+                raise RuntimeError('Header reset changed the native voxel layout or intensities; '
+                                   'cannot align native segmentation by voxel index.')
+        report = ensure_temporal_int16_range(working)
+        report['original_image'] = os.path.abspath(originalNii)
+        report['working_image'] = os.path.abspath(working)
+        if metadata is not None:
+            report['input_metadata_normalization'] = metadata
+        with open(os.path.join(data_dir, 'lvsa_intensity_preprocessing.json'), 'w') as stream:
+            json.dump(report, stream, indent=2)
+            stream.write('\n')
+        print('  Int16 safety: {0}'.format(report['method']))
+        if native_frame_phases:
+            native_path = os.path.join(temporary, 'native_cine.nii.gz')
+            shutil.copyfile(working, native_path)
+        subprocess.check_call(['temporalalign', os.path.join(atlas_dir, 'temporal.gipl'), working, working,
+                               '-St1', '0', '-St2', '0', '-Et1', '1', '-Et2', '1'])
+        validate_nonnegative_image(working)
+        subprocess.check_call(['autocontrast', working, working])
+        validate_nonnegative_image(working)
+        phases = dict((frame, os.path.join(data_dir, 'lvsa_' + frame + '.nii.gz')) for frame in ('ED', 'ES'))
+        command = ['cardiacphasedetection', working, phases['ED'], phases['ES']]
+        if native_frame_phases:
+            output = subprocess.check_output(command).decode('utf-8', 'replace')
+            print(output)
+            from native_phase_frames import rebuild_native_phases
+            rebuild_native_phases(originalNii, native_path, working, phases, output,
+                                  atlas_dir, temporary, data_dir)
+        else:
+            subprocess.check_call(command)
+        for phase in phases.values():
+            validate_nonnegative_image(phase)
+    finally:
+        if temporary is not None:
+            shutil.rmtree(temporary)
     print('  Image preprocessing is done ...')
 
 

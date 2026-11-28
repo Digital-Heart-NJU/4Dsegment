@@ -13,6 +13,8 @@ def main():
     parser.add_argument('--subject-dir', required=True)
     parser.add_argument('--input-name', default='example.nii')
     parser.add_argument('--atlas-dir', default='/refs')
+    parser.add_argument('--native-frame-phases', action='store_true',
+                        help='Rebuild ED/ES MRIs from the selected original acquisition frames.')
     args = parser.parse_args()
     source = require_file(os.path.join(args.subject_dir, args.input_name))
     with protect_files([source] + existing_segmentations([args.subject_dir])):
@@ -20,7 +22,8 @@ def main():
             path = os.path.join(args.subject_dir, name)
             if not os.path.isdir(path):
                 os.makedirs(path)
-        imagePreprocessing(source, args.subject_dir, args.atlas_dir)
+        imagePreprocessing(source, args.subject_dir, args.atlas_dir,
+                           native_frame_phases=args.native_frame_phases)
         for name in ('lvsa_.nii.gz', 'lvsa_ED.nii.gz', 'lvsa_ES.nii.gz'):
             image = nib.load(require_file(os.path.join(args.subject_dir, name)))
             if len(image.shape) != 4 or (name != 'lvsa_.nii.gz' and image.shape[3] != 1):

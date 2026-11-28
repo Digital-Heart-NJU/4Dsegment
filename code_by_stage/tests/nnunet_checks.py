@@ -303,7 +303,9 @@ class Stage01FileTests(unittest.TestCase):
         (model / 'fold_0').mkdir()
         (model / 'fold_0/checkpoint_final.pth').write_bytes(b'not loaded in this unit test')
         shape, affine = (17, 17, 3), np.diag([1., 1., 8., 1.])
-        phase = nib.Nifti1Image(np.ones(shape + (1,), dtype=np.int16), affine)
+        original = np.empty(shape + (3,), dtype=np.float32)
+        original[..., 0], original[..., 1], original[..., 2] = 72000., 90000., 120000.
+        phase = nib.Nifti1Image(original, affine)
         phase.header.set_xyzt_units('mm', 'sec')
         nib.save(phase, subject / 'example.nii')
         source_hash = nnunet_pipeline.sha256(subject / 'example.nii')
@@ -312,17 +314,36 @@ class Stage01FileTests(unittest.TestCase):
         nib.save(phase, manual)
         manual_hash = nnunet_pipeline.sha256(manual)
 
-        def preprocess(*unused):
-            for frame in ('ED', 'ES'):
-                nib.save(phase, subject / ('lvsa_' + frame + '.nii.gz'))
+        reset_affine = affine.copy()
+        reset_affine[:3, 3] = [16., -9., 4.]
+        inference_completed = []
+
+        def preprocess(command, unused):
+            self.assertTrue(inference_completed)
+            self.assertIn('--native-frame-phases', command)
+            info = {'original_frame_count': 3,
+                    'label_alignment': 'same_voxel_indices_with_legacy_reset_affine_no_resampling', 'frames': {}}
+            for frame, index in (('ED', 0), ('ES', 2)):
+                image = nib.Nifti1Image(original[..., index:index + 1], reset_affine, header=phase.header.copy())
+                nib.save(image, subject / ('lvsa_' + frame + '.nii.gz'))
+                info['frames'][frame] = {'original_frame_index_zero_based': index,
+                                         'original_frame_number_one_based': index + 1}
+            (subject / 'segs/ED_ES_frames.json').write_text(json.dumps(info))
+            (subject / 'segs/ED_ES_frames.txt').write_text('ED original frame 1; ES original frame 3\n')
 
         def predict(args, inputs, outputs):
-            for frame in ('ED', 'ES'):
+            self.assertEqual(len(list(inputs.glob('*.nii.gz'))), 3)
+            for index in range(3):
+                case = subject.name + '_sax_fr_%04d' % index
+                supplied = nib.load(inputs / (case + '_0000.nii.gz'))
+                np.testing.assert_array_equal(np.asarray(supplied.dataobj), original[..., index])
+                np.testing.assert_array_equal(supplied.affine, affine)
                 native = np.zeros(shape, dtype=np.uint8)
                 if with_anatomy:
-                    for z in ((0, 1, 2) if frame == 'ED' else (1, 2)):
+                    for z in ((0, 1, 2) if index == 0 else (1, 2)):
                         native[4, 4, z], native[5, 4, z], native[9, 9, z] = 1, 2, 3
-                nib.save(nib.Nifti1Image(native, affine), outputs / (subject.name + '_sax_' + frame + '.nii.gz'))
+                nib.save(nib.Nifti1Image(native, affine), outputs / (case + '.nii.gz'))
+            inference_completed.append(True)
 
         from argparse import Namespace
         args = Namespace(input_name='example.nii', nnunet_model_dir=model, folds=[0],
@@ -334,9 +355,16 @@ class Stage01FileTests(unittest.TestCase):
         self.assertEqual(source_hash, nnunet_pipeline.sha256(subject / 'example.nii'))
         self.assertEqual(manual_hash, nnunet_pipeline.sha256(manual))
         self.assertFalse((subject / 'segs/seg_lvsa_ES_manual.nii.gz').exists())
+        archived = nib.load(subject / 'segs/nnunet_native/seg_sax_original_4d.nii.gz')
+        self.assertEqual(archived.shape, original.shape)
+        np.testing.assert_array_equal(archived.affine, affine)
         for frame in ('ED', 'ES'):
             final = nib.load(subject / 'segs' / ('seg_lvsa_' + frame + '.nii.gz'))
             self.assertEqual(final.shape, shape)
+            np.testing.assert_array_equal(final.affine, reset_affine)
+            aligned = nib.load(subject / 'segs/nnunet_native' / ('seg_lvsa_' + frame + '.nii.gz'))
+            index = report['frames'][frame]['frame_selection']['original_frame_index_zero_based']
+            np.testing.assert_array_equal(np.asarray(aligned.dataobj), np.asarray(archived.dataobj)[..., index])
             labels = np.asarray(final.dataobj)
             self.assertFalse(labels[:, :, 0].any())
             self.assertFalse(labels[:, :, -1].any())

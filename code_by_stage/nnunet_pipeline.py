@@ -4,7 +4,6 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -14,6 +13,7 @@ import nibabel as nib
 import numpy as np
 
 from build_rv_myo_xy import remap_nnunet_labels, expand_rv_myo_xy, save_labels
+from nifti_working_copy import consistent_image, normalization_report
 
 
 CODE_DIR = Path(__file__).resolve().parent
@@ -126,9 +126,10 @@ def stage01(args, subject, run_dir):
     source = subject / args.input_name
     if not source.is_file():
         raise FileNotFoundError(source)
-    source_shape = nib.load(source).shape
-    if len(source_shape) < 3 or source_shape[2] < 1:
-        raise ValueError('The original image must have a nonempty Z stack.')
+    source_image = nib.load(source)
+    source_shape = source_image.shape
+    if len(source_shape) != 4 or min(source_shape) < 1:
+        raise ValueError('Native-frame segmentation requires a nonempty 4D (X,Y,Z,T) original image.')
     original_z_slices = source_shape[2]
     plans = json.loads((args.nnunet_model_dir / 'plans.json').read_text())
     dataset = json.loads((args.nnunet_model_dir / 'dataset.json').read_text())
@@ -139,38 +140,65 @@ def stage01(args, subject, run_dir):
         if not (args.nnunet_model_dir / ('fold_' + str(fold)) / args.checkpoint).is_file():
             raise FileNotFoundError('Missing SAX fold/checkpoint: ' + str(fold))
     targets = [subject / 'segs' / ('seg_lvsa_' + frame + '.nii.gz') for frame in FRAMES]
+    targets += [subject / 'segs' / name for name in ('ED_ES_frames.txt', 'ED_ES_frames.json',
+                                                    'nnunet_native/seg_sax_original_4d.nii.gz')]
     if not args.overwrite and any(path.exists() for path in targets + [subject / 'lvsa_.nii.gz']):
         raise FileExistsError('Stage 01 outputs already exist; use --overwrite deliberately.')
     original_hash = sha256(source)
     existing_manual = {path: sha256(path) for path in (subject / 'segs').glob('*_manual.nii.gz')}
-    command = docker_command(args, subject, run_dir, 'prepare_nnunet_phases.py',
-                             ['--subject-dir', '/data/' + subject.name, '--input-name', args.input_name])
-    run_logged(command, run_dir / 'stage01_preprocess.log')
     work = Path(tempfile.mkdtemp(prefix='prediction_', dir=run_dir))
     inputs, predictions = work / 'imagesTs', work / 'labelsTs'
     inputs.mkdir()
     predictions.mkdir()
-    phase_images = {}
-    for frame in FRAMES:
-        phase = nib.load(subject / ('lvsa_' + frame + '.nii.gz'))
-        data = np.asarray(phase.dataobj, dtype=np.float32)
-        if data.ndim != 4 or data.shape[3] != 1:
-            raise ValueError('Expected a singleton-time ED/ES image.')
-        if data.shape[2] != original_z_slices:
-            raise ValueError('Preprocessing changed the original image Z slice count: ' + frame)
-        image = nib.Nifti1Image(data[..., 0], phase.affine, header=phase.header.copy())
-        image.set_data_dtype(np.float32)
-        nib.save(image, inputs / (subject.name + '_sax_' + frame + '_0000.nii.gz'))
-        phase_images[frame] = phase
+    case_names = [subject.name + '_sax_fr_%04d' % index for index in range(source_shape[3])]
+    for index, case in enumerate(case_names):
+        # The network sees original acquisition intensities, before legacy
+        # autocontrast, safe-int16 scaling, header reset or temporal alignment.
+        data = np.asarray(source_image.dataobj[..., index], dtype=np.float32)
+        if not np.isfinite(data).all():
+            raise ValueError('Nonfinite original MRI intensities at frame ' + str(index))
+        image = consistent_image(data, source_image)
+        nib.save(image, inputs / (case + '_0000.nii.gz'))
+    input_metadata = normalization_report(source_image, image)
+    (work / 'input_metadata_normalization.json').write_text(json.dumps(input_metadata, indent=2) + '\n')
+    print('[nnUNet SAX] Segmenting all', source_shape[3], 'original acquisition frames.', flush=True)
     infer_cases(args, inputs, predictions)
+    native_4d = np.empty(source_shape, dtype=np.uint8)
+    for index, case in enumerate(case_names):
+        native = nib.load(predictions / (case + '.nii.gz'))
+        if native.shape != source_shape[:3] or not np.allclose(
+                native.affine, source_image.affine, rtol=1e-6, atol=1e-4):
+            raise RuntimeError('nnUNet export does not match the original acquisition grid: ' + case)
+        labels = np.asarray(native.dataobj)
+        remap_nnunet_labels(labels)  # Validate the unmodified model labels before archiving.
+        native_4d[..., index] = labels
+    output_dir = subject / 'segs'
+    native_dir = output_dir / 'nnunet_native'
+    native_dir.mkdir(parents=True, exist_ok=True)
+    native_4d_path = native_dir / 'seg_sax_original_4d.nii.gz'
+    archive = consistent_image(native_4d, source_image, dtype=np.uint8)
+    nib.save(archive, native_4d_path)
+
+    command = docker_command(args, subject, run_dir, 'prepare_nnunet_phases.py',
+                             ['--subject-dir', '/data/' + subject.name, '--input-name', args.input_name,
+                              '--native-frame-phases'])
+    run_logged(command, run_dir / 'stage01_preprocess.log')
+    frame_info_path = output_dir / 'ED_ES_frames.json'
+    frame_info = json.loads(frame_info_path.read_text())
+    if frame_info['original_frame_count'] != source_shape[3]:
+        raise RuntimeError('Phase selection used a different original cine frame count.')
     frame_reports = {}
     for frame in FRAMES:
-        predicted = predictions / (subject.name + '_sax_' + frame + '.nii.gz')
-        native = nib.load(predicted)
-        phase = phase_images[frame]
-        if native.shape != phase.shape[:3] or not np.allclose(native.affine, phase.affine, rtol=1e-6, atol=1e-4):
-            raise RuntimeError('nnUNet export does not match the original phase grid: ' + frame)
-        mapped = remap_nnunet_labels(np.asarray(native.dataobj))
+        indices = frame_info['frames'][frame]
+        index = indices['original_frame_index_zero_based']
+        phase = nib.load(subject / ('lvsa_' + frame + '.nii.gz'))
+        if phase.shape != source_shape[:3] + (1,) or not 0 <= index < source_shape[3]:
+            raise RuntimeError('Phase selection changed the original voxel grid or selected an invalid frame: ' + frame)
+        # headertool resets the coordinate reference, not voxel order. The
+        # Docker helper verifies this before these unchanged labels are aligned.
+        native_labels = native_4d[..., index]
+        save_labels(native_dir / ('seg_lvsa_' + frame + '.nii.gz'), native_labels, phase, args.overwrite)
+        mapped = remap_nnunet_labels(native_labels)
         missing = [name for value, name in ((1, 'LV blood pool'), (2, 'LV myocardium'), (4, 'RV blood pool'))
                    if not np.any(mapped == value)]
         if missing:
@@ -181,15 +209,13 @@ def stage01(args, subject, run_dir):
         final, added, report = finalize_stage01_labels(mapped, final, added, report, original_z_slices)
         print('[nnUNet SAX]', frame, 'terminal Z cleanup:', report['terminal_z_cleanup']['slice_indices'],
               'removed foreground voxels:', report['terminal_z_cleanup']['removed_foreground_voxels'], flush=True)
-        output_dir = subject / 'segs'
-        native_dir = output_dir / 'nnunet_native'
-        native_dir.mkdir(exist_ok=True)
-        shutil.copy2(predicted, native_dir / ('seg_lvsa_' + frame + '.nii.gz'))
         save_labels(output_dir / ('nnunet_mapped_' + frame + '.nii.gz'), mapped, phase, args.overwrite)
         save_labels(output_dir / ('rv_myo_added_' + frame + '.nii.gz'), added.astype(np.int16), phase, args.overwrite)
         final_path = output_dir / ('seg_lvsa_' + frame + '.nii.gz')
         save_labels(final_path, final, phase, args.overwrite)
         report.update({'native_label_mapping': {'0': 0, '1': 1, '2': 2, '3': 4},
+                       'frame_selection': indices,
+                       'label_alignment': frame_info['label_alignment'],
                        'RV_myocardium_is_synthetic': True, 'output': str(final_path),
                        'native_prediction': str(native_dir / ('seg_lvsa_' + frame + '.nii.gz')),
                        'missing_predicted_anatomy': missing,
@@ -207,6 +233,11 @@ def stage01(args, subject, run_dir):
               'all_foreground_classes_present': ready,
               'subject': subject.name, 'SAX_only': True, 'configuration': '2d',
               'original_image_shape': list(source_shape),
+              'segmentation_input': 'all_original_example_frames_before_legacy_preprocessing',
+              'input_metadata_normalization': input_metadata,
+              'native_4d_prediction': str(native_4d_path),
+              'phase_frame_info_json': str(frame_info_path),
+              'phase_frame_info_txt': str(output_dir / 'ED_ES_frames.txt'),
               'folds': args.folds, 'checkpoint': args.checkpoint, 'model_dir': str(args.nnunet_model_dir),
               'input_image_sha256': original_hash, 'original_and_manual_inputs_unchanged': True,
               'work_dir': str(work), 'frames': frame_reports}

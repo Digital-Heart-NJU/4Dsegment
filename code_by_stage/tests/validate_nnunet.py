@@ -22,6 +22,38 @@ def verify(subject, output):
     report = {'subject': subject.name, 'status': 'passed_file_and_growth_checks',
               'model_output_status': summary['status'], 'original_image_unchanged': True,
               'scope': 'Integrity and algorithm checks, not anatomical accuracy.', 'frames': {}}
+    archive = None
+    if 'native_4d_prediction' in summary:
+        original = nib.load(original_path)
+        archive = nib.load(summary['native_4d_prediction'])
+        assert archive.shape == original.shape
+        np.testing.assert_array_equal(archive.affine, original.affine)
+        if 'input_metadata_normalization' in summary:
+            np.testing.assert_allclose(archive.header.get_zooms()[:3],
+                                      np.linalg.norm(original.affine[:3, :3], axis=0), rtol=1e-6)
+            np.testing.assert_array_equal(archive.header['pixdim'][4:], original.header['pixdim'][4:])
+        else:
+            np.testing.assert_array_equal(archive.header['pixdim'], original.header['pixdim'])
+        assert archive.header.get_xyzt_units() == original.header.get_xyzt_units()
+        work = Path(summary['work_dir'])
+        assert len(list((work / 'imagesTs').glob('*.nii.gz'))) == original.shape[3]
+        for index in range(original.shape[3]):
+            case = subject.name + '_sax_fr_%04d' % index
+            supplied = nib.load(work / 'imagesTs' / (case + '_0000.nii.gz'))
+            np.testing.assert_array_equal(supplied.affine, original.affine)
+            if 'input_metadata_normalization' in summary:
+                np.testing.assert_allclose(supplied.header.get_zooms(),
+                                          np.linalg.norm(original.affine[:3, :3], axis=0), rtol=1e-6)
+                np.testing.assert_allclose(supplied.get_qform(), supplied.affine, rtol=1e-6, atol=1e-4)
+            np.testing.assert_array_equal(np.asarray(supplied.dataobj),
+                                          np.asarray(original.dataobj[..., index], dtype=np.float32))
+            predicted = nib.load(work / 'labelsTs' / (case + '.nii.gz'))
+            np.testing.assert_allclose(predicted.affine, supplied.affine, rtol=1e-6, atol=1e-4)
+            np.testing.assert_array_equal(np.asarray(archive.dataobj[..., index]), np.asarray(predicted.dataobj))
+        assert Path(summary['phase_frame_info_txt']).is_file()
+        report['native_frame_inference'] = {'original_frames_verified': original.shape[3],
+                                            'original_float32_intensities_preserved': True,
+                                            'raw_4d_labels_preserved': True}
     for frame in ('ED', 'ES'):
         phase_path = subject / ('lvsa_' + frame + '.nii.gz')
         if not phase_path.is_file():
@@ -39,6 +71,9 @@ def verify(subject, output):
             np.testing.assert_allclose(image.affine, phase.affine, atol=1e-4)
             assert np.isfinite(arrays[name]).all()
         native, mapped, final, added = [arrays[name] for name in ('native', 'mapped', 'final', 'added')]
+        if archive is not None:
+            index = summary['frames'][frame]['frame_selection']['original_frame_index_zero_based']
+            np.testing.assert_array_equal(native, np.asarray(archive.dataobj[..., index]))
         wall_report = json.loads((root / ('rv_myo_added_' + frame + '_summary.json')).read_text())
         assert np.isin(native, (0, 1, 2, 3)).all()
         expected = native.astype(np.int16)
