@@ -1,0 +1,248 @@
+{
+  "started": "2026-11-24T23:24:23.431561",
+  "python": "/home/mengao/anaconda3/envs/cme-dt-env/bin/python",
+  "results": [
+    {
+      "subject": "subject_22",
+      "frame": "ED",
+      "output_dir": "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ED",
+      "stages": {
+        "COORDS_Z": {
+          "status": "success",
+          "command": "/home/mengao/anaconda3/envs/cme-dt-env/bin/python -B -u /home/mengao/Code/4Dsegment/model_vol_septum/generate_UVC_fiber.py --data-dir /home/mengao/Code/4Dsegment/data --subject subject_22 --frame ED --carp-bin-dir /opt/openCARP/usr/bin --job phi_rim_fallback_20261124_232423_431466 --coords-z --force",
+          "log": "/home/mengao/Code/4Dsegment/development_logs/evidence/2026-11-24/coords_phi_direct_rim_fallback_20261124_232423_431466/subject_22_ED_COORDS_Z.log",
+          "returncode": 0,
+          "elapsed_seconds": 3.106,
+          "nodes": 75754,
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "outputs": [
+            "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ED/UVC_i/COORDS_Z.case",
+            "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ED/UVC_i/COORDS_Z.dat",
+            "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ED/UVC_i/COORDS_Z.vtk",
+            "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ED/UVC_i/COORDS_Z.fiber.ens",
+            "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ED/UVC_i/COORDS_Z.geo",
+            "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ED/UVC_i/COORDS_Z.tags.ens",
+            "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ED/UVC_i/COORDS_Z_COORDS_Z.ens"
+          ],
+          "previous_coords_identical": true,
+          "maximum_change_from_previous_coords": 0.0
+        },
+        "PHI": {
+          "status": "success",
+          "command": "/home/mengao/anaconda3/envs/cme-dt-env/bin/python -B -u /home/mengao/Code/4Dsegment/model_vol_septum/generate_UVC_fiber.py --data-dir /home/mengao/Code/4Dsegment/data --subject subject_22 --frame ED --carp-bin-dir /opt/openCARP/usr/bin --job phi_rim_fallback_20261124_232423_431466 --phi --force",
+          "log": "/home/mengao/Code/4Dsegment/development_logs/evidence/2026-11-24/coords_phi_direct_rim_fallback_20261124_232423_431466/subject_22_ED_PHI.log",
+          "returncode": 0,
+          "elapsed_seconds": 4.619,
+          "nodes": 75754,
+          "minimum": -3.14131,
+          "maximum": 3.14155,
+          "outputs": [
+            "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ED/UVC_i/PHI.case",
+            "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ED/UVC_i/PHI.dat",
+            "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ED/UVC_i/PHI.vtk",
+            "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ED/UVC_i/PHI.fiber.ens",
+            "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ED/UVC_i/PHI.geo",
+            "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ED/UVC_i/PHI.tags.ens",
+            "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ED/UVC_i/PHI_PHI.ens"
+          ],
+          "INF_fallback_used": false,
+          "ANT_INF_coords_z_difference": 0.04204299999999994,
+          "base_reference_method": "direct_opening_rim_segment_length_weighted_centroids"
+        }
+      },
+      "input_hashes": {
+        "volume": "ffcc0e8a12ff1d5fb62bb5644ac684e0b4bb94f39c62199c06709263fb780160",
+        "LVannulus": "4968b6632a7bf928c32f7b039fc1fe806b3cb6efa767bd04b1398e0b6f837156",
+        "RVannulus": "67b88d4d2a0207f22b9d50916dd9bad83645d59ff9aea0b49d3167e1041e1305"
+      },
+      "previous_output_backup": "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/previous_outputs/20261124_232423_431466/ED",
+      "inputs_unchanged": true,
+      "status": "success"
+    },
+    {
+      "subject": "subject_22",
+      "frame": "ES",
+      "output_dir": "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ES",
+      "stages": {
+        "COORDS_Z": {
+          "status": "success",
+          "command": "/home/mengao/anaconda3/envs/cme-dt-env/bin/python -B -u /home/mengao/Code/4Dsegment/model_vol_septum/generate_UVC_fiber.py --data-dir /home/mengao/Code/4Dsegment/data --subject subject_22 --frame ES --carp-bin-dir /opt/openCARP/usr/bin --job phi_rim_fallback_20261124_232423_431466 --coords-z --force",
+          "log": "/home/mengao/Code/4Dsegment/development_logs/evidence/2026-11-24/coords_phi_direct_rim_fallback_20261124_232423_431466/subject_22_ES_COORDS_Z.log",
+          "returncode": 0,
+          "elapsed_seconds": 2.011,
+          "nodes": 43126,
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "outputs": [
+            "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ES/UVC_i/COORDS_Z.case",
+            "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ES/UVC_i/COORDS_Z.dat",
+            "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ES/UVC_i/COORDS_Z.vtk",
+            "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ES/UVC_i/COORDS_Z.fiber.ens",
+            "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ES/UVC_i/COORDS_Z.geo",
+            "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ES/UVC_i/COORDS_Z.tags.ens",
+            "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ES/UVC_i/COORDS_Z_COORDS_Z.ens"
+          ],
+          "previous_coords_identical": true,
+          "maximum_change_from_previous_coords": 0.0
+        },
+        "PHI": {
+          "status": "success",
+          "command": "/home/mengao/anaconda3/envs/cme-dt-env/bin/python -B -u /home/mengao/Code/4Dsegment/model_vol_septum/generate_UVC_fiber.py --data-dir /home/mengao/Code/4Dsegment/data --subject subject_22 --frame ES --carp-bin-dir /opt/openCARP/usr/bin --job phi_rim_fallback_20261124_232423_431466 --phi --force",
+          "log": "/home/mengao/Code/4Dsegment/development_logs/evidence/2026-11-24/coords_phi_direct_rim_fallback_20261124_232423_431466/subject_22_ES_PHI.log",
+          "returncode": 0,
+          "elapsed_seconds": 3.083,
+          "nodes": 43126,
+          "minimum": -3.14086,
+          "maximum": 3.1413,
+          "outputs": [
+            "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ES/UVC_i/PHI.case",
+            "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ES/UVC_i/PHI.dat",
+            "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ES/UVC_i/PHI.vtk",
+            "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ES/UVC_i/PHI.fiber.ens",
+            "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ES/UVC_i/PHI.geo",
+            "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ES/UVC_i/PHI.tags.ens",
+            "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ES/UVC_i/PHI_PHI.ens"
+          ],
+          "INF_fallback_used": true,
+          "ANT_INF_coords_z_difference": 0.14716600000000002,
+          "base_reference_method": "direct_opening_rim_segment_length_weighted_centroids"
+        }
+      },
+      "input_hashes": {
+        "volume": "3c39765eb4b590ee28f1d7fccea9e0e6f22611894db10881a8f6c222ae72b0f2",
+        "LVannulus": "0901d70a223500cddc79a806f2a4cec39df5f197e1fe23de4d2822e0eb225c9a",
+        "RVannulus": "59fbe32141ba9b78aebbfe7542545d76c5f20fcaeb1c58905c45b0b38705523d"
+      },
+      "previous_output_backup": "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/previous_outputs/20261124_232423_431466/ES",
+      "inputs_unchanged": true,
+      "status": "success"
+    },
+    {
+      "subject": "subject_23",
+      "frame": "ED",
+      "output_dir": "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ED",
+      "stages": {
+        "COORDS_Z": {
+          "status": "success",
+          "command": "/home/mengao/anaconda3/envs/cme-dt-env/bin/python -B -u /home/mengao/Code/4Dsegment/model_vol_septum/generate_UVC_fiber.py --data-dir /home/mengao/Code/4Dsegment/data --subject subject_23 --frame ED --carp-bin-dir /opt/openCARP/usr/bin --job phi_rim_fallback_20261124_232423_431466 --coords-z --force",
+          "log": "/home/mengao/Code/4Dsegment/development_logs/evidence/2026-11-24/coords_phi_direct_rim_fallback_20261124_232423_431466/subject_23_ED_COORDS_Z.log",
+          "returncode": 0,
+          "elapsed_seconds": 3.094,
+          "nodes": 75455,
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "outputs": [
+            "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ED/UVC_i/COORDS_Z.case",
+            "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ED/UVC_i/COORDS_Z.dat",
+            "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ED/UVC_i/COORDS_Z.vtk",
+            "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ED/UVC_i/COORDS_Z.fiber.ens",
+            "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ED/UVC_i/COORDS_Z.geo",
+            "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ED/UVC_i/COORDS_Z.tags.ens",
+            "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ED/UVC_i/COORDS_Z_COORDS_Z.ens"
+          ],
+          "previous_coords_identical": true,
+          "maximum_change_from_previous_coords": 0.0
+        },
+        "PHI": {
+          "status": "success",
+          "command": "/home/mengao/anaconda3/envs/cme-dt-env/bin/python -B -u /home/mengao/Code/4Dsegment/model_vol_septum/generate_UVC_fiber.py --data-dir /home/mengao/Code/4Dsegment/data --subject subject_23 --frame ED --carp-bin-dir /opt/openCARP/usr/bin --job phi_rim_fallback_20261124_232423_431466 --phi --force",
+          "log": "/home/mengao/Code/4Dsegment/development_logs/evidence/2026-11-24/coords_phi_direct_rim_fallback_20261124_232423_431466/subject_23_ED_PHI.log",
+          "returncode": 0,
+          "elapsed_seconds": 4.586,
+          "nodes": 75455,
+          "minimum": -3.14157,
+          "maximum": 3.14152,
+          "outputs": [
+            "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ED/UVC_i/PHI.case",
+            "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ED/UVC_i/PHI.dat",
+            "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ED/UVC_i/PHI.vtk",
+            "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ED/UVC_i/PHI.fiber.ens",
+            "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ED/UVC_i/PHI.geo",
+            "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ED/UVC_i/PHI.tags.ens",
+            "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ED/UVC_i/PHI_PHI.ens"
+          ],
+          "INF_fallback_used": false,
+          "ANT_INF_coords_z_difference": 0.044222000000000095,
+          "base_reference_method": "direct_opening_rim_segment_length_weighted_centroids"
+        }
+      },
+      "input_hashes": {
+        "volume": "83635680487ac65b83f7948b92557f06c6404ba2716b2138d4ac86b940f67c20",
+        "LVannulus": "ef24adc6c98b10ee587d91685b7fbdaafc2b06848637f9d411e3216b893f3712",
+        "RVannulus": "7d1509bd7111d52b216d5561894ec0d9d7a664281cc07024b310f48acc61351f"
+      },
+      "previous_output_backup": "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/previous_outputs/20261124_232423_431466/ED",
+      "inputs_unchanged": true,
+      "status": "success"
+    },
+    {
+      "subject": "subject_23",
+      "frame": "ES",
+      "output_dir": "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ES",
+      "stages": {
+        "COORDS_Z": {
+          "status": "success",
+          "command": "/home/mengao/anaconda3/envs/cme-dt-env/bin/python -B -u /home/mengao/Code/4Dsegment/model_vol_septum/generate_UVC_fiber.py --data-dir /home/mengao/Code/4Dsegment/data --subject subject_23 --frame ES --carp-bin-dir /opt/openCARP/usr/bin --job phi_rim_fallback_20261124_232423_431466 --coords-z --force",
+          "log": "/home/mengao/Code/4Dsegment/development_logs/evidence/2026-11-24/coords_phi_direct_rim_fallback_20261124_232423_431466/subject_23_ES_COORDS_Z.log",
+          "returncode": 0,
+          "elapsed_seconds": 2.228,
+          "nodes": 48586,
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "outputs": [
+            "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ES/UVC_i/COORDS_Z.case",
+            "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ES/UVC_i/COORDS_Z.dat",
+            "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ES/UVC_i/COORDS_Z.vtk",
+            "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ES/UVC_i/COORDS_Z.fiber.ens",
+            "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ES/UVC_i/COORDS_Z.geo",
+            "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ES/UVC_i/COORDS_Z.tags.ens",
+            "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ES/UVC_i/COORDS_Z_COORDS_Z.ens"
+          ],
+          "previous_coords_identical": true,
+          "maximum_change_from_previous_coords": 0.0
+        },
+        "PHI": {
+          "status": "success",
+          "command": "/home/mengao/anaconda3/envs/cme-dt-env/bin/python -B -u /home/mengao/Code/4Dsegment/model_vol_septum/generate_UVC_fiber.py --data-dir /home/mengao/Code/4Dsegment/data --subject subject_23 --frame ES --carp-bin-dir /opt/openCARP/usr/bin --job phi_rim_fallback_20261124_232423_431466 --phi --force",
+          "log": "/home/mengao/Code/4Dsegment/development_logs/evidence/2026-11-24/coords_phi_direct_rim_fallback_20261124_232423_431466/subject_23_ES_PHI.log",
+          "returncode": 0,
+          "elapsed_seconds": 3.363,
+          "nodes": 48586,
+          "minimum": -3.14143,
+          "maximum": 3.14113,
+          "outputs": [
+            "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ES/UVC_i/PHI.case",
+            "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ES/UVC_i/PHI.dat",
+            "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ES/UVC_i/PHI.vtk",
+            "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ES/UVC_i/PHI.fiber.ens",
+            "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ES/UVC_i/PHI.geo",
+            "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ES/UVC_i/PHI.tags.ens",
+            "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ES/UVC_i/PHI_PHI.ens"
+          ],
+          "INF_fallback_used": false,
+          "ANT_INF_coords_z_difference": 0.02951999999999999,
+          "base_reference_method": "direct_opening_rim_segment_length_weighted_centroids"
+        }
+      },
+      "input_hashes": {
+        "volume": "672bb8d42a86b70ac751d22735f80739041b04dfdc46f3629cc37c92db731f30",
+        "LVannulus": "e6ab6a2462ee000c4226775cee2f2e3b3310a38f694dd045a979afe3a78ffd53",
+        "RVannulus": "99acc7504b77cb946d13c8763ea6d0917c1965056e8d277fb82d6d3282a09f8d"
+      },
+      "previous_output_backup": "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/previous_outputs/20261124_232423_431466/ES",
+      "inputs_unchanged": true,
+      "status": "success"
+    }
+  ],
+  "modified_source": [
+    "model_vol_septum/compute_UVC_fiber.py"
+  ],
+  "rules": {
+    "PHI_base": "direct_opening_rim_weighted_centroid",
+    "INF_tolerance": 0.05,
+    "INF_fallback": "closest_opposite_side_COORDS_Z",
+    "COORDS_Z_algorithm_changed": false
+  },
+  "finished": "2026-11-24T23:24:50.724212"
+}

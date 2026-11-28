@@ -91,6 +91,64 @@ COORDS_Z_OUTPUT_NAMES = (
 )
 
 BIV_OUTPUT_NAMES = ("biv.dat", "biv.vtk")
+FINAL_FIBER_POINT_ARRAYS = ("COORDS_Z", "PHI", "PHO", "biv")
+FINAL_FIBER_CELL_ARRAYS = ("elemTag", "fiber", "sheet", "sheet_normal")
+FIBER_EXPORT_RULE_VERSION = "ascii_17digits_eight_arrays_v1"
+
+
+def _write_final_fiber_vtk(mesh, path):
+    """Write only the requested arrays, without default ASCII writer rounding."""
+    types = {"i1": "char", "u1": "unsigned_char", "i2": "short", "u2": "unsigned_short",
+             "i4": "int", "u4": "unsigned_int", "i8": "vtktypeint64", "u8": "vtktypeuint64",
+             "f4": "float", "f8": "double"}
+
+    def vtk_type(array):
+        dtype = np.asarray(array).dtype
+        return types[dtype.kind + str(dtype.itemsize)]
+
+    path = Path(path)
+    temporary = path.with_name(path.stem + ".ascii.tmp.vtk")
+    try:
+        with temporary.open("w", encoding="ascii") as stream:
+            stream.write("# vtk DataFile Version 3.0\nBiventricular fiber mesh\nASCII\nDATASET UNSTRUCTURED_GRID\n")
+            stream.write(f"POINTS {mesh.n_points} {vtk_type(mesh.points)}\n")
+            np.savetxt(stream, mesh.points, fmt="%.17g")
+            stream.write(f"CELLS {mesh.n_cells} {len(mesh.cells)}\n")
+            np.savetxt(stream, mesh.cells.reshape(-1, 5), fmt="%d")
+            stream.write(f"CELL_TYPES {mesh.n_cells}\n")
+            np.savetxt(stream, mesh.celltypes, fmt="%d")
+            stream.write(f"POINT_DATA {mesh.n_points}\nFIELD FieldData 4\n")
+            for name in FINAL_FIBER_POINT_ARRAYS:
+                array = np.asarray(mesh.point_data[name])
+                stream.write(f"{name} 1 {mesh.n_points} {vtk_type(array)}\n")
+                np.savetxt(stream, array, fmt="%.17g" if array.dtype.kind == "f" else "%d")
+            stream.write(f"CELL_DATA {mesh.n_cells}\n")
+            tags = np.asarray(mesh.cell_data["elemTag"])
+            stream.write(f"SCALARS elemTag {vtk_type(tags)} 1\nLOOKUP_TABLE default\n")
+            np.savetxt(stream, tags, fmt="%d")
+            fibers = mesh.cell_data["fiber"]
+            stream.write(f"VECTORS fiber {vtk_type(fibers)}\n")
+            np.savetxt(stream, fibers, fmt="%.17g")
+            stream.write("FIELD FieldData 2\n")
+            for name in ("sheet", "sheet_normal"):
+                array = mesh.cell_data[name]
+                stream.write(f"{name} 3 {mesh.n_cells} {vtk_type(array)}\n")
+                np.savetxt(stream, array, fmt="%.17g")
+        saved = pv.read(temporary)
+        for name in ("points", "cells", "celltypes"):
+            if not np.array_equal(getattr(saved, name), getattr(mesh, name)):
+                raise RuntimeError(f"ASCII fiber export changed geometry: {name}")
+        for association, names in (("point_data", FINAL_FIBER_POINT_ARRAYS),
+                                   ("cell_data", FINAL_FIBER_CELL_ARRAYS), ("field_data", ())):
+            actual, expected = getattr(saved, association), getattr(mesh, association)
+            if set(actual.keys()) != set(names):
+                raise RuntimeError(f"ASCII fiber export has unexpected arrays: {association}")
+            for name in names:
+                if actual[name].dtype != expected[name].dtype or not np.array_equal(actual[name], expected[name]):
+                    raise RuntimeError(f"ASCII fiber export changed array: {association}/{name}")
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def pipeline_frame_paths(subject_dir, frame):
@@ -303,6 +361,7 @@ def run_frame_fiber(subject_id, frame, data_dir, force=False):
         raise RuntimeError(f'Fiber generation requires existing coordinate fields: {missing}')
     hashes = _stage_input_hashes({'volume': inputs['volume'], **fields})
     hashes['fiber_angles'] = hashlib.sha256(json.dumps(UVC.FIBER_ANGLES_DEG, sort_keys=True).encode()).hexdigest()
+    hashes['vtk_export'] = FIBER_EXPORT_RULE_VERSION
     summary_path = frame_output / f'{subject_id}_{frame}_FIBER_summary.json'
     meshname = subject_id + '_mesh_all'
     final_base = fiber_folder / f'{meshname}_fiber'
@@ -346,7 +405,7 @@ def run_frame_fiber(subject_id, frame, data_dir, force=False):
     for name, data in cell_arrays.items():
         volume.cell_data[name] = data
     volume.set_active_vectors('fiber', preference='cell')
-    volume.save(final_base.with_suffix('.vtk'), binary=True)
+    _write_final_fiber_vtk(volume, final_base.with_suffix('.vtk'))
     summary = {'subject': subject_id, 'frame': frame, 'rule_version': UVC.FIBER_RULE_VERSION,
                'source_volume': str(inputs['volume']), 'input_sha256': hashes,
                'coordinate_sources': {name: str(path) for name, path in fields.items()},
@@ -354,6 +413,9 @@ def run_frame_fiber(subject_id, frame, data_dir, force=False):
                'LV_element_count': biv_details['LV_element_count'],
                'RV_element_count': biv_details['RV_element_count'],
                'mesh_export': 'direct_Step09_nodes_elements_tags_with_17_digit_coordinates',
+               'vtk_encoding': 'ASCII', 'vtk_export_rule': FIBER_EXPORT_RULE_VERSION,
+               'vtk_point_arrays': list(FINAL_FIBER_POINT_ARRAYS),
+               'vtk_cell_arrays': list(FINAL_FIBER_CELL_ARRAYS),
                'units_preserved': True, 'carp_tetrahedron_vertex_order_adjustment_count': 0,
                'geometry_topology_tags_and_element_order_preserved': True,
                **details, 'outputs': [str(path) for path in outputs]}
@@ -464,16 +526,17 @@ def run_frame_phi(subject_id, frame, data_dir, force=False):
 
 
 def run_frame_pho(subject_id, frame, data_dir, force=False):
-    """Map the exposed tag-1 LVepi and extract its separate junction for PHO=1."""
+    """Solve PHO using current chamber-tag boundaries and their shared interface."""
     subject_dir = Path(data_dir).resolve() / subject_id
     inputs = pipeline_frame_paths(subject_dir, frame)
     source_volume = inputs["volume"]
     surface_paths = {name: inputs[name] for name in
-                     ("LVendo", "LVepi", "LVannulus", "RVendo", "RVannulus", "epi")}
+                     ("LVendo", "LVannulus", "RVendo", "RVannulus", "epi")}
     missing = [str(path) for path in (source_volume, *surface_paths.values())
                if not path.is_file() or not path.stat().st_size]
     if missing:
         raise FileNotFoundError(f"Required PHO input does not exist: {missing}")
+    input_hashes = _stage_input_hashes({"volume": source_volume, **surface_paths})
 
     frame_output = subject_dir / "UVC_fiber_Outputs" / frame
     uvc_dir = frame_output / "UVC_i"
@@ -489,10 +552,12 @@ def run_frame_pho(subject_id, frame, data_dir, force=False):
             pass
     rule_version = cache.get("details", {}).get("boundary_details", {}).get("boundary_rule_version")
     boundary_outputs = [frame_output / "PHO_work" / name for name in (
-        "LVepi_openbase.vtk", "LVepi_mapped.vtk", "LVepi_interface.vtk", "LVepi_mapped_nodes.vtk",
+        "LV_tag1_whole_surface.vtk", "RV_tag0_whole_surface.vtk", "LVepi_interface.vtk",
+        "tag_surface_boundary_summary.json", "remaining_tag0_basal_walls.vtk",
     )]
     if (all(path.is_file() and path.stat().st_size > 0 for path in (*expected_outputs, *boundary_outputs))
-            and rule_version == PHO_BOUNDARY_RULE_VERSION and not force):
+            and rule_version == PHO_BOUNDARY_RULE_VERSION
+            and cache.get("input_sha256") == input_hashes and not force):
         logger.info("subject %s, frame %s: skipping PHO because all outputs exist", subject_id, frame)
         return {"skipped": True, "outputs": [str(path) for path in expected_outputs]}
 
@@ -528,6 +593,7 @@ def run_frame_pho(subject_id, frame, data_dir, force=False):
         "frame": frame,
         "source_volume": str(source_volume),
         "surface_sources": {name: str(path) for name, path in surface_paths.items()},
+        "input_sha256": input_hashes,
         "converted_vtk_to_carp": converted,
         "working_mesh": str(working_mesh),
         "PHO_dat": pho_path,
@@ -721,7 +787,7 @@ def main(do_mesh=False, do_uvc=False):
     parser.add_argument('--quality-control', '-q', action='store_true', help='output quality control screenshots')
     parser.add_argument('--coords-z', action='store_true', help='generate only COORDS_Z from the Step 09 volume and Step 08 LV/RV opening rims')
     parser.add_argument('--phi', action='store_true', help='generate PHI from the Step 09 tag interface and Step 08 opening rims')
-    parser.add_argument('--pho', action='store_true', help='map the tag-1 LVepi excluding the junction, add the extracted tag-0/tag-1 interface as PHO=1, and keep LVendo=0')
+    parser.add_argument('--pho', action='store_true', help='solve PHO from current tag surfaces: epi/interface=1, LV endo/base=0, remaining tag-0 cavity/base=0')
     parser.add_argument('--biv', action='store_true', help='generate biv.dat and biv.vtk directly from Step 09 tags (LV=-1, RV=+1)')
     parser.add_argument('--fiber', action='store_true', help='generate tag-wise fibers on the Step 09 mesh from current COORDS_Z and PHO fields')
     parser.add_argument('--uvc-fiber', action='store_true', help='run all ED/ES stages directly from volmesh_pipline')

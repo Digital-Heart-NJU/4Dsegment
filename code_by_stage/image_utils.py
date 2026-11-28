@@ -1,5 +1,8 @@
 import os
 import shutil
+import json
+import subprocess
+import tempfile
 import numpy as np
 import nibabel as nib
 from numpy.linalg import inv
@@ -14,35 +17,83 @@ def rescale_intensity(image, thres=(1.0, 99.0)):
     return image2
 
 
+def validate_nonnegative_image(path):
+    """Check saved MRI intensities before legacy integer conversion or inference."""
+    data = np.asarray(nib.load(path).dataobj)
+    if not data.size or not np.all(np.isfinite(data)):
+        raise ValueError('Empty or nonfinite MRI intensities: ' + str(path))
+    minimum, maximum = float(data.min()), float(data.max())
+    if minimum < 0:
+        raise ValueError('Unexpected negative MRI intensities (minimum {0:g}): {1}'.format(minimum, path))
+    return {'minimum': minimum, 'maximum': maximum}
+
+
+def ensure_temporal_int16_range(path):
+    """Rescale only an unsafe working copy, before temporalalign casts to int16."""
+    limits = validate_nonnegative_image(path)
+    report = {'rescaled': False, 'input_range': limits,
+              'int16_maximum': int(np.iinfo(np.int16).max),
+              'method': 'unchanged_safe_input'}
+    if limits['maximum'] <= np.iinfo(np.int16).max:
+        return report
+    image = nib.load(path)
+    data = np.asarray(image.dataobj).astype(np.float64, copy=False)
+    foreground = data > 0
+    positive = data[foreground]
+    low, high = np.percentile(positive, (1.0, 99.0))
+    if high <= low:
+        low, high = positive.min(), positive.max()
+    output = np.zeros(data.shape, dtype=np.int16)
+    if high > low:
+        scaled = 1.0 + 4094.0 * (np.clip(positive, low, high) - low) / (high - low)
+        output[foreground] = np.rint(scaled).astype(np.int16)
+    else:
+        output[foreground] = 4095
+    converted = nib.Nifti1Image(output, image.affine, header=image.header.copy())
+    converted.set_qform(image.get_qform(), code=int(image.header['qform_code']))
+    converted.set_sform(image.get_sform(), code=int(image.header['sform_code']))
+    converted.header.set_data_dtype(np.int16)
+    converted.header.set_slope_inter(1, 0)
+    temporary = tempfile.mkdtemp(prefix='.int16-safe-', dir=os.path.dirname(os.path.abspath(path)))
+    try:
+        candidate = os.path.join(temporary, os.path.basename(path))
+        nib.save(converted, candidate)
+        saved = nib.load(candidate)
+        if (not np.array_equal(np.asarray(saved.dataobj), output)
+                or not np.array_equal(saved.affine, image.affine)):
+            raise RuntimeError('Safe-int16 output changed image data or geometry unexpectedly.')
+        os.rename(candidate, path)
+    finally:
+        shutil.rmtree(temporary)
+    report.update({'rescaled': True, 'method': 'nonzero_percentile_1_99_to_int16_1_4095',
+                   'percentile_values': [float(low), float(high)],
+                   'output_range': validate_nonnegative_image(path),
+                   'zero_background_preserved': bool(np.array_equal(output == 0, data == 0)),
+                   'shape_and_affine_preserved': True})
+    return report
+
+
 def imagePreprocessing(originalNii, data_dir, atlas_dir):
-     
-    os.system('headertool '
-              '{0} '
-              '{1}/lvsa_.nii.gz '
-              '-reset'
-              .format(originalNii, data_dir))
-
-    os.system('temporalalign '
-              '{0}/temporal.gipl '
-              '{1}/lvsa_.nii.gz '
-              '{1}/lvsa_.nii.gz ' 
-              '-St1 0 '
-              '-St2 0 '
-              '-Et1 1 '
-              '-Et2 1'
-              .format(atlas_dir, data_dir))
-
-    os.system('autocontrast '
-              '{0}/lvsa_.nii.gz '
-              '{0}/lvsa_.nii.gz'
-              .format(data_dir))
-        
-    os.system('cardiacphasedetection '
-              '{0}/lvsa_.nii.gz '
-              '{0}/lvsa_ED.nii.gz '
-              '{0}/lvsa_ES.nii.gz'
-              .format(data_dir))
-    
+    working = os.path.join(data_dir, 'lvsa_.nii.gz')
+    if os.path.realpath(originalNii) == os.path.realpath(working):
+        raise ValueError('The original image must differ from the preprocessing working copy.')
+    subprocess.check_call(['headertool', originalNii, working, '-reset'])
+    report = ensure_temporal_int16_range(working)
+    report['original_image'] = os.path.abspath(originalNii)
+    report['working_image'] = os.path.abspath(working)
+    with open(os.path.join(data_dir, 'lvsa_intensity_preprocessing.json'), 'w') as stream:
+        json.dump(report, stream, indent=2)
+        stream.write('\n')
+    print('  Int16 safety: {0}'.format(report['method']))
+    subprocess.check_call(['temporalalign', os.path.join(atlas_dir, 'temporal.gipl'), working, working,
+                           '-St1', '0', '-St2', '0', '-Et1', '1', '-Et2', '1'])
+    validate_nonnegative_image(working)
+    subprocess.check_call(['autocontrast', working, working])
+    validate_nonnegative_image(working)
+    ed, es = (os.path.join(data_dir, 'lvsa_' + frame + '.nii.gz') for frame in ('ED', 'ES'))
+    subprocess.check_call(['cardiacphasedetection', working, ed, es])
+    for phase in (ed, es):
+        validate_nonnegative_image(phase)
     print('  Image preprocessing is done ...')
 
 

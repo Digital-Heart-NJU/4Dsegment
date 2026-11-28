@@ -1,0 +1,271 @@
+{
+  "started": "2026-11-24T23:07:54.030074",
+  "python": "/home/mengao/anaconda3/envs/cme-dt-env/bin/python",
+  "results": [
+    {
+      "subject": "subject_22",
+      "frame": "ED",
+      "stages": {
+        "COORDS_Z": {
+          "command": "/home/mengao/anaconda3/envs/cme-dt-env/bin/python -B -u /home/mengao/Code/4Dsegment/model_vol_septum/generate_UVC_fiber.py --data-dir /home/mengao/Code/4Dsegment/data --subject subject_22 --frame ED --carp-bin-dir /opt/openCARP/usr/bin --job coords_phi_test_20261124_230754_029664 --coords-z --force",
+          "log": "/home/mengao/Code/4Dsegment/development_logs/evidence/2026-11-24/coords_z_phi_subject22_23_20261124_230754_029664/subject_22_ED_COORDS_Z.log",
+          "status": "success",
+          "returncode": 0,
+          "elapsed_seconds": 3.019,
+          "points": 75754,
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "outputs": [
+            "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ED/UVC_i/COORDS_Z.case",
+            "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ED/UVC_i/COORDS_Z.dat",
+            "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ED/UVC_i/COORDS_Z.vtk",
+            "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ED/UVC_i/COORDS_Z.fiber.ens",
+            "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ED/UVC_i/COORDS_Z.geo",
+            "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ED/UVC_i/COORDS_Z.tags.ens",
+            "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ED/UVC_i/COORDS_Z_COORDS_Z.ens"
+          ]
+        },
+        "PHI": {
+          "command": "/home/mengao/anaconda3/envs/cme-dt-env/bin/python -B -u /home/mengao/Code/4Dsegment/model_vol_septum/generate_UVC_fiber.py --data-dir /home/mengao/Code/4Dsegment/data --subject subject_22 --frame ED --carp-bin-dir /opt/openCARP/usr/bin --job coords_phi_test_20261124_230754_029664 --phi --force",
+          "log": "/home/mengao/Code/4Dsegment/development_logs/evidence/2026-11-24/coords_z_phi_subject22_23_20261124_230754_029664/subject_22_ED_PHI.log",
+          "status": "failed",
+          "returncode": 1,
+          "elapsed_seconds": 4.245,
+          "error_tail": "2026-11-24 23:08:01,217 | model_vol_septum.meshIO | DEBUG | Mesh has 35540 nodes\nTraceback (most recent call last):\n  File \"/home/mengao/Code/4Dsegment/model_vol_septum/generate_UVC_fiber.py\", line 870, in <module>\n    main()\n  File \"/home/mengao/Code/4Dsegment/model_vol_septum/generate_UVC_fiber.py\", line 806, in main\n    results.append(run_frame_phi(subject_id, frame, data_dir, args.force))\n  File \"/home/mengao/Code/4Dsegment/model_vol_septum/generate_UVC_fiber.py\", line 439, in run_frame_phi\n    phi_path, details = UVC.compute_phi_openbase_annuli(\n  File \"/home/mengao/Code/4Dsegment/model_vol_septum/compute_UVC_fiber.py\", line 1831, in compute_phi_openbase_annuli\n    rv = prepare_chamber(\"RV\", rv_mesh, 0, rv_annulus_vtk, coords_z_path, edge_scale)\n  File \"/home/mengao/Code/4Dsegment/model_vol_septum/compute_UVC_fiber.py\", line 1755, in prepare_chamber\n    base_ids, base_mapping = _map_contour_to_mesh_nodes(\n  File \"/home/mengao/Code/4Dsegment/model_vol_septum/compute_UVC_fiber.py\", line 435, in _map_contour_to_mesh_nodes\n    raise RuntimeError(\nRuntimeError: RV opening rim to RV mesh: contour-to-volume mapping distance 27.0399 mm exceeds the adaptive tolerance 3.08996 mm."
+        }
+      },
+      "output_dir": "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ED",
+      "input_hashes": {
+        "volume": "ffcc0e8a12ff1d5fb62bb5644ac684e0b4bb94f39c62199c06709263fb780160",
+        "LVannulus": "4968b6632a7bf928c32f7b039fc1fe806b3cb6efa767bd04b1398e0b6f837156",
+        "RVannulus": "67b88d4d2a0207f22b9d50916dd9bad83645d59ff9aea0b49d3167e1041e1305"
+      },
+      "inputs_unchanged": true,
+      "status": "partial_or_failed",
+      "diagnosis": {
+        "step08_rim_to_RV": {
+          "minimum_mm": 1.624859963575635e-11,
+          "median_mm": 4.354989668332529e-10,
+          "maximum_mm": 7.966390575513592e-10,
+          "above_3mm_points": 0,
+          "rim_points": 952
+        },
+        "step09_rim_to_RV": {
+          "minimum_mm": 1.624859963575635e-11,
+          "median_mm": 4.944428660173836e-10,
+          "maximum_mm": 27.039945543659638,
+          "above_3mm_points": 211,
+          "rim_points": 952
+        },
+        "rim_to_full_mesh": {
+          "maximum_mm": 7.966390575513592e-10,
+          "median_mm": 4.354989668332529e-10
+        }
+      }
+    },
+    {
+      "subject": "subject_22",
+      "frame": "ES",
+      "stages": {
+        "COORDS_Z": {
+          "command": "/home/mengao/anaconda3/envs/cme-dt-env/bin/python -B -u /home/mengao/Code/4Dsegment/model_vol_septum/generate_UVC_fiber.py --data-dir /home/mengao/Code/4Dsegment/data --subject subject_22 --frame ES --carp-bin-dir /opt/openCARP/usr/bin --job coords_phi_test_20261124_230754_029664 --coords-z --force",
+          "log": "/home/mengao/Code/4Dsegment/development_logs/evidence/2026-11-24/coords_z_phi_subject22_23_20261124_230754_029664/subject_22_ES_COORDS_Z.log",
+          "status": "success",
+          "returncode": 0,
+          "elapsed_seconds": 2.139,
+          "points": 43126,
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "outputs": [
+            "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ES/UVC_i/COORDS_Z.case",
+            "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ES/UVC_i/COORDS_Z.dat",
+            "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ES/UVC_i/COORDS_Z.vtk",
+            "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ES/UVC_i/COORDS_Z.fiber.ens",
+            "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ES/UVC_i/COORDS_Z.geo",
+            "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ES/UVC_i/COORDS_Z.tags.ens",
+            "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ES/UVC_i/COORDS_Z_COORDS_Z.ens"
+          ]
+        },
+        "PHI": {
+          "command": "/home/mengao/anaconda3/envs/cme-dt-env/bin/python -B -u /home/mengao/Code/4Dsegment/model_vol_septum/generate_UVC_fiber.py --data-dir /home/mengao/Code/4Dsegment/data --subject subject_22 --frame ES --carp-bin-dir /opt/openCARP/usr/bin --job coords_phi_test_20261124_230754_029664 --phi --force",
+          "log": "/home/mengao/Code/4Dsegment/development_logs/evidence/2026-11-24/coords_z_phi_subject22_23_20261124_230754_029664/subject_22_ES_PHI.log",
+          "status": "failed",
+          "returncode": 1,
+          "elapsed_seconds": 1.882,
+          "error_tail": "Traceback (most recent call last):\n  File \"/home/mengao/Code/4Dsegment/model_vol_septum/generate_UVC_fiber.py\", line 870, in <module>\n    main()\n  File \"/home/mengao/Code/4Dsegment/model_vol_septum/generate_UVC_fiber.py\", line 806, in main\n    results.append(run_frame_phi(subject_id, frame, data_dir, args.force))\n  File \"/home/mengao/Code/4Dsegment/model_vol_septum/generate_UVC_fiber.py\", line 421, in run_frame_phi\n    run_frame_landmarks(subject_id, frame, data_dir, force=force)\n  File \"/home/mengao/Code/4Dsegment/model_vol_septum/generate_UVC_fiber.py\", line 388, in run_frame_landmarks\n    details = UVC.find_two_RV_insertion_pts_openbase(\n  File \"/home/mengao/Code/4Dsegment/model_vol_septum/compute_UVC_fiber.py\", line 1106, in find_two_RV_insertion_pts_openbase\n    raise RuntimeError(\nRuntimeError: No interface point satisfies the positive_y and COORDS_Z +/- 0.01 conditions."
+        }
+      },
+      "output_dir": "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ES",
+      "input_hashes": {
+        "volume": "3c39765eb4b590ee28f1d7fccea9e0e6f22611894db10881a8f6c222ae72b0f2",
+        "LVannulus": "0901d70a223500cddc79a806f2a4cec39df5f197e1fe23de4d2822e0eb225c9a",
+        "RVannulus": "59fbe32141ba9b78aebbfe7542545d76c5f20fcaeb1c58905c45b0b38705523d"
+      },
+      "inputs_unchanged": true,
+      "status": "partial_or_failed",
+      "diagnosis": {
+        "step08_rim_to_RV": {
+          "minimum_mm": 3.751135526330308e-11,
+          "median_mm": 4.2421235666830426e-10,
+          "maximum_mm": 7.894231739331063e-10,
+          "above_3mm_points": 0,
+          "rim_points": 737
+        },
+        "step09_rim_to_RV": {
+          "minimum_mm": 3.751135526330308e-11,
+          "median_mm": 4.987573791165262e-10,
+          "maximum_mm": 22.01066242750516,
+          "above_3mm_points": 172,
+          "rim_points": 737
+        },
+        "rim_to_full_mesh": {
+          "maximum_mm": 7.894231739331063e-10,
+          "median_mm": 4.2421235666830426e-10
+        },
+        "landmark_failure": {
+          "ANT_point": [
+            -26.332900612,
+            -6.8749985505,
+            17.000002829
+          ],
+          "ANT_COORDS_Z": 0.840634,
+          "opposite_side_point_count": 98,
+          "opposite_side_points_within_0_01": 0,
+          "closest_opposite_COORDS_Z_difference": 0.14716600000000002,
+          "opposite_side_COORDS_Z_range": [
+            0.3441,
+            0.693468
+          ]
+        }
+      }
+    },
+    {
+      "subject": "subject_23",
+      "frame": "ED",
+      "stages": {
+        "COORDS_Z": {
+          "command": "/home/mengao/anaconda3/envs/cme-dt-env/bin/python -B -u /home/mengao/Code/4Dsegment/model_vol_septum/generate_UVC_fiber.py --data-dir /home/mengao/Code/4Dsegment/data --subject subject_23 --frame ED --carp-bin-dir /opt/openCARP/usr/bin --job coords_phi_test_20261124_230754_029664 --coords-z --force",
+          "log": "/home/mengao/Code/4Dsegment/development_logs/evidence/2026-11-24/coords_z_phi_subject22_23_20261124_230754_029664/subject_23_ED_COORDS_Z.log",
+          "status": "success",
+          "returncode": 0,
+          "elapsed_seconds": 3.118,
+          "points": 75455,
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "outputs": [
+            "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ED/UVC_i/COORDS_Z.case",
+            "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ED/UVC_i/COORDS_Z.dat",
+            "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ED/UVC_i/COORDS_Z.vtk",
+            "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ED/UVC_i/COORDS_Z.fiber.ens",
+            "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ED/UVC_i/COORDS_Z.geo",
+            "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ED/UVC_i/COORDS_Z.tags.ens",
+            "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ED/UVC_i/COORDS_Z_COORDS_Z.ens"
+          ]
+        },
+        "PHI": {
+          "command": "/home/mengao/anaconda3/envs/cme-dt-env/bin/python -B -u /home/mengao/Code/4Dsegment/model_vol_septum/generate_UVC_fiber.py --data-dir /home/mengao/Code/4Dsegment/data --subject subject_23 --frame ED --carp-bin-dir /opt/openCARP/usr/bin --job coords_phi_test_20261124_230754_029664 --phi --force",
+          "log": "/home/mengao/Code/4Dsegment/development_logs/evidence/2026-11-24/coords_z_phi_subject22_23_20261124_230754_029664/subject_23_ED_PHI.log",
+          "status": "failed",
+          "returncode": 1,
+          "elapsed_seconds": 3.943,
+          "error_tail": "2026-11-24 23:08:12,604 | model_vol_septum.meshIO | DEBUG | Mesh has 36456 nodes\nTraceback (most recent call last):\n  File \"/home/mengao/Code/4Dsegment/model_vol_septum/generate_UVC_fiber.py\", line 870, in <module>\n    main()\n  File \"/home/mengao/Code/4Dsegment/model_vol_septum/generate_UVC_fiber.py\", line 806, in main\n    results.append(run_frame_phi(subject_id, frame, data_dir, args.force))\n  File \"/home/mengao/Code/4Dsegment/model_vol_septum/generate_UVC_fiber.py\", line 439, in run_frame_phi\n    phi_path, details = UVC.compute_phi_openbase_annuli(\n  File \"/home/mengao/Code/4Dsegment/model_vol_septum/compute_UVC_fiber.py\", line 1831, in compute_phi_openbase_annuli\n    rv = prepare_chamber(\"RV\", rv_mesh, 0, rv_annulus_vtk, coords_z_path, edge_scale)\n  File \"/home/mengao/Code/4Dsegment/model_vol_septum/compute_UVC_fiber.py\", line 1755, in prepare_chamber\n    base_ids, base_mapping = _map_contour_to_mesh_nodes(\n  File \"/home/mengao/Code/4Dsegment/model_vol_septum/compute_UVC_fiber.py\", line 435, in _map_contour_to_mesh_nodes\n    raise RuntimeError(\nRuntimeError: RV opening rim to RV mesh: contour-to-volume mapping distance 30.3686 mm exceeds the adaptive tolerance 2.97266 mm."
+        }
+      },
+      "output_dir": "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ED",
+      "input_hashes": {
+        "volume": "83635680487ac65b83f7948b92557f06c6404ba2716b2138d4ac86b940f67c20",
+        "LVannulus": "ef24adc6c98b10ee587d91685b7fbdaafc2b06848637f9d411e3216b893f3712",
+        "RVannulus": "7d1509bd7111d52b216d5561894ec0d9d7a664281cc07024b310f48acc61351f"
+      },
+      "inputs_unchanged": true,
+      "status": "partial_or_failed",
+      "diagnosis": {
+        "step08_rim_to_RV": {
+          "minimum_mm": 3.7389616713314733e-11,
+          "median_mm": 4.951992459890709e-10,
+          "maximum_mm": 6.525888477631831,
+          "above_3mm_points": 46,
+          "rim_points": 1081
+        },
+        "step09_rim_to_RV": {
+          "minimum_mm": 3.9378533433748604e-11,
+          "median_mm": 5.622383190905006e-10,
+          "maximum_mm": 30.36857785242709,
+          "above_3mm_points": 270,
+          "rim_points": 1081
+        },
+        "rim_to_full_mesh": {
+          "maximum_mm": 8.393057680036848e-10,
+          "median_mm": 4.792082149578282e-10
+        }
+      }
+    },
+    {
+      "subject": "subject_23",
+      "frame": "ES",
+      "stages": {
+        "COORDS_Z": {
+          "command": "/home/mengao/anaconda3/envs/cme-dt-env/bin/python -B -u /home/mengao/Code/4Dsegment/model_vol_septum/generate_UVC_fiber.py --data-dir /home/mengao/Code/4Dsegment/data --subject subject_23 --frame ES --carp-bin-dir /opt/openCARP/usr/bin --job coords_phi_test_20261124_230754_029664 --coords-z --force",
+          "log": "/home/mengao/Code/4Dsegment/development_logs/evidence/2026-11-24/coords_z_phi_subject22_23_20261124_230754_029664/subject_23_ES_COORDS_Z.log",
+          "status": "success",
+          "returncode": 0,
+          "elapsed_seconds": 2.235,
+          "points": 48586,
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "outputs": [
+            "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ES/UVC_i/COORDS_Z.case",
+            "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ES/UVC_i/COORDS_Z.dat",
+            "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ES/UVC_i/COORDS_Z.vtk",
+            "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ES/UVC_i/COORDS_Z.fiber.ens",
+            "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ES/UVC_i/COORDS_Z.geo",
+            "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ES/UVC_i/COORDS_Z.tags.ens",
+            "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ES/UVC_i/COORDS_Z_COORDS_Z.ens"
+          ]
+        },
+        "PHI": {
+          "command": "/home/mengao/anaconda3/envs/cme-dt-env/bin/python -B -u /home/mengao/Code/4Dsegment/model_vol_septum/generate_UVC_fiber.py --data-dir /home/mengao/Code/4Dsegment/data --subject subject_23 --frame ES --carp-bin-dir /opt/openCARP/usr/bin --job coords_phi_test_20261124_230754_029664 --phi --force",
+          "log": "/home/mengao/Code/4Dsegment/development_logs/evidence/2026-11-24/coords_z_phi_subject22_23_20261124_230754_029664/subject_23_ES_PHI.log",
+          "status": "failed",
+          "returncode": 1,
+          "elapsed_seconds": 2.959,
+          "error_tail": "2026-11-24 23:08:17,917 | model_vol_septum.meshIO | DEBUG | Mesh has 22834 nodes\nTraceback (most recent call last):\n  File \"/home/mengao/Code/4Dsegment/model_vol_septum/generate_UVC_fiber.py\", line 870, in <module>\n    main()\n  File \"/home/mengao/Code/4Dsegment/model_vol_septum/generate_UVC_fiber.py\", line 806, in main\n    results.append(run_frame_phi(subject_id, frame, data_dir, args.force))\n  File \"/home/mengao/Code/4Dsegment/model_vol_septum/generate_UVC_fiber.py\", line 439, in run_frame_phi\n    phi_path, details = UVC.compute_phi_openbase_annuli(\n  File \"/home/mengao/Code/4Dsegment/model_vol_septum/compute_UVC_fiber.py\", line 1831, in compute_phi_openbase_annuli\n    rv = prepare_chamber(\"RV\", rv_mesh, 0, rv_annulus_vtk, coords_z_path, edge_scale)\n  File \"/home/mengao/Code/4Dsegment/model_vol_septum/compute_UVC_fiber.py\", line 1755, in prepare_chamber\n    base_ids, base_mapping = _map_contour_to_mesh_nodes(\n  File \"/home/mengao/Code/4Dsegment/model_vol_septum/compute_UVC_fiber.py\", line 435, in _map_contour_to_mesh_nodes\n    raise RuntimeError(\nRuntimeError: RV opening rim to RV mesh: contour-to-volume mapping distance 22.2269 mm exceeds the adaptive tolerance 3.00987 mm."
+        }
+      },
+      "output_dir": "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ES",
+      "input_hashes": {
+        "volume": "672bb8d42a86b70ac751d22735f80739041b04dfdc46f3629cc37c92db731f30",
+        "LVannulus": "e6ab6a2462ee000c4226775cee2f2e3b3310a38f694dd045a979afe3a78ffd53",
+        "RVannulus": "99acc7504b77cb946d13c8763ea6d0917c1965056e8d277fb82d6d3282a09f8d"
+      },
+      "inputs_unchanged": true,
+      "status": "partial_or_failed",
+      "diagnosis": {
+        "step08_rim_to_RV": {
+          "minimum_mm": 7.060981942024533e-11,
+          "median_mm": 5.098154650051869e-10,
+          "maximum_mm": 7.80485575001431,
+          "above_3mm_points": 81,
+          "rim_points": 883
+        },
+        "step09_rim_to_RV": {
+          "minimum_mm": 7.060981942024533e-11,
+          "median_mm": 5.414571972906911e-10,
+          "maximum_mm": 22.22687590879477,
+          "above_3mm_points": 233,
+          "rim_points": 883
+        },
+        "rim_to_full_mesh": {
+          "maximum_mm": 7.724685381902428e-10,
+          "median_mm": 4.641719626966948e-10
+        }
+      }
+    }
+  ],
+  "source_code_modified": false,
+  "requested_stages": [
+    "COORDS_Z",
+    "PHI"
+  ],
+  "finished": "2026-11-24T23:08:18.143286"
+}

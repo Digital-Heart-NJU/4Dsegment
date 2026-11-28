@@ -10,7 +10,7 @@ from scipy.spatial import cKDTree
 
 
 SURFACE_CLASSES = ("epi", "LVendo", "RVendo", "LVannulus", "RVannulus")
-PHO_BOUNDARY_RULE_VERSION = "mapped_tag1_LVepi_without_junction_plus_exact_interface_v1"
+PHO_BOUNDARY_RULE_VERSION = "current_tag_surfaces_remaining_tag0_basal_zero_v2"
 
 
 def load_surface(path):
@@ -87,6 +87,32 @@ def _tag_interface_faces(volume):
             np.where(tags[a] == 0, a, b))
 
 
+def _epicardial_rim_ears(triangles, face_ids, rim_nodes, rim_edges, labels):
+    """Recognize exact rim-edge ears without reclassifying epicardial faces."""
+    nodes = set(np.unique(triangles[face_ids]).tolist())
+    if set(rim_nodes) <= nodes:
+        return []
+    patch = triangles[face_ids]
+    edges, counts = np.unique(np.sort(np.vstack((
+        patch[:, [0, 1]], patch[:, [1, 2]], patch[:, [2, 0]])), axis=1),
+        axis=0, return_counts=True)
+    boundary_edges = set(map(tuple, edges[counts == 1]))
+    candidates = np.flatnonzero((labels == 1) & np.all(np.isin(triangles, rim_nodes), axis=1))
+    added = []
+    for face_id in candidates:
+        face = triangles[face_id]
+        if set(face) <= nodes:
+            continue
+        face_edges = {tuple(sorted(edge)) for edge in
+                      ((face[0], face[1]), (face[1], face[2]), (face[2], face[0]))}
+        attached = face_edges & boundary_edges
+        if len(attached) == 1 and face_edges - attached <= rim_edges:
+            boundary_edges.symmetric_difference_update(face_edges)
+            nodes.update(face.tolist())
+            added.append(int(face_id))
+    return added if set(rim_nodes) <= nodes else None
+
+
 def _volume_face_surface(volume, faces, parts, tag1_cells, tag0_cells, lvendo_nodes):
     """Use original volume triangles, recording provenance and effective nodal BCs."""
     if not len(faces):
@@ -110,114 +136,110 @@ def _volume_face_surface(volume, faces, parts, tag1_cells, tag0_cells, lvendo_no
     return surface
 
 
-def _map_lvepi_and_extract_interface(volume, boundary, labels, source_path,
-                                      lvendo_nodes, output_dir):
-    """Map the exposed tag-1 LVepi and add its disjoint, directly extracted interface."""
-    source = load_surface(source_path)
-    junction, junction_tag1, junction_tag0 = _tag_interface_faces(volume)
-    original_ids = np.asarray(boundary.point_data["volumeNodeId"], dtype=np.int64)
+def _extract_tag_boundary_conditions(volume, boundary, labels, lvendo_nodes, output_dir):
+    """Classify exact current tag surfaces; never project to the old LVepi."""
+    faces = np.asarray(boundary.point_data["volumeNodeId"])[
+        boundary.faces.reshape(-1, 4)[:, 1:]]
     owners = np.asarray(boundary.cell_data["volumeCellId"], dtype=np.int64)
     tags = np.asarray(volume.cell_data["elemTag"])
-    # The full-volume exterior excludes every internal tag-0/tag-1 interface
-    # triangle by connectivity. Protect LVendo and both basal opening walls.
-    candidates = (tags[owners] == 1) & ~np.isin(labels, [2, 4, 5])
-    selected = boundary.extract_cells(np.flatnonzero(candidates)).extract_surface()
-    if not selected.n_cells:
-        raise RuntimeError("No exposed tag-1 LVepi faces remain after LVendo and basal exclusion.")
-    samples, normals, _ = face_samples(selected)
-    ref_ids, distances = nearest_triangles(source, samples)
-    distances = distances.reshape(-1, 7)
-    scores = np.sqrt(np.mean(distances ** 2, axis=1))
-    _, ref_normals, ref_edge_scale = face_samples(source)
-    agreement = np.abs(np.einsum(
-        "ij,ij->i", normals, ref_normals[ref_ids.reshape(-1, 7)[:, -1]]))
-    mapped = selected.point_data["volumeNodeId"][selected.faces.reshape(-1, 4)[:, 1:]]
-    mapped_owners = np.asarray(selected.cell_data["volumeCellId"], dtype=np.int64)
-    cells = np.asarray(volume.cells_dict[pv.CellType.TETRA])[mapped_owners]
-    tolerance = np.zeros(len(cells))
-    for a, b in ((0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)):
-        tolerance = np.maximum(tolerance, np.linalg.norm(
-            volume.points[cells[:, a]] - volume.points[cells[:, b]], axis=1))
-    # Tiny target slivers can be much finer than their source triangles.
-    # Check mapping at the local resolution of both meshes.
-    source_spacing = ref_edge_scale[ref_ids.reshape(-1, 7)].max(axis=1)
-    tolerance = np.maximum(np.maximum(tolerance, source_spacing), 1e-4)
-    # Retain the complete exposed wall. Stop with diagnostics if its mapping
-    # fails, rather than making holes by silently dropping distant faces.
-    # A nearest source triangle can lie across a sharp basal crease, so
-    # normal agreement is diagnostic; tag-1 topology determines wall membership.
-    invalid = distances.max(axis=1) > tolerance
-    a_surface = _volume_face_surface(
-        volume, mapped, np.ones(len(mapped)), mapped_owners,
-        np.full(len(mapped), -1, dtype=np.int64), lvendo_nodes)
-    a_surface.cell_data["sourceSurfaceRMSDistance_mm"] = scores
-    a_surface.cell_data["sourceSurfaceMaxDistance_mm"] = distances.max(axis=1)
-    a_surface.cell_data["sourceNormalAgreement"] = agreement
-    a_surface.cell_data["sourceMappingTolerance_mm"] = tolerance
-    mapped_path = output_dir / "LVepi_mapped.vtk"
-    a_surface.save(mapped_path, binary=True)
-    if np.any(invalid):
-        save_subset(a_surface, invalid, output_dir / "LVepi_unmapped_faces.vtk")
-        raise RuntimeError("Exposed tag-1 LVepi faces exceed the local tetrahedral-edge mapping tolerance.")
-    (output_dir / "LVepi_unmapped_faces.vtk").unlink(missing_ok=True)
-    a_keys = {tuple(sorted(face)) for face in mapped}
-    b_keys = {tuple(sorted(face)) for face in junction}
-    if a_keys & b_keys:
-        raise RuntimeError("Mapped LVepi contains junction triangles; the two parts must be disjoint.")
-    b_surface = _volume_face_surface(
-        volume, junction, np.full(len(junction), 2), junction_tag1, junction_tag0, lvendo_nodes)
-    junction_path = output_dir / "LVepi_interface.vtk"
-    b_surface.save(junction_path, binary=True)
+    junction, junction_tag1, junction_tag0 = _tag_interface_faces(volume)
+    owner_tags = tags[owners]
+    # RV basal faces transferred into tag 1 now belong to its condition-1 wall.
+    exterior_one = (labels == 1) | ((owner_tags == 1) & ~np.isin(labels, [2, 4]))
+    requested = exterior_one.astype(np.int32)
+    one_faces = np.vstack((faces[exterior_one], junction))
+    zero_faces = faces[~exterior_one]
+    tree = cKDTree(np.asarray(volume.points))
+
+    def expand(ids):
+        if not len(ids):
+            return np.empty(0, dtype=np.int64)
+        return np.unique(np.concatenate(
+            tree.query_ball_point(volume.points[ids], r=1e-6))).astype(np.int64)
+
+    raw_zero = expand(np.unique(zero_faces))
+    raw_one = expand(np.unique(one_faces))
+    protected = np.intersect1d(raw_one, lvendo_nodes)
+    one_nodes = np.setdiff1d(raw_one, lvendo_nodes)
+    zero_nodes = np.setdiff1d(np.union1d(raw_zero, lvendo_nodes), one_nodes)
+    effective = np.full(volume.n_points, -1, dtype=np.int32)
+    effective[zero_nodes], effective[one_nodes] = 0, 1
+
+    def save_faces(filename, triangles, parts, tag1, tag0, prescribed):
+        surface = _volume_face_surface(
+            volume, triangles, parts, tag1, tag0, lvendo_nodes)
+        if surface.n_cells:
+            ids = surface.point_data["volumeNodeId"]
+            surface.point_data["PHO_BC"] = effective[ids]
+            surface.cell_data["PHO_requested_BC"] = np.asarray(prescribed, dtype=np.int32)
+            bc = effective[triangles]
+            surface.cell_data["PHO_BC"] = np.where(
+                np.all(bc == 1, axis=1), 1,
+                np.where(np.all(bc == 0, axis=1), 0, -1)).astype(np.int32)
+        surface.save(output_dir / filename, binary=True)
+        return surface
+
+    minus = np.full(len(faces), -1, dtype=np.int64)
+    mapped_mask = (owner_tags == 1) & exterior_one
+    mapped = faces[mapped_mask]
+    save_faces(
+        "LVepi_mapped.vtk", mapped, np.ones(len(mapped)), owners[mapped_mask],
+        minus[mapped_mask], np.ones(len(mapped)))
+    save_faces("LVepi_interface.vtk", junction, np.full(len(junction), 2),
+               junction_tag1, junction_tag0, np.ones(len(junction)))
     combined_faces = np.vstack((mapped, junction))
-    combined_parts = np.r_[np.ones(len(mapped)), np.full(len(junction), 2)]
-    combined = _volume_face_surface(
-        volume, combined_faces, combined_parts, np.r_[mapped_owners, junction_tag1],
-        np.r_[np.full(len(mapped), -1, dtype=np.int64), junction_tag0], lvendo_nodes)
-    combined_path = output_dir / "LVepi_openbase.vtk"
-    combined.save(combined_path, binary=True)
+    save_faces(
+        "LVepi_openbase.vtk", combined_faces,
+        np.r_[np.ones(len(mapped)), np.full(len(junction), 2)],
+        np.r_[owners[mapped_mask], junction_tag1],
+        np.r_[minus[mapped_mask], junction_tag0], np.ones(len(combined_faces)))
+    for tag, chamber in ((1, "LV"), (0, "RV")):
+        mask = owner_tags == tag
+        exterior_owners = owners[mask]
+        tag1 = exterior_owners if tag == 1 else minus[mask]
+        tag0 = exterior_owners if tag == 0 else minus[mask]
+        save_faces(
+            chamber + "_tag" + str(tag) + "_whole_surface.vtk",
+            np.vstack((faces[mask], junction)),
+            np.r_[np.ones(mask.sum()), np.full(len(junction), 2)],
+            np.r_[tag1, junction_tag1], np.r_[tag0, junction_tag0],
+            np.r_[requested[mask], np.ones(len(junction))])
+
     mapped_nodes, junction_nodes = np.unique(mapped), np.unique(junction)
-    nodes = np.union1d(mapped_nodes, junction_nodes)
-    protected = np.intersect1d(nodes, lvendo_nodes)
-    one_nodes = np.setdiff1d(nodes, lvendo_nodes)
-    for name, ids in (("LVepi_mapped_nodes.vtk", mapped_nodes),
-                      ("LVepi_interface_nodes.vtk", junction_nodes)):
+    lv_nodes = np.setdiff1d(np.union1d(mapped_nodes, junction_nodes), lvendo_nodes)
+    for filename, ids in (("LVepi_mapped_nodes.vtk", mapped_nodes),
+                          ("LVepi_interface_nodes.vtk", junction_nodes)):
         cloud = pv.PolyData(volume.points[ids].copy())
         cloud.point_data["volumeNodeId"] = ids
-        cloud.point_data["PHO_BC"] = (~np.isin(ids, lvendo_nodes)).astype(np.int32)
-        cloud.set_active_scalars("PHO_BC")
-        cloud.save(output_dir / name, binary=True)
-    internal = np.setdiff1d(one_nodes, original_ids)
+        cloud.point_data["PHO_BC"] = effective[ids]
+        cloud.save(output_dir / filename, binary=True)
+    internal = np.setdiff1d(lv_nodes, boundary.point_data["volumeNodeId"])
     save_node_cloud(volume.points, internal, 1, output_dir / "LVepi_internal_one_nodes.vtk")
     info = {
-        "method": "mapped_tag1_exterior_plus_extracted_tag0_tag1_interface",
-        "source": str(Path(source_path).resolve()), "uses_Step03_LVepi": True,
-        "uses_tag1_surface_selection": True, "source_surface_cut_performed": False,
-        "mapped_surface": str(mapped_path), "interface_surface": str(junction_path),
-        "combined_surface": str(combined_path),
-        "boundary_part_legend": {"1": "mapped_LVepi_without_junction", "2": "extracted_tag0_tag1_interface"},
+        "method": "current_tag_surfaces_without_LVepi_source_mapping",
+        "uses_Step03_LVepi": False, "uses_tag1_surface_selection": True,
+        "source_surface_cut_performed": False,
         "mapped_face_count": int(len(mapped)), "interface_face_count": int(len(junction)),
-        "combined_face_count": int(len(combined_faces)), "overlapping_face_count": 0,
-        "mapped_junction_faces_excluded_by": "full_volume_exterior_face_connectivity",
-        "interface_extraction_rule": "complete_triangle_shared_by_one_tag0_and_one_tag1_tetrahedron",
-        "mapped_excludes_surface_classes": ["LVendo", "LVannulus", "RVannulus"],
-        "mapped_node_count": int(len(mapped_nodes)), "interface_node_count": int(len(junction_nodes)),
-        "shared_seam_node_count": int(len(np.intersect1d(mapped_nodes, junction_nodes))),
-        "node_count": int(len(nodes)), "condition_one_node_count": int(len(one_nodes)),
-        "shared_LVendo_zero_node_count": int(len(protected)), "internal_node_count": int(len(internal)),
-        "maximum_mapping_distance_mm": float(distances.max()),
-        "maximum_distance_to_tolerance_ratio": float(np.max(distances.max(axis=1) / tolerance)),
-        "mapping_tolerance_rule": "max_incident_tag1_tetra_edge_and_local_source_triangle_median_edge",
-        "unmapped_face_count": int(np.count_nonzero(invalid)),
-        "combined_connected_components": int(len(np.unique(combined.connectivity().cell_data["RegionId"]))),
-        "combined_open_edge_count": int(combined.n_open_edges),
+        "internal_node_count": int(len(internal)),
+        "mapped_node_count": int(len(mapped_nodes)),
+        "interface_node_count": int(len(junction_nodes)),
+        "node_count": int(len(lv_nodes)),
+        "tag1_whole_surface_face_count": int(np.count_nonzero(owner_tags == 1) + len(junction)),
+        "tag0_whole_surface_face_count": int(np.count_nonzero(owner_tags == 0) + len(junction)),
+        "tag1_RV_basal_faces_condition_one": int(np.count_nonzero((owner_tags == 1) & (labels == 5))),
+        "tag0_RV_basal_faces_condition_zero": int(np.count_nonzero((owner_tags == 0) & (labels == 5))),
+        "tag1_LV_basal_faces_condition_zero": int(np.count_nonzero((owner_tags == 1) & (labels == 4))),
+        "tag1_RV_endo_faces_condition_one": int(np.count_nonzero((owner_tags == 1) & (labels == 3))),
         "geometry_and_volume_node_ids_preserved": True,
+        "internal_interface_requested_condition": 1,
+        "LVendo_priority_removed_one_node_count": int(len(protected)),
     }
-    (output_dir / "LVepi_mapping_summary.json").write_text(json.dumps(info, indent=2))
-    return one_nodes, info
+    (output_dir / "tag_surface_boundary_summary.json").write_text(json.dumps(info, indent=2))
+    return zero_nodes, one_nodes, lv_nodes, requested, info
 
 
 def build_pho_boundaries(volume, full_points, surface_paths, output_dir, edge_scale):
-    """Set mapped LVepi plus the separate tag interface to 1, protecting LVendo=0."""
+    """Use current tag surfaces, with the shared interface=1 and LVendo=0."""
     from .compute_UVC_fiber import _map_contour_to_mesh_nodes, _opening_rim_loop
 
     output_dir = Path(output_dir)
@@ -251,7 +273,7 @@ def build_pho_boundaries(volume, full_points, surface_paths, output_dir, edge_sc
     matched = (best <= tolerance) & compatible & (opposite - best > max(1e-8, 1e-8 * edge_scale))
     labels = np.where(matched, winners + 1, 0).astype(np.int32)
     details = {
-        "method": "source_triangles_to_volume_boundary_then_opening_rim_basal_components",
+        "method": "current_tag_surfaces_with_reference_classification_of_exterior_faces",
         "source_surfaces": {name: str(Path(path).resolve()) for name, path in surface_paths.items()},
         "class_ids": {str(i + 1): name for i, name in enumerate(SURFACE_CLASSES)},
         "matching_tolerance_max_mm": float(tolerance.max()),
@@ -283,7 +305,7 @@ def build_pho_boundaries(volume, full_points, surface_paths, output_dir, edge_sc
     for i, name in enumerate(SURFACE_CLASSES[:3], start=1):
         if not np.any(labels == i):
             fail(f"PHO surface mapping did not match any volume faces for {name}.")
-    rim_ids = {}
+    rim_ids, rim_edges = {}, {}
     for name in ("LV", "RV"):
         points, loop_info = _opening_rim_loop(str(surface_paths[name + "annulus"]))
         node_ids, mapping = _map_contour_to_mesh_nodes(
@@ -292,6 +314,15 @@ def build_pho_boundaries(volume, full_points, surface_paths, output_dir, edge_sc
         if not np.all(np.isin(node_ids, original_ids)):
             fail(f"{name} opening rim mapped to interior volume nodes.")
         rim_ids[name] = node_ids
+        rim = pv.read(surface_paths[name + "annulus"]).clean(tolerance=0.0)
+        _, mapped = cKDTree(np.asarray(volume.points)).query(rim.points)
+        edges, offset = set(), 0
+        while offset < len(rim.lines):
+            count = int(rim.lines[offset])
+            line = mapped[rim.lines[offset + 1:offset + count + 1]]
+            edges.update(tuple(sorted(edge)) for edge in zip(line[:-1], line[1:]))
+            offset += count + 1
+        rim_edges[name] = edges
         details[name + "_opening_rim"] = {"loop": loop_info, "mapping": mapping}
 
     # New basal walls are absent from the original closed endocardia. Identify
@@ -301,8 +332,10 @@ def build_pho_boundaries(volume, full_points, surface_paths, output_dir, edge_sc
         components = _face_components(triangles[unknown])
         for component in np.unique(components):
             face_ids = unknown[components == component]
-            nodes = np.unique(triangles[face_ids])
-            chambers = [name for name, ids in rim_ids.items() if np.all(np.isin(ids, nodes))]
+            support = {name: _epicardial_rim_ears(
+                triangles, face_ids, ids, rim_edges[name], labels)
+                for name, ids in rim_ids.items()}
+            chambers = [name for name, ears in support.items() if ears is not None]
             if len(chambers) != 1:
                 fail("Unmapped PHO patch is not bounded by exactly one complete LV/RV opening rim.")
             chamber = chambers[0]
@@ -310,6 +343,8 @@ def build_pho_boundaries(volume, full_points, surface_paths, output_dir, edge_sc
             details["basal_components"].append({
                 "chamber": chamber, "face_count": int(len(face_ids)),
                 "complete_opening_rim_covered": True,
+                "epicardial_rim_ear_face_ids": support[chamber],
+                "epicardial_rim_ears_keep_condition_one": True,
             })
     save_diagnostics()
     tree = cKDTree(np.asarray(volume.points))
@@ -317,18 +352,13 @@ def build_pho_boundaries(volume, full_points, surface_paths, output_dir, edge_sc
         return np.unique(np.concatenate(tree.query_ball_point(volume.points[ids], r=1e-6))).astype(np.int64)
     lvendo_nodes = expand(np.unique(triangles[labels == 2]))
     outer_nodes = np.unique(triangles[labels == 1])
-    lv_nodes, lv_mapping = _map_lvepi_and_extract_interface(
-        volume, boundary, labels, surface_paths["LVepi"], lvendo_nodes, output_dir,
+    zero_nodes, one_nodes, lv_nodes, requested, tag_details = _extract_tag_boundary_conditions(
+        volume, boundary, labels, lvendo_nodes, output_dir,
     )
-    details["LVepi_mapping"] = lv_mapping
-    one_nodes = expand(np.union1d(outer_nodes, lv_nodes))
-    zero_nodes = np.unique(np.concatenate((triangles[labels > 1].ravel(), *rim_ids.values())))
-    lv_overrides = np.intersect1d(zero_nodes, lv_nodes)
-    zero_nodes = expand(zero_nodes)
-    lvendo_priority_nodes = np.intersect1d(one_nodes, lvendo_nodes)
-    one_nodes = np.setdiff1d(one_nodes, lvendo_nodes)
-    shared_rim = np.intersect1d(zero_nodes, one_nodes)
-    zero_nodes = np.setdiff1d(zero_nodes, one_nodes)
+    details["tag_surface_conditions"] = tag_details
+    old_zero = np.unique(triangles[labels > 1])
+    lv_overrides = np.intersect1d(old_zero, lv_nodes)
+    shared_rim = np.intersect1d(old_zero, one_nodes)
     if not np.all(np.isin(lvendo_nodes, zero_nodes)):
         fail("LVendo=0 priority was not preserved for every LV endocardial node.")
     if not len(zero_nodes) or not len(one_nodes):
@@ -344,14 +374,21 @@ def build_pho_boundaries(volume, full_points, surface_paths, output_dir, edge_sc
     effective_bc[one_nodes] = 1
     boundary.point_data["PHO_BC"] = effective_bc[original_ids]
     face_bc = effective_bc[triangles]
-    boundary.cell_data["PHO_requested_BC"] = (labels == 1).astype(np.int32)
+    boundary.cell_data["PHO_requested_BC"] = requested
     boundary.cell_data["PHO_BC"] = np.where(
         np.all(face_bc == 1, axis=1), 1, np.where(np.all(face_bc == 0, axis=1), 0, -1),
     ).astype(np.int32)
+    boundary.cell_data["ownerTag"] = np.asarray(volume.cell_data["elemTag"])[
+        boundary.cell_data["volumeCellId"]]
     boundary.save(output_dir / "volume_boundary_classified.vtk", binary=True)
     for i, name in enumerate(SURFACE_CLASSES, start=1):
         save_subset(boundary, labels == i, output_dir / (name + "_mapped.vtk"))
     save_subset(boundary, np.isin(labels, [4, 5]), output_dir / "basal_opening_faces.vtk")
+    owner_tags = np.asarray(boundary.cell_data["ownerTag"])
+    save_subset(boundary, (owner_tags == 0) & np.isin(labels, [4, 5]),
+                output_dir / "remaining_tag0_basal_walls.vtk")
+    save_subset(boundary, (owner_tags == 1) & (labels == 5),
+                output_dir / "RV_basal_transferred_to_tag1.vtk")
     details.update({
         "zero_node_count": int(len(zero_nodes)), "one_node_count": int(len(one_nodes)),
         "combined_outer_node_count": int(len(outer_nodes)),
@@ -359,10 +396,10 @@ def build_pho_boundaries(volume, full_points, surface_paths, output_dir, edge_sc
         "LVepi_additional_one_node_count": int(len(np.setdiff1d(lv_nodes, outer_nodes))),
         "LVepi_zero_boundary_override_count": int(len(lv_overrides)),
         "LVendo_zero_node_count": int(len(lvendo_nodes)),
-        "LVendo_priority_removed_one_node_count": int(len(lvendo_priority_nodes)),
+        "LVendo_priority_removed_one_node_count": tag_details["LVendo_priority_removed_one_node_count"],
         "shared_rim_node_count": int(len(shared_rim)),
         "constraint_overlap_count": 0,
-        "shared_rim_rule": "LVendo_zero_first_then_mapped_LVepi_extracted_interface_and_combined_epicardium_one",
+        "shared_rim_rule": "LVendo_zero_first_then_current_tag1_wall_interface_and_combined_epi_one",
         "diagnostic_cell_PHO_BC_minus_one": "mixed_zero_and_one_vertex_values",
         "volume_geometry_modified": False,
     })

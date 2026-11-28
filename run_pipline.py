@@ -53,12 +53,12 @@ STAGE_ARGS = {
                 "--overwrite"],
     "raw_surface": ["--stage02_surf_only=true",
                     "--seg_manual=false"],
-    "volumetric": ["--frames", "ED,ES",
+    "volumetric": ["--frames", "ES",  #ED,ES
                    "--overwrite",
                    # "--epi-clearance-method=sdf",
                    "--epi-clearance-method=auto",
                    "--epi-local-repair=true", "--epi-min-accepted-step=0.01",
-                   "--step8-short-edge-collapse=true", "--step8-collapse-tolerances", "0.01", "0.001", "0.0001",
+                   "--step8-short-edge-collapse=true", "--step8-collapse-tolerances", "0.1", "0.01", "0.001", "0.0001",
                    "--tag1-mm", "10", "--tag0-mm", "12"],
     "uvc_fiber": ["--uvc-fiber",
                   "--frames", "ED,ES",
@@ -115,13 +115,14 @@ def main(argv=None):
         if not scripts[request].is_file():
             raise SystemExit("Cannot find: " + str(scripts[request]))
 
-    environment_prefix = root / CONDA_ENV
-    if not (environment_prefix / "conda-meta" / "history").is_file() or not (environment_prefix / "bin" / "python").is_file():
-        raise SystemExit("Project Conda environment is missing or incomplete: " + str(environment_prefix) +
-                         ". Create it using environment/cme-dt-env.yml and --prefix " + str(environment_prefix))
-    python_command = [conda, "run", "--no-capture-output", "--prefix", str(environment_prefix),
-                      "python", "-B", "-u"]
-    print("Python environment: " + str(environment_prefix), flush=True)
+    # environment_prefix = root / CONDA_ENV
+    # if not (environment_prefix / "conda-meta" / "history").is_file() or not (environment_prefix / "bin" / "python").is_file():
+    #     raise SystemExit("Project Conda environment is missing or incomplete: " + str(environment_prefix) +
+    #                      ". Create it using environment/cme-dt-env.yml and --prefix " + str(environment_prefix))
+    # python_command = [conda, "run", "--no-capture-output", "--prefix", str(environment_prefix), "python", "-B", "-u"]
+    python_command = [conda, "run", "--no-capture-output", "-n", CONDA_ENV, "python", "-B", "-u"]
+    # print("Python environment: " + str(environment_prefix), flush=True)
+    print("Python environment: " + CONDA_ENV, flush=True)
 
     completed, failed = [], []
     for number in args.subject:

@@ -1,0 +1,311 @@
+{
+  "started": "2026-11-25T00:01:44.003813",
+  "source_modification_required": false,
+  "results": [
+    {
+      "subject": "subject_22",
+      "frame": "ED",
+      "stages": {
+        "biv": {
+          "command": "/home/mengao/anaconda3/envs/cme-dt-env/bin/python -B -u /home/mengao/Code/4Dsegment/model_vol_septum/generate_UVC_fiber.py --data-dir /home/mengao/Code/4Dsegment/data --subject subject_22 --frame ED --carp-bin-dir /opt/openCARP/usr/bin --job biv_fiber_20261125_000144_003699 --biv --force",
+          "returncode": 0,
+          "elapsed_seconds": 0.771,
+          "log": "/home/mengao/Code/4Dsegment/development_logs/evidence/2026-11-25/biv_fiber_subject22_23_20261125_000144_003699/subject_22_ED_biv.log",
+          "status": "success"
+        },
+        "fiber": {
+          "command": "/home/mengao/anaconda3/envs/cme-dt-env/bin/python -B -u /home/mengao/Code/4Dsegment/model_vol_septum/generate_UVC_fiber.py --data-dir /home/mengao/Code/4Dsegment/data --subject subject_22 --frame ED --carp-bin-dir /opt/openCARP/usr/bin --job biv_fiber_20261125_000144_003699 --fiber --force",
+          "returncode": 0,
+          "elapsed_seconds": 2.437,
+          "log": "/home/mengao/Code/4Dsegment/development_logs/evidence/2026-11-25/biv_fiber_subject22_23_20261125_000144_003699/subject_22_ED_fiber.log",
+          "status": "success"
+        }
+      },
+      "preserved_sha256": {
+        "/home/mengao/Code/4Dsegment/data/subject_22/volmesh_pipline/step_09_final_mesh/subject_22_ED_final_volmesh.vtk": "ffcc0e8a12ff1d5fb62bb5644ac684e0b4bb94f39c62199c06709263fb780160",
+        "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ED/UVC_i/COORDS_Z.vtk": "2f11cc9d4e824975cac691d225703d8e997ab269b5021c99175faa8d9961bd90",
+        "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ED/UVC_i/COORDS_Z.case": "40dee5507ad188d2745915e520dd48846aaf92d000a7b00c2a8e7b0bd3ea3895",
+        "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ED/UVC_i/COORDS_Z.tags.ens": "a2ee794c7aeb865f2aa99b6d4b6e4c6d816589b2dc3f48073cf3f148931fe0e6",
+        "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ED/UVC_i/COORDS_Z.fiber.ens": "cdd8178fd29749ee994ffa69cce8050a2850841ae024a9501f85542f1ccdf2ce",
+        "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ED/UVC_i/COORDS_Z.geo": "144933215a54c276b1dfaf378a45b44b6e0624b15b110d952d2b179798846316",
+        "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ED/UVC_i/COORDS_Z.dat": "e21e08275336492ef5bcd442d0e4b180bf058661c8d5742cda2145a36d1f1cc4",
+        "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ED/UVC_i/COORDS_Z_COORDS_Z.ens": "1c94ae9da82b55949b0cc022cb754c636324d788f6bb20dd9634637f4c7e4f2c",
+        "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ED/UVC_i/PHI.geo": "144933215a54c276b1dfaf378a45b44b6e0624b15b110d952d2b179798846316",
+        "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ED/UVC_i/PHI_PHI.ens": "a7f05dbf20c5d62422ee7687d247bc8e6718ebdb4cabe75fe89445e26f8c02e6",
+        "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ED/UVC_i/PHI.tags.ens": "6e68f8e281af48104c1a200984e1bbb163c7394dd1eb259eb3a770f90e3482e9",
+        "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ED/UVC_i/PHI.case": "a5541a85f0dd389c628856274e9f57e2132e64d3492358ed91b65db44d2c4037",
+        "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ED/UVC_i/PHI.dat": "d87dc21a59ae26af4b0831db70e6570219b0e027ef122eb9f30e4ca44e53f3a6",
+        "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ED/UVC_i/PHI.fiber.ens": "4363a4403d4daa60782b00a592681bdd33073f82313375ad824073333400b52c",
+        "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ED/UVC_i/PHI.vtk": "5f4829f155f9ac2936ca91071dac18dbea14c6348566c7bd87d6b808146055c1",
+        "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ED/UVC_i/PHO.vtk": "1f2702b4258c15e04464970679480542632c8edc694050564af46930c8b0d34e",
+        "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ED/UVC_i/PHO.case": "ce1aa103357fbfb8ca1ddad54431aa872de947e4aa45610ac063a2c401689c0e",
+        "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ED/UVC_i/PHO.dat": "cca2381efe3e90dbdf829bd4fca187349b6d60481cfae0a066d646561f6b844f",
+        "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ED/UVC_i/PHO_PHO.ens": "002582130e08b63542694fcf0b56b8ac80b59de665b3c7d153b77584bfaeb693",
+        "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ED/UVC_i/PHO.fiber.ens": "f1f21bb902eea3d4d270ed1783468afc058530cd1525f2b3f98abf05aa8ddd2a",
+        "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ED/UVC_i/PHO.tags.ens": "6a45e7be5bf3e88a1604cbe52ee3e40cc9e81277884a2d3c0a03806433f34d06",
+        "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ED/UVC_i/PHO.geo": "144933215a54c276b1dfaf378a45b44b6e0624b15b110d952d2b179798846316",
+        "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ED/UVC_i/PHO_raw.dat": "297ec819fdd7df946996ddcb6855d3737a365a716c213a7a78ddf494bbce43e4"
+      },
+      "source_mesh_and_coordinates_unchanged": true,
+      "status": "success",
+      "fiber_mesh": "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ED/fiberfolder/subject_22_mesh_all_fiber.vtk",
+      "repairs": {
+        "LV": {
+          "elements": 197587,
+          "PHO_gradient": 3950,
+          "COORDS_Z_gradient": 0,
+          "circumferential": 12,
+          "tangent_axis_fallback": 0,
+          "any_repair": 3962
+        },
+        "RV": {
+          "elements": 160581,
+          "PHO_gradient": 3752,
+          "COORDS_Z_gradient": 12,
+          "circumferential": 58,
+          "tangent_axis_fallback": 0,
+          "any_repair": 3810
+        }
+      },
+      "elements": 358168,
+      "validation": {
+        "exact_geometry_and_existing_arrays_preserved": true,
+        "coordinates_and_biv_verified": true,
+        "CARP_points_elements_tags_and_lon_match_VTK_exactly": true,
+        "maximum_direction_unit_norm_error": 4.440892098500626e-16,
+        "maximum_pairwise_abs_dot": 2.220446049250313e-16,
+        "repaired_element_count": 7772,
+        "repaired_element_fraction": 0.02169931428826696
+      }
+    },
+    {
+      "subject": "subject_22",
+      "frame": "ES",
+      "stages": {
+        "biv": {
+          "command": "/home/mengao/anaconda3/envs/cme-dt-env/bin/python -B -u /home/mengao/Code/4Dsegment/model_vol_septum/generate_UVC_fiber.py --data-dir /home/mengao/Code/4Dsegment/data --subject subject_22 --frame ES --carp-bin-dir /opt/openCARP/usr/bin --job biv_fiber_20261125_000144_003699 --biv --force",
+          "returncode": 0,
+          "elapsed_seconds": 0.683,
+          "log": "/home/mengao/Code/4Dsegment/development_logs/evidence/2026-11-25/biv_fiber_subject22_23_20261125_000144_003699/subject_22_ES_biv.log",
+          "status": "success"
+        },
+        "fiber": {
+          "command": "/home/mengao/anaconda3/envs/cme-dt-env/bin/python -B -u /home/mengao/Code/4Dsegment/model_vol_septum/generate_UVC_fiber.py --data-dir /home/mengao/Code/4Dsegment/data --subject subject_22 --frame ES --carp-bin-dir /opt/openCARP/usr/bin --job biv_fiber_20261125_000144_003699 --fiber --force",
+          "returncode": 0,
+          "elapsed_seconds": 1.603,
+          "log": "/home/mengao/Code/4Dsegment/development_logs/evidence/2026-11-25/biv_fiber_subject22_23_20261125_000144_003699/subject_22_ES_fiber.log",
+          "status": "success"
+        }
+      },
+      "preserved_sha256": {
+        "/home/mengao/Code/4Dsegment/data/subject_22/volmesh_pipline/step_09_final_mesh/subject_22_ES_final_volmesh.vtk": "3c39765eb4b590ee28f1d7fccea9e0e6f22611894db10881a8f6c222ae72b0f2",
+        "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ES/UVC_i/COORDS_Z.vtk": "15e358c6df0a835908e559371113e545a907a7566b19059ab140ef580da62f63",
+        "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ES/UVC_i/COORDS_Z.case": "40dee5507ad188d2745915e520dd48846aaf92d000a7b00c2a8e7b0bd3ea3895",
+        "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ES/UVC_i/COORDS_Z.tags.ens": "8b9d365ee62ab67e6c584db63b5c0d08bde58ef44a9f621e9d1b2f8ef884191b",
+        "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ES/UVC_i/COORDS_Z.fiber.ens": "9c5ed16ae0f51858f790e79ede80b85c4ce8ba47f2fc230e21bcca31d4a98cfe",
+        "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ES/UVC_i/COORDS_Z.geo": "d492be16d0d495096e97e81081878e01f43113204d8dbcd772553c3d8df0ce2f",
+        "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ES/UVC_i/COORDS_Z.dat": "3ce3409355cbb1e4114a0abb5df372c4c68f958657970884f0aa302266744df3",
+        "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ES/UVC_i/COORDS_Z_COORDS_Z.ens": "b732a2cccadb888569cfc43f962471719bf1271dfb06ae07091bedb0c1aae15f",
+        "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ES/UVC_i/PHI.geo": "d492be16d0d495096e97e81081878e01f43113204d8dbcd772553c3d8df0ce2f",
+        "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ES/UVC_i/PHI_PHI.ens": "789a9c3be3bf42a8bdf4a5dd4a15af5478f2e574926e64da6d791ceee9562f04",
+        "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ES/UVC_i/PHI.tags.ens": "b8eda4ea1678a87b91902adf2ba7c4a7823efac333c25a6e2fd0527211b0e3d5",
+        "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ES/UVC_i/PHI.case": "a5541a85f0dd389c628856274e9f57e2132e64d3492358ed91b65db44d2c4037",
+        "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ES/UVC_i/PHI.dat": "1d93500d49a29d8b8b1e213685c87229982cb89e20f02b631c44022f475a95cc",
+        "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ES/UVC_i/PHI.fiber.ens": "9af637d4a50baeaddbbc43f771371e9f3e76848ef633212ad0a038568213915a",
+        "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ES/UVC_i/PHI.vtk": "383e38b8d53bd983fbda13a803f938a819512ace1a513ef68a6ec9d3a499a53f",
+        "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ES/UVC_i/PHO.vtk": "75db0425b90f6c4920494e7f60c5c566f19544a9e2a3f2dce5ec84e1263934b7",
+        "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ES/UVC_i/PHO.case": "ce1aa103357fbfb8ca1ddad54431aa872de947e4aa45610ac063a2c401689c0e",
+        "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ES/UVC_i/PHO.dat": "f413afa54adbf1f497b22bfea9fdc327648b7006ddf1f060fb6e8d0a8009af6c",
+        "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ES/UVC_i/PHO_PHO.ens": "1c92dddcf5b489f8291bf20d75be930376eddb76a10c002db6bc4dbc14e44da1",
+        "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ES/UVC_i/PHO.fiber.ens": "bfa3093e33d753fb4347f82477b0c80f095e2bb7bc48f6e15a019967c4085f17",
+        "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ES/UVC_i/PHO.tags.ens": "b7d540473460aa16fc08bb9a5b63e2d6f0c2f994acbcf499adc9e5cb82b2b352",
+        "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ES/UVC_i/PHO.geo": "d492be16d0d495096e97e81081878e01f43113204d8dbcd772553c3d8df0ce2f",
+        "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ES/UVC_i/PHO_raw.dat": "97185e6257f7aeed1839c5e168bc9ef72a01c424dce5ab552b50e909ca2df8d2"
+      },
+      "source_mesh_and_coordinates_unchanged": true,
+      "status": "success",
+      "fiber_mesh": "/home/mengao/Code/4Dsegment/data/subject_22/UVC_fiber_Outputs/ES/fiberfolder/subject_22_mesh_all_fiber.vtk",
+      "repairs": {
+        "LV": {
+          "elements": 111937,
+          "PHO_gradient": 2187,
+          "COORDS_Z_gradient": 0,
+          "circumferential": 18,
+          "tangent_axis_fallback": 0,
+          "any_repair": 2205
+        },
+        "RV": {
+          "elements": 93346,
+          "PHO_gradient": 2177,
+          "COORDS_Z_gradient": 1,
+          "circumferential": 30,
+          "tangent_axis_fallback": 0,
+          "any_repair": 2207
+        }
+      },
+      "elements": 205283,
+      "validation": {
+        "exact_geometry_and_existing_arrays_preserved": true,
+        "coordinates_and_biv_verified": true,
+        "CARP_points_elements_tags_and_lon_match_VTK_exactly": true,
+        "maximum_direction_unit_norm_error": 4.440892098500626e-16,
+        "maximum_pairwise_abs_dot": 1.7694179454963432e-16,
+        "repaired_element_count": 4412,
+        "repaired_element_fraction": 0.021492281387158217
+      }
+    },
+    {
+      "subject": "subject_23",
+      "frame": "ED",
+      "stages": {
+        "biv": {
+          "command": "/home/mengao/anaconda3/envs/cme-dt-env/bin/python -B -u /home/mengao/Code/4Dsegment/model_vol_septum/generate_UVC_fiber.py --data-dir /home/mengao/Code/4Dsegment/data --subject subject_23 --frame ED --carp-bin-dir /opt/openCARP/usr/bin --job biv_fiber_20261125_000144_003699 --biv --force",
+          "returncode": 0,
+          "elapsed_seconds": 0.772,
+          "log": "/home/mengao/Code/4Dsegment/development_logs/evidence/2026-11-25/biv_fiber_subject22_23_20261125_000144_003699/subject_23_ED_biv.log",
+          "status": "success"
+        },
+        "fiber": {
+          "command": "/home/mengao/anaconda3/envs/cme-dt-env/bin/python -B -u /home/mengao/Code/4Dsegment/model_vol_septum/generate_UVC_fiber.py --data-dir /home/mengao/Code/4Dsegment/data --subject subject_23 --frame ED --carp-bin-dir /opt/openCARP/usr/bin --job biv_fiber_20261125_000144_003699 --fiber --force",
+          "returncode": 0,
+          "elapsed_seconds": 2.481,
+          "log": "/home/mengao/Code/4Dsegment/development_logs/evidence/2026-11-25/biv_fiber_subject22_23_20261125_000144_003699/subject_23_ED_fiber.log",
+          "status": "success"
+        }
+      },
+      "preserved_sha256": {
+        "/home/mengao/Code/4Dsegment/data/subject_23/volmesh_pipline/step_09_final_mesh/subject_23_ED_final_volmesh.vtk": "83635680487ac65b83f7948b92557f06c6404ba2716b2138d4ac86b940f67c20",
+        "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ED/UVC_i/COORDS_Z.vtk": "a80e93cafd28ba28df170a5832df5aaedead07b72c772a01f869eb2a4b08f7c6",
+        "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ED/UVC_i/COORDS_Z.case": "40dee5507ad188d2745915e520dd48846aaf92d000a7b00c2a8e7b0bd3ea3895",
+        "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ED/UVC_i/COORDS_Z.tags.ens": "f69a178afc4706ad06f537ff20077c35d4ec69292e4e1b93d86d46a5b3ea80b1",
+        "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ED/UVC_i/COORDS_Z.fiber.ens": "f511667b9e698ff3f06a4096286d7ace8bad704c4a61e45dbdce6d0971b46b36",
+        "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ED/UVC_i/COORDS_Z.geo": "120acab06b39f548c6f06b8116168c910b03068ca89c95dc7333f34f719fc181",
+        "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ED/UVC_i/COORDS_Z.dat": "a683662d8acce44eb8ce8b33649ad228666f69ce907b35484dcbe8321e30cdd1",
+        "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ED/UVC_i/COORDS_Z_COORDS_Z.ens": "ea227c52ce560b2bf1e045b1b2fd696302295d252dedc044bec68fba79fdbb55",
+        "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ED/UVC_i/PHI.geo": "120acab06b39f548c6f06b8116168c910b03068ca89c95dc7333f34f719fc181",
+        "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ED/UVC_i/PHI_PHI.ens": "4e2dd6645027925b948b44d8b3ffa93918fff4434aef290ec10d6bcef2d55f5c",
+        "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ED/UVC_i/PHI.tags.ens": "694f3dd4cb32f59ffc1f5588bfbacaaa2ea13d834ebec6cee02acc3778660cb2",
+        "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ED/UVC_i/PHI.case": "a5541a85f0dd389c628856274e9f57e2132e64d3492358ed91b65db44d2c4037",
+        "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ED/UVC_i/PHI.dat": "071e0217b0e26c5fd70cc327d3afed30e659f7f2a362d7cf939455999da138e1",
+        "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ED/UVC_i/PHI.fiber.ens": "656250b24cfa80ab98a7ed9293f71433271e1d08744d750c25b8435e61259946",
+        "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ED/UVC_i/PHI.vtk": "3c47720a4c8eb6c723a1943a8dc248990377400137bd30444be020184b129ae1",
+        "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ED/UVC_i/PHO.vtk": "83c1c42d2d2228b7ca81caeae7d86d8eda5262fd24e06545b5aae9f4cbad905d",
+        "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ED/UVC_i/PHO.case": "ce1aa103357fbfb8ca1ddad54431aa872de947e4aa45610ac063a2c401689c0e",
+        "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ED/UVC_i/PHO.dat": "24c596a0e2ac00bc293c78a62aba9208e6b4a662b6e477bc5ee7ffe411f0ce01",
+        "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ED/UVC_i/PHO_PHO.ens": "74000ac129b2336fb246bf67e4eebd1fa545503999f9a2c80eeb600f2606b978",
+        "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ED/UVC_i/PHO.fiber.ens": "2c0a6b37f255fc81407d8ea2dbed32b30bcc2c7614ec1a33691be8a6d66b5c70",
+        "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ED/UVC_i/PHO.tags.ens": "3a56ac613f0ac92b6d9ab48767b649eb5080a7063d10b2117faa17341c8fe0a1",
+        "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ED/UVC_i/PHO.geo": "120acab06b39f548c6f06b8116168c910b03068ca89c95dc7333f34f719fc181",
+        "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ED/UVC_i/PHO_raw.dat": "94be4cf192f61a8ff43ec69be3e40aea72dafd41c1031a923b608580782753d5"
+      },
+      "source_mesh_and_coordinates_unchanged": true,
+      "status": "success",
+      "fiber_mesh": "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ED/fiberfolder/subject_23_mesh_all_fiber.vtk",
+      "repairs": {
+        "LV": {
+          "elements": 191199,
+          "PHO_gradient": 4706,
+          "COORDS_Z_gradient": 1,
+          "circumferential": 15,
+          "tangent_axis_fallback": 0,
+          "any_repair": 4721
+        },
+        "RV": {
+          "elements": 164326,
+          "PHO_gradient": 4435,
+          "COORDS_Z_gradient": 48,
+          "circumferential": 19,
+          "tangent_axis_fallback": 0,
+          "any_repair": 4501
+        }
+      },
+      "elements": 355525,
+      "validation": {
+        "exact_geometry_and_existing_arrays_preserved": true,
+        "coordinates_and_biv_verified": true,
+        "CARP_points_elements_tags_and_lon_match_VTK_exactly": true,
+        "maximum_direction_unit_norm_error": 4.440892098500626e-16,
+        "maximum_pairwise_abs_dot": 2.220446049250313e-16,
+        "repaired_element_count": 9222,
+        "repaired_element_fraction": 0.025939104141762183
+      }
+    },
+    {
+      "subject": "subject_23",
+      "frame": "ES",
+      "stages": {
+        "biv": {
+          "command": "/home/mengao/anaconda3/envs/cme-dt-env/bin/python -B -u /home/mengao/Code/4Dsegment/model_vol_septum/generate_UVC_fiber.py --data-dir /home/mengao/Code/4Dsegment/data --subject subject_23 --frame ES --carp-bin-dir /opt/openCARP/usr/bin --job biv_fiber_20261125_000144_003699 --biv --force",
+          "returncode": 0,
+          "elapsed_seconds": 0.695,
+          "log": "/home/mengao/Code/4Dsegment/development_logs/evidence/2026-11-25/biv_fiber_subject22_23_20261125_000144_003699/subject_23_ES_biv.log",
+          "status": "success"
+        },
+        "fiber": {
+          "command": "/home/mengao/anaconda3/envs/cme-dt-env/bin/python -B -u /home/mengao/Code/4Dsegment/model_vol_septum/generate_UVC_fiber.py --data-dir /home/mengao/Code/4Dsegment/data --subject subject_23 --frame ES --carp-bin-dir /opt/openCARP/usr/bin --job biv_fiber_20261125_000144_003699 --fiber --force",
+          "returncode": 0,
+          "elapsed_seconds": 1.783,
+          "log": "/home/mengao/Code/4Dsegment/development_logs/evidence/2026-11-25/biv_fiber_subject22_23_20261125_000144_003699/subject_23_ES_fiber.log",
+          "status": "success"
+        }
+      },
+      "preserved_sha256": {
+        "/home/mengao/Code/4Dsegment/data/subject_23/volmesh_pipline/step_09_final_mesh/subject_23_ES_final_volmesh.vtk": "672bb8d42a86b70ac751d22735f80739041b04dfdc46f3629cc37c92db731f30",
+        "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ES/UVC_i/COORDS_Z.vtk": "de0d1f21933cfe7b90c2c5c5544e4b5b93f8b1127c0c5229aaa96ad8d5856272",
+        "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ES/UVC_i/COORDS_Z.case": "40dee5507ad188d2745915e520dd48846aaf92d000a7b00c2a8e7b0bd3ea3895",
+        "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ES/UVC_i/COORDS_Z.tags.ens": "649a5446c8e59fa04aafde51e0c992d0a8763637e4363a3ad0ceb5caf05ebe51",
+        "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ES/UVC_i/COORDS_Z.fiber.ens": "1b73ef8f260d8b4fd8b9fbcb21afb5f6375034671403b4b0a8a285e17334c210",
+        "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ES/UVC_i/COORDS_Z.geo": "0935228256402cabb8cad0cc1e866637067f4fbbe60ae4d13584c0946f7f856e",
+        "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ES/UVC_i/COORDS_Z.dat": "7781794c8e152243af061f1a27d249795ec96fc6057aa6d402bf446578158f34",
+        "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ES/UVC_i/COORDS_Z_COORDS_Z.ens": "8d2ede1f296daf801ba7d7c56b665bd06277486870674ee00b287838caea2cd4",
+        "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ES/UVC_i/PHI.geo": "0935228256402cabb8cad0cc1e866637067f4fbbe60ae4d13584c0946f7f856e",
+        "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ES/UVC_i/PHI_PHI.ens": "9e21d2592fb8a4dfd5c06b3810542c45196193e9692be0b0fd453192b32bf0a2",
+        "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ES/UVC_i/PHI.tags.ens": "2e39fa08b84146f3bd54f02088429023f29cd9bd4c4353dab373622b3e8c4c6a",
+        "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ES/UVC_i/PHI.case": "a5541a85f0dd389c628856274e9f57e2132e64d3492358ed91b65db44d2c4037",
+        "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ES/UVC_i/PHI.dat": "21c6d545a07b1699a88c14d804046a947c9597f2c6f0da7910da92a3e0860001",
+        "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ES/UVC_i/PHI.fiber.ens": "ac609cf6f76bcc5aed2d0ae865a0c9b92722a33db6993e94db28dfe879259070",
+        "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ES/UVC_i/PHI.vtk": "2161b9ebfac22ba71c34902589a8bef14308448940e94853ff56beac697ae2c9",
+        "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ES/UVC_i/PHO.vtk": "955c4e6bb53fb60839ea080c6f0c73f9cc7c66dadc3b0d96dcad299c3300488a",
+        "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ES/UVC_i/PHO.case": "ce1aa103357fbfb8ca1ddad54431aa872de947e4aa45610ac063a2c401689c0e",
+        "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ES/UVC_i/PHO.dat": "1d2abb32e39861fc4d4e0a2fb0515def7e98138df43007aefc403af0165919c3",
+        "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ES/UVC_i/PHO_PHO.ens": "e399834c9d0019931b988b7cea2d52fa894b46fa8c23dd7c7ee935d8de1fb9d6",
+        "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ES/UVC_i/PHO.fiber.ens": "ccf7909012e7b3c75545ce1633e2e79119b3c881c2f7cf307415bbf2f3d5e951",
+        "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ES/UVC_i/PHO.tags.ens": "7ec6946a9f75930b8c890d57eb0fc26ed3c54aa946c469b0b36d7ed79e968cc9",
+        "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ES/UVC_i/PHO.geo": "0935228256402cabb8cad0cc1e866637067f4fbbe60ae4d13584c0946f7f856e",
+        "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ES/UVC_i/PHO_raw.dat": "894025f0bd6c92d3a699b7492e8fd809625a342a669ebf9abb522deec0f3a3a1"
+      },
+      "source_mesh_and_coordinates_unchanged": true,
+      "status": "success",
+      "fiber_mesh": "/home/mengao/Code/4Dsegment/data/subject_23/UVC_fiber_Outputs/ES/fiberfolder/subject_23_mesh_all_fiber.vtk",
+      "repairs": {
+        "LV": {
+          "elements": 126592,
+          "PHO_gradient": 2716,
+          "COORDS_Z_gradient": 13,
+          "circumferential": 47,
+          "tangent_axis_fallback": 0,
+          "any_repair": 2763
+        },
+        "RV": {
+          "elements": 104213,
+          "PHO_gradient": 2808,
+          "COORDS_Z_gradient": 1,
+          "circumferential": 20,
+          "tangent_axis_fallback": 0,
+          "any_repair": 2828
+        }
+      },
+      "elements": 230805,
+      "validation": {
+        "exact_geometry_and_existing_arrays_preserved": true,
+        "coordinates_and_biv_verified": true,
+        "CARP_points_elements_tags_and_lon_match_VTK_exactly": true,
+        "maximum_direction_unit_norm_error": 4.440892098500626e-16,
+        "maximum_pairwise_abs_dot": 2.220446049250313e-16,
+        "repaired_element_count": 5591,
+        "repaired_element_fraction": 0.02422391196031282
+      }
+    }
+  ],
+  "finished": "2026-11-25T00:01:55.694472"
+}

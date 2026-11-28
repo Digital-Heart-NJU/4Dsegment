@@ -764,7 +764,7 @@ def transmural_openbase(
     IGBEXTRACT,
     UVCfolder,
 ):
-    """Solve PHO with mapped LVepi and extracted junction=1, protecting LVendo=0."""
+    """Solve PHO from current tag surfaces, protecting LVendo=0 and interface=1."""
     from .pho_boundaries import build_pho_boundaries
     folder_path = Path(folder).resolve()
     work_root = folder_path / "PHO_work"
@@ -866,13 +866,13 @@ def transmural_openbase(
     if missing:
         raise RuntimeError(f"PHO generation did not create valid outputs: {missing}")
     return pho_path, {
-        "method": "mapped_LVepi_and_extracted_interface_one_LVendo_zero_laplace",
+        "method": "current_tag_surfaces_interface_one_remaining_tag0_cavity_and_base_zero_laplace",
         "mesh_point_count": int(len(full_points)),
         "epicardial_node_count": int(len(outer_nodes)),
         "LVepi_node_count": boundary_details["LVepi_node_count"],
-        "LVepi_internal_node_count": boundary_details["LVepi_mapping"]["internal_node_count"],
-        "LVepi_mapped_face_count": boundary_details["LVepi_mapping"]["mapped_face_count"],
-        "LVepi_interface_face_count": boundary_details["LVepi_mapping"]["interface_face_count"],
+        "LVepi_internal_node_count": boundary_details["tag_surface_conditions"]["internal_node_count"],
+        "tag1_exterior_one_face_count": boundary_details["tag_surface_conditions"]["mapped_face_count"],
+        "LVepi_interface_face_count": boundary_details["tag_surface_conditions"]["interface_face_count"],
         "zero_boundary_node_count": int(len(zero_nodes)),
         "unified_outer_boundary_node_count": int(len(outer_nodes)),
         "unified_outer_boundary_max_abs_error": surface_error,
@@ -997,9 +997,11 @@ def find_two_RV_insertion_pts_openbase(
     rv_epi_interface_vtk,
     ant_output_vtk,
     inf_output_vtk,
-    coord_z_tolerance=0.01,
+    coord_z_tolerance=0.05,
 ):
-    """Find ANT/INF on the selected tag-interface curve using opening-rim centers."""
+    """Find ANT, then INF within a Z band or at the closest opposite-side Z."""
+    if not np.isfinite(coord_z_tolerance) or coord_z_tolerance < 0:
+        raise ValueError("INF COORDS_Z tolerance must be finite and nonnegative.")
 
     def write_landmark(
         path,
@@ -1097,16 +1099,22 @@ def find_two_RV_insertion_pts_openbase(
     ant_point = interface_points[ant_interface_id]
     ant_z = float(interface_coords_z[ant_interface_id])
 
-    same_level = np.abs(interface_coords_z - ant_z) <= coord_z_tolerance
-    inf_candidates = np.flatnonzero(
-        inf_side & same_level & np.isfinite(angles)
-    )
-    inf_candidates = inf_candidates[inf_candidates != ant_interface_id]
-    if not len(inf_candidates):
+    z_differences_all = np.abs(interface_coords_z - ant_z)
+    opposite_candidates = np.flatnonzero(inf_side & np.isfinite(angles))
+    opposite_candidates = opposite_candidates[opposite_candidates != ant_interface_id]
+    if not len(opposite_candidates):
         raise RuntimeError(
-            f"No interface point satisfies the {inf_direction} and "
-            f"COORDS_Z +/- {coord_z_tolerance:g} conditions."
+            f"No valid opposite-side interface point satisfies the {inf_direction} condition."
         )
+    same_level = ((z_differences_all <= coord_z_tolerance)
+                  | np.isclose(z_differences_all, coord_z_tolerance, rtol=0., atol=1e-12))
+    inf_candidates = opposite_candidates[same_level[opposite_candidates]]
+    inf_within_tolerance_count = int(len(inf_candidates))
+    inf_fallback_used = not len(inf_candidates)
+    if inf_fallback_used:
+        closest_difference = float(np.min(z_differences_all[opposite_candidates]))
+        inf_candidates = opposite_candidates[np.isclose(
+            z_differences_all[opposite_candidates], closest_difference, rtol=1e-12, atol=1e-12)]
 
     inf_minimum_angle = float(np.min(angles[inf_candidates]))
     inf_tied = inf_candidates[
@@ -1166,6 +1174,13 @@ def find_two_RV_insertion_pts_openbase(
         "inf_angle_degrees": inf_angle_degrees,
         "inf_angle_tie_count": inf_angle_tie_count,
         "inf_mapping_distance_mm": float(mapping_distances[inf_interface_id]),
+        "inf_coords_z_tolerance": float(coord_z_tolerance),
+        "inf_fallback_used": bool(inf_fallback_used),
+        "inf_selection_method": ("closest_opposite_side_COORDS_Z_then_minimum_angle"
+                                 if inf_fallback_used else "minimum_angle_within_COORDS_Z_tolerance"),
+        "inf_opposite_side_candidate_count": int(len(opposite_candidates)),
+        "inf_within_tolerance_candidate_count": inf_within_tolerance_count,
+        "inf_closest_opposite_coords_z_difference": float(np.min(z_differences_all[opposite_candidates])),
         "coords_z_difference": abs(inf_z - ant_z),
     }
 
@@ -1533,8 +1548,21 @@ def extract_surf_forRV(folder, meshtoolloc, meshname, input_dir, meshnames, surf
 # PS: function(find_two_RV_insertion_pts) gives NodeINFvtx and NodeANTvtx by turn
 # but in function(compute_uvc_rotational) read NodeINFvtx and NodeANTvtx represent RVinsertionNodeANT and RVinsertionNodeINF
 # The index of RVinsertionNodeANT and RVinsertionNodeINF actually flipped 20260418
+def _phi_base_centroid(points, base_surface, direct_centroid=None):
+    """Use supplied rim geometry, while retaining the legacy node-surface API."""
+    if direct_centroid is None:
+        base_surf = meshIO.read_surf(base_surface)
+        base_nodes = meshIO.read_surf_to_nodeList(base_surf)
+        center = np.asarray(points.loc[base_nodes].mean(axis=0), dtype=float)
+    else:
+        center = np.asarray(direct_centroid, dtype=float)
+    if center.shape != (3,) or not np.all(np.isfinite(center)):
+        raise RuntimeError("PHI base centroid must contain three finite coordinates.")
+    return center
+
+
 def compute_uvc_rotational(folder, meshtoolloc, meshname, base_surfFilename, apex_pointFilename, RVinsertionNodeANT,
-                           RVinsertionNodeINF, phiname):
+                           RVinsertionNodeINF, phiname, base_centroid=None):
     os.chdir(folder)
     # Reads in apex point vtx electrode
     apex_vtx = meshIO.read_vtx_File(apex_pointFilename)
@@ -1549,13 +1577,13 @@ def compute_uvc_rotational(folder, meshtoolloc, meshname, base_surfFilename, ape
     ##########################################
     # Rotates mesh to align with z axis
     ##########################################
-    # Computes centre of mass of base of LV
-    base_surf = meshIO.read_surf(base_surfFilename)
-    base_nodes = meshIO.read_surf_to_nodeList(base_surf)
-    CoM_coord = [pts.loc[base_nodes][0].mean(), pts.loc[base_nodes][1].mean(), pts.loc[base_nodes][2].mean()]
+    CoM_coord = _phi_base_centroid(pts, base_surfFilename, base_centroid)
 
     # Computes long axis between apex and CoM
-    longAxis = (apex_coord - CoM_coord) / np.linalg.norm(apex_coord - CoM_coord)
+    axis_length = float(np.linalg.norm(apex_coord - CoM_coord))
+    if not np.isfinite(axis_length) or axis_length <= 1e-12:
+        raise RuntimeError("PHI apex and base centroid do not define a valid long axis.")
+    longAxis = (apex_coord - CoM_coord) / axis_length
 
     # Translates mesh to have x,y point aligned with apex
     pts_t = pts - apex_coord
@@ -1631,7 +1659,7 @@ def compute_uvc_rotational(folder, meshtoolloc, meshname, base_surfFilename, ape
 # Function to compute rotationall UVC coordinate by Martin
 #########################################
 def compute_uvc_rotationalRV(folder, meshtoolloc, meshname, base_surfFilename, apex_pointFilename, RVinsertionNodeANT,
-                             RVinsertionNodeINF, phiname):
+                             RVinsertionNodeINF, phiname, base_centroid=None):
     os.chdir(folder)
     # Reads in apex point vtx electrode
     apex_vtx = meshIO.read_vtx_File(apex_pointFilename)
@@ -1646,13 +1674,13 @@ def compute_uvc_rotationalRV(folder, meshtoolloc, meshname, base_surfFilename, a
     ##########################################
     # Rotates mesh to align with z axis
     ##########################################
-    # Computes centre of mass of base of LV
-    base_surf = meshIO.read_surf(base_surfFilename)
-    base_nodes = meshIO.read_surf_to_nodeList(base_surf)
-    CoM_coord = [pts.loc[base_nodes][0].mean(), pts.loc[base_nodes][1].mean(), pts.loc[base_nodes][2].mean()]
+    CoM_coord = _phi_base_centroid(pts, base_surfFilename, base_centroid)
 
     # Computes long axis between apex and CoM
-    longAxis = (apex_coord - CoM_coord) / np.linalg.norm(apex_coord - CoM_coord)
+    axis_length = float(np.linalg.norm(apex_coord - CoM_coord))
+    if not np.isfinite(axis_length) or axis_length <= 1e-12:
+        raise RuntimeError("PHI apex and base centroid do not define a valid long axis.")
+    longAxis = (apex_coord - CoM_coord) / axis_length
 
     # Translates mesh to have x,y point aligned with apex
     pts_t = pts - apex_coord
@@ -1751,12 +1779,8 @@ def compute_phi_openbase_annuli(
 
     def prepare_chamber(name, mesh_basename, tag, annulus_path, full_coords_z, edge_scale):
         points = np.asarray(meshIO.read_pts(basename=mesh_basename), dtype=float)
-        loop, loop_info = _opening_rim_loop(annulus_path)
-        base_ids, base_mapping = _map_contour_to_mesh_nodes(
-            loop, points, edge_scale, f"{name} opening rim to {name} mesh"
-        )
-        base = str(work_root / f"{name}_base")
-        _write_carp_node_surface(base, base_ids)
+        _, loop_info = _opening_rim_loop(annulus_path)
+        base_centroid = np.asarray(loop_info["length_weighted_centroid"], dtype=float)
 
         local_coords_z = str(work_root / f"COORDS_Z_{name}.dat")
         if not meshtool.extract_data(
@@ -1773,15 +1797,13 @@ def compute_phi_openbase_annuli(
         if not len(surface_ids):
             raise RuntimeError(f"The {name} exterior surface contains no valid nodes.")
         apex_id = int(surface_ids[np.argmin(coords_z[surface_ids])])
-        if apex_id in set(base_ids.tolist()):
-            raise RuntimeError(f"The selected {name} apex is also a base node.")
+        if np.linalg.norm(points[apex_id] - base_centroid) <= 1e-12:
+            raise RuntimeError(f"The selected {name} apex coincides with its opening-rim centroid.")
         apex = str(work_root / f"{name}_apex")
         meshIO.write_vtx_File(apex, pd.Series([apex_id], dtype=np.int64))
         return {
             "points": points,
-            "base": base,
-            "base_ids": base_ids,
-            "base_mapping": base_mapping,
+            "base_centroid": base_centroid,
             "base_loop": loop_info,
             "coords_z": coords_z,
             "apex": apex,
@@ -1837,12 +1859,12 @@ def compute_phi_openbase_annuli(
     # The legacy rotational solvers receive the insertion indices in the
     # historical INF, ANT order, despite their parameter names being ANT, INF.
     lv_phi_path = compute_uvc_rotational(
-        str(work_root), meshtoolloc, lv_mesh, lv["base"], lv["apex"] + ".vtx",
-        int(lv_ids[1]), int(lv_ids[0]), "Phi_LV.dat"
+        str(work_root), meshtoolloc, lv_mesh, None, lv["apex"] + ".vtx",
+        int(lv_ids[1]), int(lv_ids[0]), "Phi_LV.dat", base_centroid=lv["base_centroid"]
     )
     rv_phi_path = compute_uvc_rotationalRV(
-        str(work_root), meshtoolloc, rv_mesh, rv["base"], rv["apex"] + ".vtx",
-        int(rv_ids[1]), int(rv_ids[0]), "Phi_RV.dat"
+        str(work_root), meshtoolloc, rv_mesh, None, rv["apex"] + ".vtx",
+        int(rv_ids[1]), int(rv_ids[0]), "Phi_RV.dat", base_centroid=rv["base_centroid"]
     )
     if lv_phi_path is None or rv_phi_path is None:
         raise RuntimeError("A chamber PHI calculation failed.")
@@ -1905,7 +1927,10 @@ def compute_phi_openbase_annuli(
         "interface_node_count": int(len(interface_ids)),
         "median_tetra_edge_length_mm": float(edge_scale),
         "LV_base_loop": lv["base_loop"], "RV_base_loop": rv["base_loop"],
-        "LV_base_mapping": lv["base_mapping"], "RV_base_mapping": rv["base_mapping"],
+        "base_reference_method": "direct_opening_rim_segment_length_weighted_centroids",
+        "opening_rim_to_chamber_node_mapping_performed": False,
+        "LV_base_centroid": lv["base_centroid"].tolist(),
+        "RV_base_centroid": rv["base_centroid"].tolist(),
         "LV_apex_node_id": int(lv["apex_id"]), "RV_apex_node_id": int(rv["apex_id"]),
         "LV_apex_coordinate": [float(value) for value in lv["apex_coordinate"]],
         "RV_apex_coordinate": [float(value) for value in rv["apex_coordinate"]],

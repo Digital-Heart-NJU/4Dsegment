@@ -4,7 +4,7 @@ from __future__ import print_function
 import argparse
 import os
 import nibabel as nib
-from image_utils import imagePreprocessing
+from image_utils import imagePreprocessing, validate_nonnegative_image
 from stage_utils import existing_segmentations, protect_files, require_file
 
 
@@ -25,6 +25,7 @@ def main():
             image = nib.load(require_file(os.path.join(args.subject_dir, name)))
             if len(image.shape) != 4 or (name != 'lvsa_.nii.gz' and image.shape[3] != 1):
                 raise ValueError('Unexpected preprocessed cine/phase shape: ' + name)
+            validate_nonnegative_image(os.path.join(args.subject_dir, name))
     print('[nnUNet SAX] Legacy preprocessing complete; no TensorFlow inference was run.')
 
 
